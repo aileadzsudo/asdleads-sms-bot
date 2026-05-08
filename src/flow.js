@@ -2550,13 +2550,11 @@ class SmsBot {
     if (job.type === "human_escalation_sla") {
       const fresh = await this.store.getContact(job.contactId);
       if (fresh?.humanEscalationStage === "human_review_pending" && fresh.humanEscalationStatus) {
-        await this.notifyBotError("Human escalation still unacknowledged", {
-          Name: fresh.name || "unknown",
-          Phone: fresh.phone || "unknown",
-          "GHL contact": fresh.ghlContactId || fresh.id,
-          Reason: job.payload.reason || fresh.escalationReason || "unknown",
-          "Waiting minutes": String(job.payload.minutes || ""),
-          "Last inbound": fresh.lastInboundMessage || "unknown"
+        await this.store.upsertContact({
+          ...fresh,
+          lastHumanEscalationSlaAt: new Date().toISOString(),
+          lastHumanEscalationSlaMinutes: job.payload.minutes || "",
+          lastHumanEscalationSlaReason: job.payload.reason || fresh.escalationReason || "unknown"
         });
       }
     }

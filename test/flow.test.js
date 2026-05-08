@@ -790,6 +790,40 @@ test("human escalation schedules SLA watchdog jobs", async () => {
   );
 });
 
+test("human escalation SLA jobs are tracked silently instead of posting bot-error Slack alerts", async () => {
+  const { bot, store } = makeBot();
+  let botErrorCount = 0;
+  bot.notifyBotError = async () => {
+    botErrorCount += 1;
+  };
+  store.upsertContact({
+    id: "human-sla-silent",
+    ghlContactId: "human-sla-silent",
+    name: "Human Silent",
+    phone: "+15550000075",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "human_request",
+    lastInboundMessage: "Can I speak to someone?"
+  });
+  const job = store.addJob({
+    type: "human_escalation_sla",
+    contactId: "human-sla-silent",
+    runAt: new Date().toISOString(),
+    payload: { minutes: 5, reason: "human_request" }
+  });
+
+  await bot.runDueJob(job);
+
+  const contact = store.getContact("human-sla-silent");
+  assert.equal(botErrorCount, 0);
+  assert.equal(contact.lastHumanEscalationSlaMinutes, 5);
+  assert.equal(contact.lastHumanEscalationSlaReason, "human_request");
+  assert.equal(store.data.jobs[job.id].status, "done");
+});
+
 test("SMS escalation Slack copy stays compact without unknown qualification fields", async () => {
   const baseConfig = testConfig("");
   const result = await slack.sendEscalation(
