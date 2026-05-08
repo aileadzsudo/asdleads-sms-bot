@@ -129,7 +129,7 @@ async function createAppointment(config, contact, startsAt, endsAt, notes = "") 
     contactId: contact.ghlContactId || contact.id,
     startTime: startsAt,
     endTime: endsAt,
-    title: `ASD Specialist call - ${contact.name || contact.phone}`,
+    title: `Accident Support Desk Specialist call - ${contact.name || contact.phone}`,
     appointmentStatus: "confirmed",
     source: "asdleads-sms-bot",
     notes
@@ -137,7 +137,7 @@ async function createAppointment(config, contact, startsAt, endsAt, notes = "") 
 }
 
 async function updateAppointment(config, contact, appointmentId, startsAt, endsAt, notes = "") {
-  if (!appointmentId) return createAppointment(config, contact, startsAt, endsAt, notes || "Rescheduled by ASDleads SMS bot");
+  if (!appointmentId) return createAppointment(config, contact, startsAt, endsAt, notes || "Rescheduled by Accident Support Desk SMS bot");
   return ghlRequest(
     config,
     `/calendars/events/appointments/${encodeURIComponent(appointmentId)}`,
@@ -147,7 +147,7 @@ async function updateAppointment(config, contact, appointmentId, startsAt, endsA
       contactId: contact.ghlContactId || contact.id,
       startTime: startsAt,
       endTime: endsAt,
-      title: `ASD Specialist call - ${contact.name || contact.phone}`,
+      title: `Accident Support Desk Specialist call - ${contact.name || contact.phone}`,
       appointmentStatus: "confirmed",
       source: "asdleads-sms-bot",
       notes

@@ -215,7 +215,7 @@ def ghl_get(path, params):
             "Authorization": f"Bearer {token}",
             "Version": "2023-02-21",
             "Accept": "application/json",
-            "User-Agent": "ASDleadsSMSBot/0.1 (+https://local.asdleads)",
+            "User-Agent": "AccidentSupportDeskSMSBot/0.1 (+https://local.accidentsupportdesk)",
         },
     )
     try:

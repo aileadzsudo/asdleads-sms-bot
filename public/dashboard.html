@@ -3,41 +3,103 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ASDleads SMS Bot Dashboard</title>
+    <title>Accident Support Desk Command Center</title>
     <link rel="stylesheet" href="/dashboard.css" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand-block">
-          <strong>ASDleads</strong>
-          <span>SMS Bot Admin</span>
+          <div class="brand-logo" aria-label="Accident Support Desk">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.2 20 6.4v5.8c0 4.4-3.1 7.2-8 8.6-4.9-1.4-8-4.2-8-8.6V6.4l8-3.2Z" />
+              <path d="M12 7v9M7.7 11.5h8.6" />
+            </svg>
+          </div>
+          <div class="brand-text">
+            <strong>Accident Support Desk</strong>
+            <span>Command Center</span>
+          </div>
         </div>
+
         <nav class="side-nav" aria-label="Dashboard sections">
-          <a href="/dashboard" data-page-link="overview">Overview</a>
-          <a href="/dashboard/leads" data-page-link="leads">Leads</a>
-          <a href="/dashboard/issues" data-page-link="issues">Issues</a>
-          <a href="/dashboard/appointments" data-page-link="appointments">Appointments</a>
-          <a href="/dashboard/performance" data-page-link="performance">Performance</a>
-          <a href="/dashboard/ab-testing" data-page-link="ab-testing">A/B Testing</a>
-          <a href="/dashboard/templates" data-page-link="templates">Templates</a>
-          <a href="/dashboard/review" data-page-link="review">Review</a>
+          <span class="nav-section-label">Main</span>
+          <a href="/dashboard" data-page-link="overview">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            Dashboard
+          </a>
+          <a href="/dashboard/leads" data-page-link="leads">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Leads
+            <span class="nav-badge info" id="navLeadsBadge" hidden></span>
+          </a>
+          <a href="/dashboard/issues" data-page-link="issues">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            Escalations
+            <span class="nav-badge" id="navIssuesBadge" hidden></span>
+          </a>
+          <a href="/dashboard/appointments" data-page-link="appointments">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Appointments
+          </a>
+
+          <span class="nav-section-label">Analytics</span>
+          <a href="/dashboard/performance" data-page-link="performance">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            Performance
+          </a>
+          <a href="/dashboard/ab-testing" data-page-link="ab-testing">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v8l-4.5 9A2 2 0 0 0 6.28 23h11.44a2 2 0 0 0 1.78-2.89L15 11V3"/></svg>
+            A/B Testing
+          </a>
+
+          <span class="nav-section-label">Content</span>
+          <a href="/dashboard/templates" data-page-link="templates">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            Templates
+          </a>
+          <a href="/dashboard/review" data-page-link="review">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            Review
+          </a>
         </nav>
+
         <div class="side-tools">
-          <a href="/tester">Tester</a>
-          <a href="/backfill">Backfill</a>
-          <a href="/integrations">Integrations</a>
+          <a href="/tester">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            Tester
+          </a>
+          <a href="/backfill">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Backfill
+          </a>
+          <a href="/integrations">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            Integrations
+          </a>
+        </div>
+
+        <div class="side-user">
+          <div class="avatar avatar-sm" style="background:#4f46e5" aria-hidden="true">WA</div>
+          <div class="side-user-info">
+            <strong>Admin</strong>
+            <span>Administrator</span>
+          </div>
         </div>
       </aside>
 
       <main class="app">
         <section class="toolbar">
-          <div>
+          <div class="toolbar-title">
             <h1 id="pageTitle">Overview</h1>
             <p id="pageSubtitle">Quick executive readout of bot volume, replies, bookings, and risk.</p>
           </div>
           <div class="toolbar-actions">
-            <button id="refreshBtn" type="button">Refresh</button>
+            <span class="toolbar-date" id="toolbarDate"></span>
+            <button id="refreshBtn" type="button">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              Refresh
+            </button>
           </div>
         </section>
 
@@ -56,9 +118,10 @@
           <div id="generatedBadge" class="badge">Updated</div>
         </section>
 
+        <!-- ── Overview ── -->
         <section class="page-section" data-page="overview">
           <section class="metric-grid" id="metrics"></section>
-          <section class="grid wide-left">
+          <section class="grid wide-left" style="margin-bottom:16px">
             <div class="panel">
               <div class="section-header">
                 <div>
@@ -74,7 +137,7 @@
               <div id="dailySummary" class="summary-grid friendly"></div>
             </div>
           </section>
-          <section class="grid wide-left">
+          <section class="grid wide-left" style="margin-bottom:16px">
             <div class="panel">
               <div class="section-header">
                 <div>
@@ -105,6 +168,7 @@
           </section>
         </section>
 
+        <!-- ── Leads ── -->
         <section class="page-section" data-page="leads" hidden>
           <section class="panel command-panel">
             <div class="section-header">
@@ -140,6 +204,7 @@
           </section>
         </section>
 
+        <!-- ── Issues ── -->
         <section class="page-section" data-page="issues" hidden>
           <section class="grid">
             <div class="panel">
@@ -178,6 +243,7 @@
           </section>
         </section>
 
+        <!-- ── Appointments ── -->
         <section class="page-section" data-page="appointments" hidden>
           <section class="grid wide-left">
             <div class="panel">
@@ -192,6 +258,7 @@
           </section>
         </section>
 
+        <!-- ── Performance ── -->
         <section class="page-section" data-page="performance" hidden>
           <section class="panel chart-panel">
             <div class="section-header">
@@ -254,6 +321,7 @@
           </section>
         </section>
 
+        <!-- ── A/B Testing ── -->
         <section class="page-section" data-page="ab-testing" hidden>
           <section class="panel script-command">
             <div class="section-header">
@@ -303,6 +371,7 @@
           </section>
         </section>
 
+        <!-- ── Templates ── -->
         <section class="page-section" data-page="templates" hidden>
           <section class="panel">
             <div class="section-header">
@@ -321,6 +390,7 @@
           </section>
         </section>
 
+        <!-- ── Review ── -->
         <section class="page-section" data-page="review" hidden>
           <section class="grid">
             <div class="panel">
@@ -330,6 +400,7 @@
             <div class="panel">
               <h2>Replay Simulator</h2>
               <p class="small">Open any contact, read the timeline, then use the tester to replay the conversation against the current templates and LLM fallback.</p>
+              <br />
               <a class="link-button" href="/tester">Open Tester</a>
             </div>
           </section>
@@ -337,6 +408,7 @@
       </main>
     </div>
 
+    <!-- Contact Detail Drawer -->
     <aside id="detailDrawer" class="drawer" aria-hidden="true">
       <div class="drawer-backdrop" data-close-detail></div>
       <section class="drawer-panel" aria-label="Contact details">
@@ -346,7 +418,7 @@
             <h2 id="detailName">Select a contact</h2>
             <p id="detailPhone" class="small"></p>
           </div>
-          <button class="secondary icon-button" type="button" data-close-detail>Close</button>
+          <button class="secondary icon-button" type="button" data-close-detail>✕ Close</button>
         </div>
         <div id="detailBody" class="detail-body"></div>
       </section>
@@ -362,20 +434,77 @@
       let selectedActivityKey = "";
       const activityMetrics = {
         outbound: { label: "Sent", color: "#2563eb" },
-        inbound: { label: "Replies", color: "#15803d" },
+        inbound: { label: "Replies", color: "#16a34a" },
         bookings: { label: "Bookings", color: "#7c3aed" },
-        escalations: { label: "Escalations", color: "#dc2626" }
+        escalations: { label: "Escalations", color: "#ef4444" }
       };
       const pages = {
         overview: ["Overview", "Quick executive readout of bot volume, replies, bookings, and risk."],
         leads: ["Leads", "Search, filter, inspect, and control active lead automation."],
-        issues: ["Issues", "Find stuck contacts, bot confusion, human SLA misses, and safety problems."],
+        issues: ["Escalations", "Find stuck contacts, bot confusion, human SLA misses, and safety problems."],
         appointments: ["Appointments", "Track booked calls, confirmations, reminders, missed calls, and reschedules."],
         performance: ["Performance", "Review source quality, lifecycle conversion, reply timing, and sequence mix."],
         templates: ["Templates", "Edit live SMS templates, wording, and emoji usage for future messages."],
         "ab-testing": ["A/B Testing", "Create SMS variants, activate traffic splits, and compare response rates."],
         review: ["Review", "Quality review and replay tools for improving bot behavior."]
       };
+
+      /* ── Avatar helpers ── */
+      const AVATAR_COLORS = [
+        "#2563eb","#7c3aed","#db2777","#dc2626",
+        "#d97706","#16a34a","#0891b2","#4f46e5"
+      ];
+
+      function avatarColor(name) {
+        const str = name || "U";
+        let hash = 0;
+        for (const ch of str) hash = (hash + ch.charCodeAt(0)) % AVATAR_COLORS.length;
+        return AVATAR_COLORS[hash];
+      }
+
+      function avatarHtml(name, size = "sm") {
+        const parts = (name || "Unknown").trim().split(/\s+/);
+        const initials = parts.length >= 2
+          ? (parts[0][0] + parts[parts.length - 1][0])
+          : (parts[0] || "U").slice(0, 2);
+        const color = avatarColor(name);
+        return `<div class="avatar avatar-${size}" style="background:${color}" aria-hidden="true">${escapeHtml(initials.toUpperCase())}</div>`;
+      }
+
+      /* ── Engagement pill ── */
+      function engagementPill(status) {
+        const map = {
+          new_lead:           ["New",          "new-lead"],
+          initial_sms_sent:   ["Outreach",     "outreach"],
+          cold_outreach:      ["Outreach",     "outreach"],
+          active_conversation:["Active",       "active"],
+          warm_follow_up:     ["Active",       "active"],
+          call_scheduled:     ["Call Ready",   "call-ready"],
+          escalated_to_human: ["Escalated",    "escalated"],
+          opted_out:          ["Opted Out",    "opted-out"],
+          automation_paused:  ["Paused",       "paused"],
+          needs_reply:        ["Needs Reply",  "needs-reply"]
+        };
+        const [label, cls] = map[status] || [cleanLabel(status), "default"];
+        return `<span class="status-pill ${cls}">${escapeHtml(label)}</span>`;
+      }
+
+      /* ── Relative time ── */
+      function relativeTime(value) {
+        if (!value) return "-";
+        const diff = (Date.now() - new Date(value).getTime()) / 1000;
+        if (diff < 60) return "just now";
+        if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
+        return `${Math.round(diff / 86400)}d ago`;
+      }
+
+      /* ── Priority badge ── */
+      function priorityBadge(bucket) {
+        if (bucket === "15+") return '<span class="priority-badge high">High</span>';
+        if (bucket === "5-15") return '<span class="priority-badge medium">Medium</span>';
+        return '<span class="priority-badge low">Low</span>';
+      }
 
       function currentPage() {
         const part = location.pathname.replace(/^\/dashboard\/?/, "").split("/")[0] || "overview";
@@ -528,6 +657,18 @@
           metric("Booked Calls", fmtNumber(totals.callScheduled), "scheduled"),
           metric("Failed Jobs", fmtNumber(totals.failedJobs), "must be reviewed")
         ].join("");
+
+        /* Update nav badges */
+        const issuesBadge = $("navIssuesBadge");
+        if (issuesBadge && totals.issueContacts) {
+          issuesBadge.textContent = totals.issueContacts > 99 ? "99+" : String(totals.issueContacts);
+          issuesBadge.hidden = false;
+        }
+        const leadsBadge = $("navLeadsBadge");
+        if (leadsBadge && totals.readyForCall) {
+          leadsBadge.textContent = totals.readyForCall > 99 ? "99+" : String(totals.readyForCall);
+          leadsBadge.hidden = false;
+        }
       }
 
       function renderBars(id, values) {
@@ -590,15 +731,16 @@
       function contactCard(contact) {
         return `
           <button class="contact-card" type="button" data-contact-id="${escapeHtml(contact.id)}">
-            <div>
-              <strong>${escapeHtml(contact.name || "Unknown")}</strong>
-              <span>${escapeHtml(contact.phone || "")}</span>
-            </div>
-            <div class="contact-card-status">
-              <span>${escapeHtml(cleanLabel(contact.engagementStatus))}</span>
-              <small>${escapeHtml(fmtDate(contact.lastActivityAt))}</small>
+            <div class="contact-card-top">
+              ${avatarHtml(contact.name, "sm")}
+              <div class="contact-card-info">
+                <strong>${escapeHtml(contact.name || "Unknown")}</strong>
+                <span>${escapeHtml(contact.phone || "")}</span>
+              </div>
+              ${engagementPill(contact.engagementStatus)}
             </div>
             <div class="chip-row">${chips(contact.issueFlags)}</div>
+            <small class="contact-card-time">${escapeHtml(fmtDate(contact.lastActivityAt))}</small>
           </button>
         `;
       }
@@ -611,9 +753,15 @@
               <span>Select</span>
             </label>
             <button class="card-open" type="button" data-contact-id="${escapeHtml(contact.id)}">
-              <strong>${escapeHtml(contact.name || "Unknown")}</strong>
-              <span>${escapeHtml(contact.phone || "")}</span>
-              <small>${escapeHtml(cleanLabel(contact.engagementStatus))} · risk ${escapeHtml(contact.riskScore || 0)}</small>
+              <div class="contact-card-top" style="margin-bottom:4px">
+                ${avatarHtml(contact.name, "xs")}
+                <div class="contact-card-info">
+                  <strong>${escapeHtml(contact.name || "Unknown")}</strong>
+                  <span>${escapeHtml(contact.phone || "")}</span>
+                </div>
+                ${engagementPill(contact.engagementStatus)}
+              </div>
+              <small style="color:var(--muted);font-size:11px">Risk score: ${escapeHtml(String(contact.riskScore || 0))}</small>
               <div class="chip-row">${chips(contact.issueFlags)}</div>
             </button>
           </div>
@@ -691,12 +839,20 @@
       }
 
       function renderOverviewLive(data) {
-        const contacts = (data.hotLeads || data.recentContacts || []).slice(0, 5);
+        const contacts = (data.hotLeads || data.recentContacts || []).slice(0, 6);
         $("overviewLive").innerHTML = contacts.length
           ? contacts.map((contact) => `
               <button class="conversation-row" type="button" data-contact-id="${escapeHtml(contact.id)}">
-                <div><strong>${escapeHtml(contact.name || "Unknown")}</strong><span>${escapeHtml(contact.lastInboundMessage || contact.lastOutboundMessage || "No message preview")}</span></div>
-                <small>${escapeHtml(fmtDate(contact.lastActivityAt))}</small>
+                ${avatarHtml(contact.name, "md")}
+                <div class="conversation-body">
+                  <div class="conversation-top">
+                    <strong>${escapeHtml(contact.name || "Unknown")}</strong>
+                    <span class="conversation-time">${escapeHtml(relativeTime(contact.lastActivityAt))}</span>
+                  </div>
+                  <span class="conversation-phone">${escapeHtml(contact.phone || "")}</span>
+                  <span class="conversation-preview">${escapeHtml(contact.lastInboundMessage || contact.lastOutboundMessage || "No recent message")}</span>
+                </div>
+                ${engagementPill(contact.engagementStatus)}
               </button>
             `).join("")
           : '<p class="small">No active conversations yet.</p>';
@@ -705,12 +861,12 @@
       function renderOverviewStatusBoard(data) {
         const engagement = data.breakdowns?.engagement || {};
         const cards = [
-          ["New Lead", engagement.new_lead || 0],
-          ["Cold Outreach", (engagement.initial_sms_sent || 0) + (engagement.cold_outreach || 0)],
-          ["Active Conversation", (engagement.active_conversation || 0) + (engagement.warm_follow_up || 0)],
-          ["Call Scheduled", engagement.call_scheduled || 0],
-          ["Escalated", engagement.escalated_to_human || 0],
-          ["Opted Out", engagement.opted_out || 0]
+          ["New Lead",           engagement.new_lead || 0],
+          ["Cold Outreach",      (engagement.initial_sms_sent || 0) + (engagement.cold_outreach || 0)],
+          ["Active Conversation",(engagement.active_conversation || 0) + (engagement.warm_follow_up || 0)],
+          ["Call Scheduled",     engagement.call_scheduled || 0],
+          ["Escalated",          engagement.escalated_to_human || 0],
+          ["Opted Out",          engagement.opted_out || 0]
         ];
         $("overviewStatusBoard").innerHTML = cards.map(([label, value]) => `
           <button class="status-card" type="button" data-page-jump="leads">
@@ -721,19 +877,24 @@
       }
 
       function renderOverviewEscalations(data) {
-        const items = (data.escalationSla || []).slice(0, 5);
+        const items = (data.escalationSla || []).slice(0, 6);
         $("overviewEscalations").innerHTML = items.length
           ? items.map((item) => `
               <button class="mini-row ${item.bucket === "15+" ? "failed" : "pending"}" type="button" data-contact-id="${escapeHtml(item.id)}">
-                <strong>${escapeHtml(item.name || "Unknown")}</strong>
-                <span>${escapeHtml(fmtMinutes(item.waitingMinutes))} waiting · ${escapeHtml(item.reason || "human review")}</span>
+                <div class="escalation-row">
+                  <div class="escalation-left">
+                    <strong>${escapeHtml(item.name || "Unknown")}</strong>
+                    <span>${escapeHtml(fmtMinutes(item.waitingMinutes))} waiting · ${escapeHtml(item.reason || "human review")}</span>
+                  </div>
+                  ${priorityBadge(item.bucket)}
+                </div>
               </button>
             `).join("")
           : '<p class="small">No escalations waiting right now.</p>';
       }
 
       function renderOverviewCalls(data) {
-        const calls = (data.appointmentPipeline || []).slice(0, 5);
+        const calls = (data.appointmentPipeline || []).slice(0, 6);
         $("overviewCalls").innerHTML = calls.length
           ? calls.map((item) => `
               <button class="mini-row pending" type="button" data-contact-id="${escapeHtml(item.id)}">
@@ -823,9 +984,14 @@
         $("slaList").innerHTML = (data.escalationSla || []).length
           ? data.escalationSla.map((item) => `
               <button class="mini-row ${item.bucket === "15+" ? "failed" : "pending"}" type="button" data-contact-id="${escapeHtml(item.id)}">
-                <strong>${escapeHtml(item.name || "Unknown")} · ${escapeHtml(item.bucket)}</strong>
-                <span>${escapeHtml(fmtMinutes(item.waitingMinutes))} · ${escapeHtml(cleanLabel(item.stage))}</span>
-                <small>${escapeHtml(item.reason || "")}</small>
+                <div class="escalation-row">
+                  <div class="escalation-left">
+                    <strong>${escapeHtml(item.name || "Unknown")} · ${escapeHtml(item.bucket)}</strong>
+                    <span>${escapeHtml(fmtMinutes(item.waitingMinutes))} · ${escapeHtml(cleanLabel(item.stage))}</span>
+                    <small>${escapeHtml(item.reason || "")}</small>
+                  </div>
+                  ${priorityBadge(item.bucket)}
+                </div>
               </button>
             `).join("")
           : '<p class="small">No human escalations currently tracked.</p>';
@@ -888,7 +1054,7 @@
                 <span>${escapeHtml(contact.phone || "")}</span>
               </button>
             </td>
-            <td>${escapeHtml(cleanLabel(contact.engagementStatus))}</td>
+            <td>${engagementPill(contact.engagementStatus)}</td>
             <td>${escapeHtml(cleanLabel(contact.qualificationProgress))}</td>
             <td>${escapeHtml(cleanLabel(contact.currentSequenceName || "none"))}</td>
             <td>${escapeHtml(fmtNumber(contact.pendingJobs))}</td>
@@ -1253,7 +1419,7 @@
         $("detailPhone").textContent = contact.phone || "";
         const ghlHref = safeHref(contact.ghlContactLink);
         const ghlLink = ghlHref
-          ? `<a class="link-button secondary" href="${escapeHtml(ghlHref)}" target="_blank" rel="noreferrer">Open GHL</a>`
+          ? `<a class="link-button secondary" href="${escapeHtml(ghlHref)}" target="_blank" rel="noreferrer">Open GHL ↗</a>`
           : "";
         $("detailBody").innerHTML = `
           <div class="detail-actions">
@@ -1406,6 +1572,7 @@
         }
       }
 
+      /* ── Event delegation ── */
       document.addEventListener("click", (event) => {
         const pageLink = event.target.closest("[data-page-link]");
         if (pageLink) {
@@ -1503,6 +1670,7 @@
         await refresh();
       }
 
+      /* ── Init ── */
       $("authForm").addEventListener("submit", (event) => {
         event.preventDefault();
         sessionStorage.setItem(passwordKey, $("adminPassword").value);
@@ -1525,6 +1693,15 @@
       $("loadAbTestsBtn").addEventListener("click", loadAbTests);
       $("addAbTestBtn").addEventListener("click", addAbTest);
       $("saveAbTestsBtn").addEventListener("click", saveAbTests);
+
+      /* Toolbar date */
+      const toolbarDate = $("toolbarDate");
+      if (toolbarDate) {
+        toolbarDate.textContent = new Intl.DateTimeFormat("en-US", {
+          month: "short", day: "numeric", year: "numeric"
+        }).format(new Date());
+      }
+
       setPage(currentPage());
       refresh();
       setInterval(refresh, 60_000);

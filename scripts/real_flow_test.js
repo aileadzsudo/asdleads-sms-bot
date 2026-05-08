@@ -151,7 +151,7 @@ async function startOptOutBranch() {
   });
   const sent = await bot.sendBotMessage(
     contact,
-    "ASDleads controlled opt-out test. Reply STOP to confirm opt-out handling.",
+    "Accident Support Desk controlled opt-out test. Reply STOP to confirm opt-out handling.",
     { bypassQuietHours: true }
   );
   const latest = store.upsertContact({

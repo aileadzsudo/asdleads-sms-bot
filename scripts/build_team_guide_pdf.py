@@ -6,7 +6,7 @@ import textwrap
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "docs" / "team-guide.md"
-OUTPUT = ROOT / "docs" / "ASDleads_SMS_Bot_Team_Guide.pdf"
+OUTPUT = ROOT / "docs" / "Accident_Support_Desk_SMS_Bot_Team_Guide.pdf"
 
 PAGE_W, PAGE_H = 1654, 2339
 MARGIN_X = 130

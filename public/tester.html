@@ -3,129 +3,188 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ASDleads SMS Bot Tester</title>
+    <title>Accident Support Desk SMS Bot Tester</title>
     <link rel="stylesheet" href="/tester.css" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand-block">
-          <strong>ASDleads</strong>
-          <span>SMS Bot Admin</span>
+          <div class="brand-logo" aria-label="Accident Support Desk">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.2 20 6.4v5.8c0 4.4-3.1 7.2-8 8.6-4.9-1.4-8-4.2-8-8.6V6.4l8-3.2Z" />
+              <path d="M12 7v9M7.7 11.5h8.6" />
+            </svg>
+          </div>
+          <div class="brand-text">
+            <strong>Accident Support Desk</strong>
+            <span>Command Center</span>
+          </div>
         </div>
+
         <nav class="side-nav" aria-label="Admin navigation">
-          <a href="/dashboard">Dashboard</a>
-          <a href="/dashboard/leads">Leads</a>
-          <a href="/dashboard/issues">Issues</a>
-          <a href="/dashboard/appointments">Appointments</a>
-          <a href="/dashboard/performance">Performance</a>
-          <a href="/dashboard/ab-testing">A/B Testing</a>
-          <a href="/dashboard/templates">Templates</a>
+          <span class="nav-section-label">Main</span>
+          <a href="/dashboard">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            Dashboard
+          </a>
+          <a href="/dashboard/leads">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Leads
+          </a>
+          <a href="/dashboard/issues">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            Escalations
+          </a>
+          <a href="/dashboard/appointments">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Appointments
+          </a>
+
+          <span class="nav-section-label">Analytics</span>
+          <a href="/dashboard/performance">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            Performance
+          </a>
+          <a href="/dashboard/ab-testing">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v8l-4.5 9A2 2 0 0 0 6.28 23h11.44a2 2 0 0 0 1.78-2.89L15 11V3"/></svg>
+            A/B Testing
+          </a>
+
+          <span class="nav-section-label">Content</span>
+          <a href="/dashboard/templates">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            Templates
+          </a>
+          <a href="/dashboard/review">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            Review
+          </a>
         </nav>
+
         <div class="side-tools">
-          <a class="is-active" href="/tester">Tester</a>
-          <a href="/integrations">Integrations</a>
-          <a href="/backfill">Backfill</a>
+          <a class="is-active" href="/tester">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            Tester
+          </a>
+          <a href="/backfill">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Backfill
+          </a>
+          <a href="/integrations">
+            <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            Integrations
+          </a>
+        </div>
+
+        <div class="side-user">
+          <div class="avatar" aria-hidden="true">WA</div>
+          <div class="side-user-info">
+            <strong>Admin</strong>
+            <span>Administrator</span>
+          </div>
         </div>
       </aside>
 
-    <main class="app">
-      <section class="toolbar" aria-label="Test controls">
-        <div>
-          <h1>ASDleads SMS Bot Tester</h1>
-          <p>Dry-run sandbox for testing replies, state, scheduled follow-ups, and escalations.</p>
-        </div>
-        <div class="toolbar-actions">
-          <a class="link-button secondary" href="/training-status">Status</a>
-          <a class="link-button secondary" href="/dashboard">Dashboard</a>
-          <a class="link-button secondary" href="/integrations">Integrations</a>
-          <a class="link-button secondary" href="/review">Review</a>
-          <a class="link-button secondary" href="/backfill">Backfill</a>
-          <button id="resetBtn" class="secondary" type="button">Reset & Start</button>
-          <button id="seedBtn" type="button">Start No Response Lead</button>
-          <button id="scheduledBtn" class="secondary" type="button">Seed Scheduled Call</button>
-          <button id="missedCallBtn" class="secondary" type="button">Mark Missed Call</button>
-          <button id="humanAckBtn" class="secondary" type="button">Human Ack</button>
-          <button id="returnBotBtn" class="secondary" type="button">Return To Bot</button>
-        </div>
-      </section>
+      <main class="app">
+        <section class="toolbar" aria-label="Test controls">
+          <div>
+            <h1>SMS Bot Tester</h1>
+            <p>Dry-run sandbox for testing replies, state, scheduled follow-ups, and escalations.</p>
+          </div>
+          <div class="toolbar-actions">
+            <a class="link-button secondary" href="/dashboard">← Dashboard</a>
+            <button id="resetBtn" class="secondary" type="button">Reset &amp; Start</button>
+            <button id="seedBtn" type="button">Start No-Response Lead</button>
+            <button id="scheduledBtn" class="secondary" type="button">Seed Scheduled Call</button>
+            <button id="missedCallBtn" class="secondary" type="button">Mark Missed Call</button>
+            <button id="humanAckBtn" class="secondary" type="button">Human Ack</button>
+            <button id="returnBotBtn" class="secondary" type="button">Return To Bot</button>
+          </div>
+        </section>
 
-      <section class="grid">
-        <div class="panel chat-panel">
-          <div class="panel-header">
-            <div>
-              <h2>Conversation</h2>
-          <p id="dryRunLabel">Checking mode...</p>
-          <p id="testerStatus" class="small">Ready.</p>
+        <section class="grid">
+          <!-- Chat panel -->
+          <div class="panel chat-panel">
+            <div class="panel-header">
+              <div class="tester-meta">
+                <div>
+                  <h2>Conversation</h2>
+                  <p id="dryRunLabel">Checking mode...</p>
+                  <p id="testerStatus" class="small">Ready.</p>
+                </div>
+              </div>
+              <div class="contact-form">
+                <label>
+                  Contact ID
+                  <input id="contactId" value="test-contact" />
+                </label>
+                <label>
+                  Name
+                  <input id="name" value="Alex" />
+                </label>
+                <label>
+                  Timezone
+                  <input id="timezone" value="America/Chicago" />
+                </label>
+              </div>
             </div>
-            <div class="contact-form">
-              <label>
-                Contact ID
-                <input id="contactId" value="test-contact" />
+
+            <div id="messages" class="messages" aria-live="polite">
+              <div class="empty">Start a no-response lead or send a reply to begin.</div>
+            </div>
+
+            <form id="replyForm" class="reply-form">
+              <label for="replyInput">Reply as potential client</label>
+              <div class="reply-row">
+                <input id="replyInput" placeholder='e.g. "No, the other driver was at fault"' autocomplete="off" />
+                <button type="submit">Send Reply</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Side panels -->
+          <aside class="side">
+            <div class="panel">
+              <h2>Timeline Controls</h2>
+              <p class="small">Advance the next scheduled job immediately. Warm follow-ups run first, then re-engagement starts.</p>
+              <div class="button-row">
+                <button id="advanceOneBtn" type="button">Advance Next Job</button>
+                <button id="advanceFiveBtn" class="secondary" type="button">Advance 5 Jobs</button>
+              </div>
+              <label class="toggle">
+                <input id="autoAdvance" type="checkbox" />
+                Auto-advance every 60 seconds
               </label>
-              <label>
-                Name
-                <input id="name" value="Alex" />
+            </div>
+
+            <div class="panel">
+              <h2>LLM Fallback</h2>
+              <p id="llmStatusText" class="small">Checking fallback mode...</p>
+              <label class="toggle">
+                <input id="llmToggle" type="checkbox" />
+                Use LLM when rules are unsure
               </label>
-              <label>
-                Timezone
-                <input id="timezone" value="America/Chicago" />
-              </label>
+              <dl id="llmList" class="state-list"></dl>
             </div>
-          </div>
 
-          <div id="messages" class="messages" aria-live="polite"></div>
-
-          <form id="replyForm" class="reply-form">
-            <label for="replyInput">Reply as PC</label>
-            <div class="reply-row">
-              <input id="replyInput" placeholder="Example: No, the other driver was at fault" autocomplete="off" />
-              <button type="submit">Send Reply</button>
+            <div class="panel">
+              <h2>Current State</h2>
+              <dl id="stateList" class="state-list"></dl>
             </div>
-          </form>
-        </div>
 
-        <aside class="side">
-          <div class="panel">
-            <h2>Timeline</h2>
-            <p class="small">Advance the next scheduled job immediately. Warm follow-ups run first, then saved-progress re-engagement starts.</p>
-            <div class="button-row">
-              <button id="advanceOneBtn" type="button">Advance Next Job</button>
-              <button id="advanceFiveBtn" class="secondary" type="button">Advance 5 Jobs</button>
+            <div class="panel">
+              <h2>Pending Jobs</h2>
+              <div id="jobs" class="jobs"></div>
             </div>
-            <label class="toggle">
-              <input id="autoAdvance" type="checkbox" />
-              Auto-advance every 60 seconds
-            </label>
-          </div>
 
-          <div class="panel">
-            <h2>LLM Fallback</h2>
-            <p id="llmStatusText" class="small">Checking fallback mode...</p>
-            <label class="toggle">
-              <input id="llmToggle" type="checkbox" />
-              Use LLM when hard-coded rules are unsure
-            </label>
-            <dl id="llmList" class="state-list"></dl>
-          </div>
-
-          <div class="panel">
-            <h2>Current State</h2>
-            <dl id="stateList" class="state-list"></dl>
-          </div>
-
-          <div class="panel">
-            <h2>Pending Jobs</h2>
-            <div id="jobs" class="jobs"></div>
-          </div>
-
-          <div class="panel">
-            <h2>Escalations</h2>
-            <div id="escalations" class="jobs"></div>
-          </div>
-        </aside>
-      </section>
-    </main>
+            <div class="panel">
+              <h2>Escalations</h2>
+              <div id="escalations" class="jobs"></div>
+            </div>
+          </aside>
+        </section>
+      </main>
     </div>
 
     <script>
@@ -186,13 +245,13 @@
       async function refresh() {
         const state = await api(`/api/test/state?contactId=${encodeURIComponent(payload().contactId)}`);
         $("dryRunLabel").textContent = state.dryRun
-          ? "Dry run is ON. External GHL and Slack sends are skipped."
-          : "Dry run is OFF. This can send real GHL/Slack requests.";
+          ? "Dry run ON — external GHL/Slack sends are skipped."
+          : "Dry run OFF — this can send real GHL/Slack requests.";
         suppressLlmToggleChange = true;
         $("llmToggle").checked = Boolean(state.llmFallbackEnabled);
         $("llmStatusText").textContent = state.llmFallbackEnabled
           ? "LLM fallback is ON for this local tester."
-          : "LLM fallback is OFF. Hard-coded rules and normal escalation are used.";
+          : "LLM fallback is OFF. Hard-coded rules only.";
         suppressLlmToggleChange = false;
         renderMessages(state.messages || []);
         renderState(state.contact || {});
@@ -257,12 +316,9 @@
       function renderJobs(jobs) {
         const pending = jobs.filter((job) => job.status === "pending");
         $("jobs").innerHTML = pending.length
-          ? pending
-              .map(
-                (job) =>
-                  `<div class="job"><strong>${jobTitle(job)}</strong><span>${jobSubtitle(job)}</span></div>`
-              )
-              .join("")
+          ? pending.map((job) =>
+              `<div class="job"><strong>${jobTitle(job)}</strong><span>${jobSubtitle(job)}</span></div>`
+            ).join("")
           : '<div class="empty small">No pending jobs.</div>';
       }
 
@@ -288,7 +344,7 @@
 
       function renderEscalations(items) {
         $("escalations").innerHTML = items.length
-          ? items.map((item) => `<div class="job"><strong>${item.reason}</strong><span>${item.lastInboundMessage || ""}</span></div>`).join("")
+          ? items.map((item) => `<div class="job escalation-job"><strong>${item.reason}</strong><span>${item.lastInboundMessage || ""}</span></div>`).join("")
           : '<div class="empty small">No escalations.</div>';
       }
 

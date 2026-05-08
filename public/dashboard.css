@@ -39,7 +39,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -75,26 +75,34 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .brand-logo {
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   border-radius: 8px;
   background: linear-gradient(135deg, var(--primary), #4f46e5);
   color: #fff;
-  font-weight: 900;
-  font-size: 13px;
-  letter-spacing: -0.5px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
 
+.brand-logo svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .brand-text strong {
   display: block;
   color: #fff;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
-  line-height: 1.1;
+  line-height: 1.18;
+  max-width: 150px;
 }
 
 .brand-text span {
@@ -560,7 +568,7 @@ h2 {
 
 code, .small, .toolbar p {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 /* ─── Bulk Actions ─── */

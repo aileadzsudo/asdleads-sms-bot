@@ -1622,7 +1622,7 @@ async function initApp() {
 if (require.main === module) {
   initApp().then(() => {
     server.listen(config.port, config.host, () => {
-      console.log(`ASDleads SMS bot listening on http://${config.host}:${config.port}`);
+      console.log(`Accident Support Desk SMS bot listening on http://${config.host}:${config.port}`);
     });
     setInterval(() => {
       runDueJobs().catch(async (error) => {

@@ -196,10 +196,10 @@ function callAskTemplateForTime(contact, config, now = new Date()) {
   const local = getLocalParts(now, timeZone);
   const lateEvening = local.hour >= 20;
   if (!isWithinTextingWindow(contact, config, now) || lateEvening) {
-    return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with a ASD Specialist who can create a compensation gameplan for you. What time works best tomorrow or the next day? 📞";
+    return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with an Accident Support Desk Specialist who can create a compensation gameplan for you. What time works best tomorrow or the next day? 📞";
   }
   if (local.hour >= 18) {
-    return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with a ASD Specialist who can create a compensation gameplan for you. Are you open for a call this evening or tomorrow? 📞";
+    return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with an Accident Support Desk Specialist who can create a compensation gameplan for you. Are you open for a call this evening or tomorrow? 📞";
   }
   return qualificationTemplates.callAsk;
 }
@@ -1126,7 +1126,7 @@ class SmsBot {
     const endsAt = addMinutes(new Date(startsAt), 15).toISOString();
     let appointment = null;
     try {
-      appointment = await ghl.createAppointment(this.config, contact, startsAt, endsAt, "Booked by ASDleads SMS bot");
+      appointment = await ghl.createAppointment(this.config, contact, startsAt, endsAt, "Booked by Accident Support Desk SMS bot");
     } catch (error) {
       await this.notifyBotError("GHL appointment booking failed", {
         Name: contact.name || "unknown",
@@ -1183,7 +1183,7 @@ class SmsBot {
         contact.appointmentId,
         startsAt,
         endsAt,
-        "Rescheduled by ASDleads SMS bot"
+        "Rescheduled by Accident Support Desk SMS bot"
       );
     } catch (error) {
       await this.notifyBotError("GHL appointment reschedule failed", {

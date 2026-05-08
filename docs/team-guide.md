@@ -1,4 +1,4 @@
-# ASDleads SMS Bot Team Guide
+# Accident Support Desk SMS Bot Team Guide
 
 Last updated: May 8, 2026
 
@@ -136,4 +136,3 @@ If a lead texts in after-hours, the bot can reply because the lead initiated the
 3. If you book a call manually, update the bot/dashboard so it stops treating the escalation as open.
 4. If the lead should keep qualifying by SMS, click Return To Bot or add `return_to_bot`.
 5. If the lead is NQ, signed, or opted out, make sure the correct tag/state is applied.
-

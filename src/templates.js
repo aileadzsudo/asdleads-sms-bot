@@ -2,7 +2,7 @@ const coldOutreachTemplates = {
   day_1_am: "Hi [NAME]! 👋👋 It's William from Accident Support Desk, I was looking over your accident info and it looks very similar to another accident we just settled for a pretty significant amount. I think we can help show you how to do the same, just had a few quick questions for us to understand the situation a bit better. We can handle this over text message real quick, should only take a minute. Do you remember the date of the accident?",
   day_1_pm: "Hey [NAME] 🤕 waiting any longer could actually hurt your claim. I want to make sure you get a clear picture of your compensation options. I only need a few quick questions answered. Were you at fault for the accident?",
   day_2_am: "Hi [NAME] 👋, William here. I know getting a message out of nowhere feels weird but I genuinely think you might be sitting on more than you realize. People in accidents like yours often don't know what they qualify for until someone walks them through it. What was the date of the accident?",
-  day_2_pm: "William from ASD here. Some of what you shared looks like the insurance company may already be using tactics against you. I can help you get ahead of it, just need one detail. What was the date of the accident?",
+  day_2_pm: "William from Accident Support Desk here. Some of what you shared looks like the insurance company may already be using tactics against you. I can help you get ahead of it, just need one detail. What was the date of the accident?",
   day_3_am: "Hey [NAME] 🤔 — quick honest question. Has the other driver's insurance reached out to you yet? If they have, there's a reason for that and it's not in your favor. I can explain what's happening on their end. Just need to know, were you at fault?",
   day_3_pm: "Hey [NAME]! it's William. Based on the info you gave, there might be some injury-related protections you qualify for if we act quickly. I can check for you real fast. What was the date of the accident?",
   day_4_am: "Hi [NAME], it's William. I've been doing this long enough to know that the people who wait the longest usually end up with the least. Not trying to scare you just being honest. Did you need to see a doctor after the accident at all?",
@@ -46,7 +46,7 @@ const coldOutreachTemplates = {
 const qualificationTemplates = {
   fault: "So glad you got back to me, [NAME]! 🙌 Really quick just to understand your situation: were you at fault for the accident, or was it the other driver?",
   medical: "Have you needed to see any doctors or receive any medical treatment after the accident? 🤕",
-  callAsk: "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with a ASD Specialist who can create a compensation gameplan for you are you open for a call now or later today? 📞",
+  callAsk: "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with an Accident Support Desk Specialist who can create a compensation gameplan for you. Are you open for a call now or later today? 📞",
   clarify: "I want to make sure I understood you correctly 🙏 Can you answer that last question with a quick yes, no, or not sure?",
   optOutConfirm: "No problem — we won't text you again. If you change your mind, please feel free to reach back out.",
   callNow: "Perfect! 🔥 I'm connecting you with a Specialist right now — you should be getting a call within the next few minutes. Make sure your phone is on and available. What's the best number to reach you at?",
@@ -161,7 +161,7 @@ const warmFollowUpTemplates = {
 };
 
 const reminderTemplates = {
-  nextDayEvening: "Hey [NAME]! 👋 Just a quick reminder — you have a call scheduled with your ASD Specialist tomorrow at [TIME]. They'll be calling from a local number so don't let it go to voicemail! Looking forward to getting you some answers 💪",
+  nextDayEvening: "Hey [NAME]! 👋 Just a quick reminder — you have a call scheduled with your Accident Support Desk Specialist tomorrow at [TIME]. They'll be calling from a local number so don't let it go to voicemail! Looking forward to getting you some answers 💪",
   nextDayOneHour: "Hi [NAME], William here! Your call with your Specialist is in about an hour at [TIME] ⏰ Just making sure you're still good for it. Reply YES to confirm or let me know if you need to reschedule!",
   nextDayFiveMinutes: "[NAME] your Specialist is calling you in 5 minutes! 📞 Pick up even if the number looks unfamiliar — that's them. You're almost at the finish line! 🏁",
   sameDayOneHour: "Hey [NAME]! Your call is coming up in about an hour at [TIME] ⏰ Still good to go? Reply YES to confirm or let me know if you need to push it back!",

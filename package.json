@@ -2,7 +2,7 @@
   "name": "asdleads-sms-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Production-ready SMS follow-up and call-booking backend for ASDleads.",
+  "description": "Production-ready SMS follow-up and call-booking backend for Accident Support Desk.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
