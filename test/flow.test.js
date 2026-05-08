@@ -166,6 +166,30 @@ test("backup time reply cancels backup timeout and schedules reminders", async (
   );
 });
 
+test("backup timeout confirms appointment while acknowledging no backup response", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "backup-timeout-copy",
+    ghlContactId: "backup-timeout-copy",
+    name: "George",
+    phone: "+15550000059",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Sat, May 9, 1:00 PM CDT",
+    preferredCallTimeIso: new Date(Date.now() + 30 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "appt-copy",
+    awaitingBackupTime: true
+  });
+  const job = store.addJob({ type: "backup_time_timeout", contactId: "backup-timeout-copy", runAt: new Date().toISOString(), payload: {} });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.getContact("backup-timeout-copy").awaitingBackupTime, false);
+  assert.match(store.getContact("backup-timeout-copy").lastOutboundMessage, /did not get a backup time/i);
+  assert.match(store.getContact("backup-timeout-copy").lastOutboundMessage, /reschedule/i);
+});
+
 test("scheduled call can be rescheduled and old reminders are replaced", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

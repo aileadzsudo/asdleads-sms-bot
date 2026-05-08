@@ -53,7 +53,7 @@ const qualificationTemplates = {
   delay: "So sorry for the small wait — our Specialist is just finishing up with another client. You're next, should be calling within the next 3-5 minutes! 📞",
   backupAsk: "Perfect, I've got you down for [TIME]! 📅 Just to make sure we don't miss each other — is there a backup time that works too, just in case something comes up on either end?",
   bookingConfirmedWithBackup: "Got it — [PRIMARY TIME] with [BACKUP TIME] as a backup. You're all set [NAME]! 🙌 Our Specialist will call from a local number so make sure to pick up even if you don't recognize it. We'll remind you before your call!",
-  bookingConfirmedNoBackup: "No worries! You're locked in for [TIME]. We'll send you a reminder before the call — just keep your phone nearby 📱",
+  bookingConfirmedNoBackup: "No worries — I did not get a backup time from you, so I’ll keep you locked in for [TIME]. 📅 We’ll send you a reminder before the call. If you need to reschedule, just text me a better time.",
   sameDayBooked: "Locked you in for [TIME] today! 📅 Our Specialist will be calling from a local number so keep your phone close.",
   rescheduleAsk: "No problem 👍 What new time works best for your call today or tomorrow?",
   rescheduleNeedsSpecificTime: "No problem 👍 What specific time should I move your call to?",
