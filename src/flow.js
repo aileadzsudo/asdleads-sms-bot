@@ -334,6 +334,17 @@ class SmsBot {
 
   async sendBotMessage(contact, message, options = {}) {
     if (!options.allowAfterOptOut && (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT)) return null;
+    if (!options.skipTerminalTagCheck) {
+      contact = await this.hydrateContactTags(contact, { force: true });
+      if (hasSignedTag(contact)) {
+        await this.stopForSignedTag(contact);
+        return null;
+      }
+      if (hasNqTag(contact)) {
+        await this.stopForNqTag(contact);
+        return null;
+      }
+    }
     if (!options.bypassQuietHours && !isWithinTextingWindow(contact, this.config)) {
       await this.store.addJob({
         type: "send_message",
@@ -388,12 +399,12 @@ class SmsBot {
     };
   }
 
-  async hydrateContactTags(contact) {
-    if (contact.tags || this.config.dryRun) return contact;
+  async hydrateContactTags(contact, options = {}) {
+    if (!contact || this.config.dryRun || (contact.tags && !options.force)) return contact;
     try {
       const data = await ghl.getContact(this.config, contact.ghlContactId || contact.id);
       const fetched = data?.contact || data;
-      if (fetched?.tags) {
+      if (Object.prototype.hasOwnProperty.call(fetched || {}, "tags")) {
         return this.store.upsertContact({ ...contact, tags: fetched.tags });
       }
     } catch (error) {
@@ -416,13 +427,6 @@ class SmsBot {
       currentSequenceName: ""
     });
     await this.store.cancelJobsForContact(updated.id, "NQ tag");
-    await this.notifyBotError("NQ tag paused SMS bot", {
-      Name: updated.name || "unknown",
-      Phone: updated.phone || "unknown",
-      "GHL contact": updated.ghlContactId || updated.id,
-      Tags: normalizeTags(updated.tags).join(", "),
-      "Last inbound": updated.lastInboundMessage || "none"
-    });
     return updated;
   }
 
@@ -1404,10 +1408,27 @@ class SmsBot {
   }
 
   async runDueJob(job) {
-    const contact = await this.store.getContact(job.contactId);
+    const outboundJobTypes = [
+      "initial_sms",
+      "send_message",
+      "send_cold_template",
+      "warm_followup",
+      "enter_reengagement",
+      "send_reengagement_template",
+      "appointment_reminder",
+      "missed_call_followup",
+      "backup_time_timeout"
+    ];
+    let contact = await this.store.getContact(job.contactId);
+    if (contact && outboundJobTypes.includes(job.type)) {
+      contact = await this.hydrateContactTags(contact, { force: true });
+    }
+    if (contact && hasSignedTag(contact)) await this.stopForSignedTag(contact);
+    if (contact && hasNqTag(contact)) await this.stopForNqTag(contact);
     if (
       !contact ||
       contact.optOutStatus ||
+      contact.automationPaused ||
       contact.engagementStatus === ENGAGEMENT.OPTED_OUT ||
       contact.automationPauseReason === "nq_tag" ||
       contact.automationPauseReason === "signed_tag" ||

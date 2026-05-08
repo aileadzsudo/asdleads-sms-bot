@@ -7,6 +7,7 @@ const { Store } = require("../src/store");
 const { SmsBot, normalizePayload, callAskTemplateForTime } = require("../src/flow");
 const { ENGAGEMENT, QUALIFICATION } = require("../src/constants");
 const { isNoResponseDisposition } = require("../src/disposition");
+const ghl = require("../src/adapters/ghl");
 
 function testConfig(dataFile) {
   return {
@@ -477,6 +478,40 @@ test("NQ tag prevents no-response outreach from starting", async () => {
   assert.equal(contact.automationPaused, true);
   assert.equal(contact.automationPauseReason, "nq_tag");
   assert.equal(store.data.messages.length, 0);
+});
+
+test("queued outbound refreshes GHL tags before sending and skips newly NQ contacts", async () => {
+  const { bot, store } = makeBot();
+  const originalGetContact = ghl.getContact;
+  ghl.getContact = async () => ({ contact: { tags: ["moudgl_tx", "NQ"] } });
+  try {
+    store.upsertContact({
+      id: "nq-late",
+      ghlContactId: "nq-late",
+      name: "Late NQ",
+      phone: "+15550000054",
+      tags: ["moudgl_tx", "nr"],
+      engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+      qualificationProgress: QUALIFICATION.NEEDS_FAULT
+    });
+    const job = store.addJob({
+      type: "send_cold_template",
+      contactId: "nq-late",
+      runAt: new Date().toISOString(),
+      payload: { templateKey: "day_1_pm", day: 1, slot: "pm" }
+    });
+
+    await bot.runDueJob(job);
+
+    const contact = store.getContact("nq-late");
+    assert.equal(contact.automationPaused, true);
+    assert.equal(contact.automationPauseReason, "nq_tag");
+    assert.equal(contact.lastOutboundMessage, undefined);
+    assert.equal(store.data.messages.filter((message) => message.contactId === "nq-late" && message.direction === "outbound").length, 0);
+    assert.equal(store.data.jobs[job.id].status, "skipped");
+  } finally {
+    ghl.getContact = originalGetContact;
+  }
 });
 
 test("date reply to initial outreach is accepted and advances to fault question", async () => {
