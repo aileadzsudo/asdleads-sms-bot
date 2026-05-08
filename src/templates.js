@@ -1,6 +1,6 @@
 const coldOutreachTemplates = {
   day_1_am: "Hi [NAME]! 👋👋 It's William from Accident Support Desk, I was looking over your accident info and it looks very similar to another accident we just settled for a pretty significant amount. I think we can help show you how to do the same, just had a few quick questions for us to understand the situation a bit better. We can handle this over text message real quick, should only take a minute. Do you remember the date of the accident?",
-  day_1_pm: "Hey [NAME] 🤕 waiting any longer could actually hurt your claim. I want to make sure you get a clear picture of your compensation options. I only need a few quick questions answered. Were you at fault for the accident?",
+  day_1_pm: "Hey [NAME] 🤕 waiting any longer could actually hurt your claim. I want to make sure you get a clear picture of your compensation options. I only need one quick detail to start. What was the date of the accident?",
   day_2_am: "Hi [NAME] 👋, William here. I know getting a message out of nowhere feels weird but I genuinely think you might be sitting on more than you realize. People in accidents like yours often don't know what they qualify for until someone walks them through it. What was the date of the accident?",
   day_2_pm: "William from Accident Support Desk here. Some of what you shared looks like the insurance company may already be using tactics against you. I can help you get ahead of it, just need one detail. What was the date of the accident?",
   day_3_am: "Hey [NAME] 🤔, quick honest question. Has the other driver's insurance reached out to you yet? If they have, there's a reason for that and it's not in your favor. I can explain what's happening on their end. Just need to know, were you at fault?",
@@ -217,6 +217,12 @@ const noShowTemplates = {
   day_7_pm: "Last message from me for now, [NAME]. If you want help, send me a call time and we’ll try to get you back on the calendar."
 };
 
+const backupReminderTemplates = {
+  afterPrimaryMissed: "Hey [NAME], looks like we missed you at [PRIMARY TIME] 📞 No worries, I still have your backup time as [BACKUP TIME]. We'll try you then. If that no longer works, text me a better time.",
+  thirtyBefore: "Quick reminder [NAME], we're going to try you at your backup time around [BACKUP TIME] 📞 Keep your phone close.",
+  fiveBefore: "[NAME], your backup call time is coming up in about 5 minutes 📞 Please pick up even if the number looks unfamiliar."
+};
+
 function firstName(contact = {}) {
   const raw =
     contact.firstName ||
@@ -251,6 +257,7 @@ module.exports = {
   reminderTemplates,
   missedCallTemplates,
   noShowTemplates,
+  backupReminderTemplates,
   render,
   firstName
 };

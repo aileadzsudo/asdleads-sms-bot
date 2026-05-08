@@ -1117,6 +1117,39 @@ test("appointment no-show schedules reschedule recovery without restarting quali
   assert.doesNotMatch(store.getContact("no-show-1").lastOutboundMessage, /date of the accident/i);
 });
 
+test("appointment no-show schedules backup time reminders when backup exists", async () => {
+  const { bot, store } = makeBot();
+  const primary = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const backup = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "no-show-backup",
+    ghlContactId: "no-show-backup",
+    name: "Backup",
+    phone: "+15550000073",
+    timezone: "America/Chicago",
+    preferredCallTime: "the first call time",
+    preferredCallTimeIso: primary,
+    backupCallTime: "4:00 PM",
+    backupCallTimeIso: backup,
+    backupCallTimeType: "exact"
+  });
+
+  await bot.markNoShow({ contactId: "no-show-backup" });
+  const backupJobs = Object.values(store.data.jobs)
+    .filter((job) => job.contactId === "no-show-backup" && job.type === "backup_no_show_reminder" && job.status === "pending")
+    .sort((a, b) => new Date(a.runAt) - new Date(b.runAt));
+
+  assert.equal(backupJobs.length >= 2, true);
+  assert.equal(backupJobs.some((job) => job.payload.templateKey === "afterPrimaryMissed"), true);
+
+  const firstJob = backupJobs.find((job) => job.payload.templateKey === "afterPrimaryMissed");
+  store.updateJob(firstJob.id, { runAt: new Date().toISOString() });
+  await bot.runDueJob(store.data.jobs[firstJob.id]);
+
+  assert.match(store.getContact("no-show-backup").lastOutboundMessage, /backup time/i);
+  assert.match(store.getContact("no-show-backup").lastOutboundMessage, /4:00 PM/i);
+});
+
 test("warm follow-ups aggressively chase before entering re-engagement", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -1625,6 +1658,40 @@ test("immediate no-response enrollment queues cold outreach without duplicates",
 
   assert.equal(firstScheduled.length > 0, true);
   assert.equal(afterReschedule.length, firstScheduled.length);
+});
+
+test("fresh no-response enrollment cancels stale qualification follow-up jobs", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "stale-warm-nr",
+    ghlContactId: "stale-warm-nr",
+    name: "McKinley",
+    phone: "+15550000070",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+  store.addJob({
+    type: "warm_followup",
+    contactId: "stale-warm-nr",
+    runAt: new Date().toISOString(),
+    payload: { step: 1 }
+  });
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "stale-warm-nr",
+    name: "McKinley",
+    phone: "+15550000070",
+    timezone: "America/Chicago",
+    tags: ["NR"]
+  });
+
+  assert.equal(contact.currentSequenceName, "initial_sms");
+  assert.match(store.getContact("stale-warm-nr").lastOutboundMessage, /date of the accident/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "stale-warm-nr" && job.type === "warm_followup" && job.status === "pending"),
+    false
+  );
 });
 
 test("fresh no-response enrollment schedules aggressive same-day follow-ups", async () => {

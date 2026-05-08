@@ -12,7 +12,8 @@ const TEMPLATE_GROUPS = {
   warmFollowUpTemplates: "Warm Follow-Up",
   reminderTemplates: "Appointment Reminders",
   missedCallTemplates: "Missed Call",
-  noShowTemplates: "No-Show Recovery"
+  noShowTemplates: "No-Show Recovery",
+  backupReminderTemplates: "Backup Time Reminders"
 };
 
 const templateRoots = Object.fromEntries(Object.keys(TEMPLATE_GROUPS).map((key) => [key, templates[key]]));

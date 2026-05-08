@@ -10,6 +10,7 @@ const {
   reminderTemplates,
   missedCallTemplates,
   noShowTemplates,
+  backupReminderTemplates,
   render
 } = require("./templates");
 const {
@@ -47,6 +48,19 @@ const INBOUND_BUFFER_SECONDS = 30;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 60, 120, 240];
 const NO_SHOW_SAME_DAY_MINUTES = [10, 45, 120, 240, 360];
 const NO_SHOW_DAYS = [2, 3, 4, 5, 6, 7];
+const BOT_SEQUENCE_JOB_TYPES = [
+  "initial_sms",
+  "cold_entry_check",
+  "send_cold_template",
+  "fresh_lead_followup",
+  "warm_followup",
+  "enter_reengagement",
+  "send_reengagement_template",
+  "appointment_reminder",
+  "missed_call_followup",
+  "backup_time_timeout",
+  "backup_no_show_reminder"
+];
 
 function customValue(payload, key) {
   return payload.customData?.[key] || payload.custom_data?.[key] || "";
@@ -424,8 +438,37 @@ function parseBackupWindow(text) {
   const displayMinute = (minute) => (minute ? `:${String(minute).padStart(2, "0")}` : "");
   return {
     value: `${displayHour(startHour)}${displayMinute(startMinute)}-${displayHour(endHour)}${displayMinute(endMinute)} ${meridiem}`,
+    startHour,
+    startMinute,
+    endHour,
+    endMinute,
     confidence: 0.86
   };
+}
+
+function backupWindowStartIso(contact, config) {
+  if (!contact.preferredCallTimeIso) return "";
+  const startHour = Number(contact.backupWindowStartHour);
+  const startMinute = Number(contact.backupWindowStartMinute || 0);
+  if (!Number.isFinite(startHour)) return "";
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  const primaryDate = getLocalParts(new Date(contact.preferredCallTimeIso), timeZone);
+  return localDateToUtc(
+    {
+      year: primaryDate.year,
+      month: primaryDate.month,
+      day: primaryDate.day,
+      hour: startHour,
+      minute: startMinute
+    },
+    timeZone
+  ).toISOString();
+}
+
+function backupReminderTargetIso(contact, config) {
+  if (contact.backupCallTimeIso) return contact.backupCallTimeIso;
+  if (contact.backupCallTimeType === "window") return backupWindowStartIso(contact, config);
+  return "";
 }
 
 function looksLikeInjuryContext(text) {
@@ -870,8 +913,18 @@ class SmsBot {
       optOutStatus: false,
       humanEscalationStatus: false,
       automationPaused: false,
-      automationPauseReason: ""
+      automationPauseReason: "",
+      awaitingBackupTime: false,
+      awaitingSpecificCallTime: false,
+      currentSequenceName: "",
+      currentSequenceDay: 0,
+      currentSequenceSlot: "",
+      currentMessageCountForDay: 0,
+      sentColdTemplateKeys: []
     });
+    await this.store.cancelJobsForContact(contact.id, "fresh no-response enrollment", (job) =>
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type)
+    );
     const hydrated = await this.hydrateContactTags(contact);
     if (hasSignedTag(hydrated)) return this.stopForSignedTag(hydrated);
     if (hasNqTag(hydrated)) return this.stopForNqTag(hydrated);
@@ -943,7 +996,7 @@ class SmsBot {
     }
 
     await this.store.cancelJobsForContact(contact.id, "backfill queued", (job) =>
-      ["initial_sms", "cold_entry_check", "send_cold_template"].includes(job.type)
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type)
     );
     const targetRunAt = new Date(runAt);
     await this.store.addJob({
@@ -1724,6 +1777,10 @@ class SmsBot {
         backupCallTime: backupWindow.value,
         backupCallTimeIso: "",
         backupCallTimeType: "window",
+        backupWindowStartHour: backupWindow.startHour,
+        backupWindowStartMinute: backupWindow.startMinute,
+        backupWindowEndHour: backupWindow.endHour,
+        backupWindowEndMinute: backupWindow.endMinute,
         awaitingBackupTime: false,
         qualificationProgress: QUALIFICATION.COMPLETE
       });
@@ -1762,6 +1819,11 @@ class SmsBot {
         ...contact,
         backupCallTime: backup,
         backupCallTimeIso: parsed.startsAt,
+        backupCallTimeType: "exact",
+        backupWindowStartHour: "",
+        backupWindowStartMinute: "",
+        backupWindowEndHour: "",
+        backupWindowEndMinute: "",
         awaitingBackupTime: false,
         qualificationProgress: QUALIFICATION.COMPLETE
       });
@@ -1868,11 +1930,41 @@ class SmsBot {
     }
   }
 
-  async scheduleNoShowFollowUps(contact) {
+  async scheduleBackupNoShowReminders(contact) {
+    await this.store.cancelJobsForContact(contact.id, "backup no-show reminders replaced", (job) => job.type === "backup_no_show_reminder");
+    if (!contact.backupCallTime) return false;
+    const targetIso = backupReminderTargetIso(contact, this.config);
+    if (!targetIso) return false;
+    const target = new Date(targetIso);
+    const now = new Date();
+    if (target <= now) return false;
+
+    const addReminder = async (templateKey, runAt) => {
+      if (runAt < now) return;
+      const scheduledAt = isWithinTextingWindow(contact, this.config, runAt)
+        ? runAt
+        : nextTextingWindow(contact, this.config, runAt);
+      if (scheduledAt >= target) return;
+      await this.store.addJob({
+        type: "backup_no_show_reminder",
+        contactId: contact.id,
+        runAt: scheduledAt.toISOString(),
+        payload: { templateKey }
+      });
+    };
+
+    await addReminder("afterPrimaryMissed", now);
+    await addReminder("thirtyBefore", addMinutes(target, -30));
+    await addReminder("fiveBefore", addMinutes(target, -5));
+    return true;
+  }
+
+  async scheduleNoShowFollowUps(contact, options = {}) {
     await this.store.cancelJobsForContact(contact.id, "no-show follow-ups replaced", (job) => job.type === "missed_call_followup");
     const now = new Date();
     const sameDayKeys = ["sameDay10", "sameDay45", "sameDay120", "sameDay240", "sameDayLast"];
     for (const [index, minutes] of NO_SHOW_SAME_DAY_MINUTES.entries()) {
+      if (options.skipEarlySameDay && index < 2) continue;
       const runAt = addMinutes(now, minutes);
       if (!sameLocalDay(now, runAt, contact.timezone || this.config.texting.defaultTimezone)) continue;
       if (!isWithinTextingWindow(contact, this.config, runAt)) continue;
@@ -1937,7 +2029,8 @@ class SmsBot {
     await this.store.cancelJobsForContact(contact.id, "appointment marked no-show", (job) =>
       ["appointment_reminder", "backup_time_timeout", "warm_followup", "enter_reengagement", "send_reengagement_template"].includes(job.type)
     );
-    await this.scheduleNoShowFollowUps(contact);
+    const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(contact);
+    await this.scheduleNoShowFollowUps(contact, { skipEarlySameDay: hasBackupReminderPlan });
     contact = await this.store.upsertContact({
       ...contact,
       currentSequenceDay: 1,
@@ -2024,6 +2117,7 @@ class SmsBot {
       "send_reengagement_template",
       "appointment_reminder",
       "missed_call_followup",
+      "backup_no_show_reminder",
       "backup_time_timeout"
     ];
     let contact = await this.store.getContact(job.contactId);
@@ -2058,7 +2152,7 @@ class SmsBot {
       await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString() });
       return;
     }
-    if (["initial_sms", "fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "appointment_reminder", "missed_call_followup"].includes(job.type)) {
+    if (["initial_sms", "fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "appointment_reminder", "missed_call_followup", "backup_no_show_reminder"].includes(job.type)) {
       if (!isWithinTextingWindow(contact, this.config)) {
         await this.store.updateJob(job.id, {
           status: "pending",
@@ -2224,6 +2318,19 @@ class SmsBot {
         job.payload.templateKey,
         templates[job.payload.templateKey],
         { time: contact.preferredCallTime || "your scheduled time" }
+      );
+      await this.sendBotMessage(contact, rendered.message, rendered.meta);
+    }
+    if (job.type === "backup_no_show_reminder") {
+      const rendered = await this.renderManagedTemplate(
+        contact,
+        "backupReminderTemplates",
+        job.payload.templateKey,
+        backupReminderTemplates[job.payload.templateKey],
+        {
+          primaryTime: contact.preferredCallTime || "your first call time",
+          backupTime: contact.backupCallTime || "your backup time"
+        }
       );
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
