@@ -252,6 +252,17 @@ function isBenignAppointmentAcknowledgement(text) {
   return /^(thanks|thank you|thank u|thx|ok thanks|okay thanks|appreciate it|sounds good|great|perfect|got it|ok|okay|k|cool)$/i.test(t);
 }
 
+function hasBookedAppointment(contact) {
+  return Boolean(
+    contact?.appointmentId ||
+      contact?.preferredCallTimeIso ||
+      contact?.preferredCallTime ||
+      contact?.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
+      contact?.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
+      contact?.qualificationProgress === QUALIFICATION.COMPLETE
+  );
+}
+
 function looksPostSignedOrFirmIssue(text) {
   const t = normalize(text);
   return [
@@ -1421,6 +1432,22 @@ class SmsBot {
       });
     }
 
+    if (hasBookedAppointment(contact) && isBenignAppointmentAcknowledgement(inbound.lastInboundMessage)) {
+      const updated = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+        appointmentConfirmed: true,
+        appointmentConfirmedAt: new Date().toISOString(),
+        lastAppointmentAcknowledgement: inbound.lastInboundMessage,
+        humanEscalationStatus: false,
+        humanEscalationStage: "appointment_acknowledged",
+        escalationReason: ""
+      });
+      await this.cancelHumanEscalationWatchdog(updated.id, "appointment acknowledged");
+      if (updated.preferredCallTimeIso) await this.scheduleAppointmentReminders(updated);
+      return this.store.getContact(updated.id);
+    }
+
     if (contact.engagementStatus === ENGAGEMENT.READY_FOR_CALL || contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) {
       await this.escalate(contact, "message_after_bot_paused");
       return contact;
@@ -2460,7 +2487,11 @@ class SmsBot {
       escalatedAt: new Date().toISOString(),
       escalationReason: reason
     });
-    await this.store.cancelJobsForContact(updated.id, "escalated to human");
+    await this.store.cancelJobsForContact(
+      updated.id,
+      "escalated to human",
+      (job) => !hasBookedAppointment(updated) || !["appointment_reminder", "backup_no_show_reminder"].includes(job.type)
+    );
     await this.store.addEscalation({ contactId: updated.id, reason, lastInboundMessage: updated.lastInboundMessage, extra });
     try {
       await slack.sendEscalation(this.config, updated, reason, extra);

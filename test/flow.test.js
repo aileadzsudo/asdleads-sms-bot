@@ -164,15 +164,60 @@ test("scheduled call thank-you is treated as acknowledgement instead of escalati
     phone: "+15550000064",
     engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
     qualificationProgress: QUALIFICATION.COMPLETE,
-    preferredCallTime: "Thu, May 7, 3:00 PM CDT"
+    preferredCallTime: "Thu, May 7, 3:00 PM CDT",
+    preferredCallTimeIso: new Date(Date.now() + 90 * 60 * 1000).toISOString(),
+    appointmentId: "thanks-appt"
+  });
+  store.addJob({
+    type: "appointment_reminder",
+    contactId: "thanks-booked",
+    runAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    payload: { templateKey: "sameDayOneHour" }
   });
 
-  const contact = await bot.handleInboundSms({ contactId: "thanks-booked", message: "thank you" });
+  const contact = await bot.handleInboundSms({ contactId: "thanks-booked", message: "Okay thanks" });
 
   assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
   assert.equal(store.getContact("thanks-booked").appointmentConfirmed, true);
-  assert.equal(store.getContact("thanks-booked").humanEscalationStatus, undefined);
+  assert.equal(store.getContact("thanks-booked").humanEscalationStatus, false);
   assert.equal(store.data.escalations.length, 0);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "thanks-booked" && job.type === "appointment_reminder" && job.status === "pending"),
+    true
+  );
+});
+
+test("appointment escalation preserves appointment reminders", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "booked-escalation",
+    ghlContactId: "booked-escalation",
+    name: "Booked Escalation",
+    phone: "+15550000077",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Thu, May 7, 3:00 PM CDT",
+    preferredCallTimeIso: new Date(Date.now() + 90 * 60 * 1000).toISOString(),
+    appointmentId: "booked-appt"
+  });
+  store.addJob({
+    type: "appointment_reminder",
+    contactId: "booked-escalation",
+    runAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    payload: { templateKey: "sameDayOneHour" }
+  });
+  store.addJob({
+    type: "warm_followup",
+    contactId: "booked-escalation",
+    runAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    payload: { step: 1 }
+  });
+
+  await bot.escalate(store.getContact("booked-escalation"), "appointment_reply_needs_human_review");
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "booked-escalation");
+
+  assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
+  assert.equal(jobs.some((job) => job.type === "warm_followup" && job.status === "pending"), false);
 });
 
 test("backup time reply finalizes scheduled call instead of escalating", async () => {
