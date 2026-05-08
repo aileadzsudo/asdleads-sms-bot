@@ -380,6 +380,100 @@ function contactTimeline(contact, messages = [], jobs = [], escalations = []) {
   return events.filter((event) => event.at).sort((a, b) => new Date(a.at) - new Date(b.at));
 }
 
+function contactQualification(contact = {}) {
+  const answered = [
+    contact.accidentDate ? "accident_date" : "",
+    contact.faultAnswer ? "fault" : "",
+    contact.medicalTreatmentAnswer ? "medical" : "",
+    contact.preferredCallTime || contact.appointmentId ? "call_time" : ""
+  ].filter(Boolean);
+  const summary = [
+    contact.accidentDate ? `Accident: ${contact.accidentDate}` : "",
+    contact.faultAnswer ? `Fault: ${contact.faultAnswer}` : "",
+    contact.medicalTreatmentAnswer ? `Medical: ${contact.medicalTreatmentAnswer}` : "",
+    contact.preferredCallTime ? `Call: ${contact.preferredCallTime}` : ""
+  ].filter(Boolean);
+
+  return {
+    contactId: contact.id || "",
+    progress: contact.qualificationProgress || "",
+    answered,
+    fault: contact.faultAnswer || "",
+    medical: contact.medicalTreatmentAnswer || "",
+    callTime: contact.preferredCallTime || "",
+    callTimeIso: contact.preferredCallTimeIso || "",
+    accidentDate: contact.accidentDate || "",
+    appointmentId: contact.appointmentId || "",
+    summary: summary.length ? summary.join(" | ") : "No qualification answers collected yet."
+  };
+}
+
+async function contactDataSets() {
+  const [contacts, messages, jobs, escalations] = await Promise.all([
+    store.listContacts ? store.listContacts() : [],
+    store.listMessages(),
+    store.listJobs(),
+    store.listEscalations()
+  ]);
+  return {
+    contacts,
+    messages,
+    jobs,
+    escalations,
+    messagesByContact: groupByContactId(messages),
+    jobsByContact: groupByContactId(jobs),
+    escalationsByContact: groupByContactId(escalations)
+  };
+}
+
+function filterContactQueue(contacts, queue = "all") {
+  if (queue === "hot") {
+    return contacts.filter((contact) => contact.riskScore >= 35 && !contact.automationPaused && contact.engagementStatus !== "opted_out");
+  }
+  if (queue === "waiting") {
+    return contacts.filter(
+      (contact) =>
+        (contact.humanEscalationStatus && contact.humanEscalationStage === "human_review_pending") ||
+        ["ready_for_call", "active_conversation", "warm_follow_up", "re_engagement"].includes(contact.engagementStatus)
+    );
+  }
+  if (queue === "paused") {
+    return contacts.filter((contact) => contact.automationPaused || contact.optOutStatus || contact.engagementStatus === "opted_out");
+  }
+  return contacts;
+}
+
+function sortContacts(contacts, sort = "sla") {
+  const priority = (contact) => {
+    if (contact.issueFlags?.some((flag) => flag.code === "unacknowledged_escalation")) return 4;
+    if (contact.engagementStatus === "ready_for_call") return 3;
+    if (contact.issueFlags?.some((flag) => flag.type === "warn")) return 2;
+    if (contact.issueFlags?.some((flag) => flag.type === "info")) return 1;
+    return 0;
+  };
+  return [...contacts].sort((a, b) => {
+    if (sort === "recent") return new Date(b.lastActivityAt || 0) - new Date(a.lastActivityAt || 0);
+    return priority(b) - priority(a) || b.riskScore - a.riskScore || new Date(b.lastActivityAt || 0) - new Date(a.lastActivityAt || 0);
+  });
+}
+
+async function dashboardContactsList(url) {
+  const queue = url.searchParams.get("queue") || "all";
+  const sort = url.searchParams.get("sort") || "sla";
+  const data = await contactDataSets();
+  const summaries = data.contacts.map((contact) =>
+    summarizeContact(contact, data.jobsByContact, data.messagesByContact, data.escalationsByContact)
+  );
+  const contacts = sortContacts(filterContactQueue(summaries, queue), sort);
+  return {
+    ok: true,
+    queue,
+    sort,
+    count: contacts.length,
+    contacts
+  };
+}
+
 function lifecycleFunnel(contacts) {
   const count = (predicate) => contacts.filter(predicate).length;
   return [
@@ -1275,6 +1369,92 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await readJson(req);
       send(res, 200, { ok: true, ...(await releaseBackfillInitialJobs(payload.limit || 250)) });
+      return;
+    }
+
+    if (req.url.startsWith("/api/contacts")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const parts = url.pathname.split("/").filter(Boolean);
+
+      if (req.method === "GET" && parts.length === 2) {
+        send(res, 200, await dashboardContactsList(url));
+        return;
+      }
+
+      const contactId = parts[2] ? decodeURIComponent(parts[2]) : "";
+      const section = parts[3] || "";
+      if (!contactId) {
+        send(res, 404, { ok: false, error: "contact not found" });
+        return;
+      }
+
+      if (req.method === "GET" && parts.length === 3) {
+        const detail = await dashboardContactDetail(contactId);
+        send(res, detail ? 200 : 404, detail || { ok: false, error: "contact not found" });
+        return;
+      }
+
+      if (req.method === "GET" && section === "messages") {
+        const contact = await store.getContact(contactId);
+        if (!contact) {
+          send(res, 404, { ok: false, error: "contact not found" });
+          return;
+        }
+        send(res, 200, { ok: true, contactId, messages: await store.listMessages(contactId) });
+        return;
+      }
+
+      if (req.method === "GET" && section === "timeline") {
+        const detail = await dashboardContactDetail(contactId);
+        send(res, detail ? 200 : 404, detail ? { ok: true, contactId, timeline: detail.timeline } : { ok: false, error: "contact not found" });
+        return;
+      }
+
+      if (req.method === "GET" && section === "qualification") {
+        const contact = await store.getContact(contactId);
+        send(res, contact ? 200 : 404, contact ? { ok: true, ...contactQualification(contact) } : { ok: false, error: "contact not found" });
+        return;
+      }
+
+      if (req.method === "POST" && ["ack", "return-to-bot", "pause-bot"].includes(section)) {
+        const action = {
+          ack: "human_acknowledged",
+          "return-to-bot": "return_to_bot",
+          "pause-bot": "pause_bot"
+        }[section];
+        const contact = await bot.applyBotControl({ contactId, action });
+        if (!contact) {
+          send(res, 404, { ok: false, error: "contact not found" });
+          return;
+        }
+        send(res, 200, await dashboardContactDetail(contact.id));
+        return;
+      }
+
+      if (req.method === "POST" && section === "note") {
+        const payload = await readJson(req);
+        const body = String(payload.body || payload.note || "").trim();
+        if (!body) {
+          send(res, 400, { ok: false, error: "note body is required" });
+          return;
+        }
+        const contact = await store.getContact(contactId);
+        if (!contact) {
+          send(res, 404, { ok: false, error: "contact not found" });
+          return;
+        }
+        const notes = [...(contact.adminNotes || []), { note: body, body, createdAt: new Date().toISOString() }];
+        const updated = await store.upsertContact({ ...contact, adminNotes: notes });
+        send(res, 200, await dashboardContactDetail(updated.id));
+        return;
+      }
+
+      send(res, 404, { ok: false, error: "not found" });
       return;
     }
 
