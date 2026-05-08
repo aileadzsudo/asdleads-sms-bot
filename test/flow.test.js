@@ -201,6 +201,45 @@ test("backup time reply finalizes scheduled call instead of escalating", async (
   assert.match(store.getContact("c3b").lastOutboundMessage, /backup/i);
 });
 
+test("explicit earlier call time while awaiting backup reschedules primary appointment", async () => {
+  const { bot, store } = makeBot();
+  const originalUpdateAppointment = ghl.updateAppointment;
+  const updates = [];
+  ghl.updateAppointment = async (_config, _contact, appointmentId, startsAt, endsAt, notes) => {
+    updates.push({ appointmentId, startsAt, endsAt, notes });
+    return { id: appointmentId };
+  };
+  store.upsertContact({
+    id: "backup-primary-correction",
+    ghlContactId: "backup-primary-correction",
+    name: "Backup Correction",
+    phone: "+15550000081",
+    tags: ["lhpark_ca"],
+    timezone: "America/Los_Angeles",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "next week",
+    preferredCallTimeIso: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "appt-backup-primary",
+    awaitingBackupTime: true
+  });
+
+  try {
+    const contact = await bot.handleInboundSms({
+      contactId: "backup-primary-correction",
+      message: "you can call tomorrow at 2 pm"
+    });
+
+    assert.equal(contact.awaitingBackupTime, false);
+    assert.equal(contact.backupCallTime, undefined);
+    assert.match(contact.preferredCallTime, /2:00 PM PST/);
+    assert.equal(updates.some((update) => update.appointmentId === "appt-backup-primary"), true);
+    assert.match(store.getContact("backup-primary-correction").lastOutboundMessage, /rescheduled|updated|locked|moved/i);
+  } finally {
+    ghl.updateAppointment = originalUpdateAppointment;
+  }
+});
+
 test("backup time window is saved as a window instead of duplicating primary time", async () => {
   const { bot, store } = makeBot();
   const originalUpdateAppointment = ghl.updateAppointment;

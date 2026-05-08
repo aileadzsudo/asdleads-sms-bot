@@ -420,6 +420,19 @@ function isRescheduleRequest(text) {
   return /\b(reschedule|re-schedule|move it|move the call|change the time|change my time|different time|another time|another day|instead|push it back|push back|can't make it|cant make it|need to move|need a new time)\b/.test(t);
 }
 
+function isPrimaryCallCorrectionWhileAwaitingBackup(text, contact, config) {
+  if (!contact.preferredCallTimeIso) return false;
+  const t = normalize(text);
+  const parsed = parseCallTime(text, contact, config);
+  if (parsed?.type !== "scheduled") return false;
+  if (/\b(not tomorrow|not for tomorrow|today|call today|you can call today|u can call today)\b/.test(t)) return true;
+  if (/\b(primary|main time|first time|actual time)\b/.test(t)) return true;
+  if (hasExplicitCallDate(text) && hasCallIntentText(text)) {
+    return new Date(parsed.startsAt) < new Date(contact.preferredCallTimeIso);
+  }
+  return false;
+}
+
 function hasLocationTimezoneSignal(contact = {}) {
   return Boolean(
     contact.state ||
@@ -1387,7 +1400,10 @@ class SmsBot {
     }
 
     if (contact.awaitingBackupTime) {
-      if (isRescheduleRequest(inbound.lastInboundMessage)) {
+      if (
+        isRescheduleRequest(inbound.lastInboundMessage) ||
+        isPrimaryCallCorrectionWhileAwaitingBackup(inbound.lastInboundMessage, contact, this.config)
+      ) {
         return this.handleReschedule(contact, inbound.lastInboundMessage);
       }
       return this.handleBackupTime(contact, inbound.lastInboundMessage);
@@ -1866,6 +1882,7 @@ class SmsBot {
   }
 
   async handleCallTime(contact, text) {
+    contact = await this.hydrateContactTags(contact, { force: true });
     const resolvedTimezone = resolveContactTimezone(contact, this.config);
     if (resolvedTimezone && resolvedTimezone !== contact.timezone) {
       contact = await this.store.upsertContact({ ...contact, timezone: resolvedTimezone });
