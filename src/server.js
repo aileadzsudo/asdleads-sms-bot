@@ -6,7 +6,7 @@ const { loadConfig } = require("./config");
 const { createStore } = require("./storeFactory");
 const { SmsBot } = require("./flow");
 const { isNoResponseDisposition } = require("./disposition");
-const { addMinutes, isWithinTextingWindow, nextTextingWindow } = require("./time");
+const { addMinutes, isWithinTextingWindow, localSlotDate, nextTextingWindow } = require("./time");
 const {
   editableTemplates,
   loadTemplateExperiments,
@@ -1163,6 +1163,32 @@ async function releaseBackfillInitialJobs(limit = 250) {
   };
 }
 
+async function rescheduleColdPmJobs() {
+  const now = new Date();
+  const jobs = (await store.listJobs())
+    .filter((job) => job.status === "pending")
+    .filter((job) => job.type === "send_cold_template")
+    .filter((job) => job.payload?.slot === "pm");
+  const updated = [];
+  const skipped = [];
+  for (const job of jobs) {
+    const contact = await store.getContact(job.contactId);
+    if (!contact) {
+      skipped.push({ jobId: job.id, reason: "contact not found" });
+      continue;
+    }
+    const day = Math.max(1, Number(job.payload?.day || 1));
+    const runAt = localSlotDate(contact, config, day - 1, "pm");
+    if (runAt <= now) {
+      skipped.push({ jobId: job.id, contactId: job.contactId, reason: "new runAt is already past", runAt: runAt.toISOString() });
+      continue;
+    }
+    await store.updateJob(job.id, { runAt: runAt.toISOString(), rescheduledReason: "pm_slot_6pm_local" });
+    updated.push({ jobId: job.id, contactId: job.contactId, runAt: runAt.toISOString() });
+  }
+  return { updatedCount: updated.length, skippedCount: skipped.length, updated: updated.slice(0, 25), skipped: skipped.slice(0, 25) };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/health") {
@@ -1369,6 +1395,16 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await readJson(req);
       send(res, 200, { ok: true, ...(await releaseBackfillInitialJobs(payload.limit || 250)) });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/jobs/reschedule-cold-pm") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      send(res, 200, { ok: true, ...(await rescheduleColdPmJobs()) });
       return;
     }
 

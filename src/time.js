@@ -92,7 +92,7 @@ function addDays(date, days) {
 function localSlotDate(contact, config, dayOffset, slot) {
   const timeZone = contact.timezone || config.texting.defaultTimezone;
   const nowLocal = getLocalParts(new Date(), timeZone);
-  const hour = slot === "am" ? 10 : 16;
+  const hour = slot === "am" ? 10 : 18;
   return localDateToUtc(
     {
       year: nowLocal.year,
