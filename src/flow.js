@@ -234,8 +234,6 @@ function hasManualHumanHoldTag(contact) {
     "keep_human",
     "manual_hold",
     "do_not_return_to_bot",
-    "follow_up",
-    "followup",
     "manual_follow_up",
     "qr"
   ]);

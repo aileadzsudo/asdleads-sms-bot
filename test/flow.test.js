@@ -1242,7 +1242,7 @@ test("NQ tag prevents no-response outreach from starting", async () => {
   assert.equal(store.data.messages.length, 0);
 });
 
-test("manual hold tags stop no-response outreach from starting", async () => {
+test("generic follow up tag does not stop no-response outreach from starting", async () => {
   const { bot, store } = makeBot();
 
   const contact = await bot.startFromNoResponseDisposition({
@@ -1253,11 +1253,10 @@ test("manual hold tags stop no-response outreach from starting", async () => {
     disposition: "no response"
   });
 
-  assert.equal(contact.automationPaused, true);
-  assert.equal(contact.automationPauseReason, "manual_hold_tag");
-  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
-  assert.equal(store.data.messages.length, 0);
-  assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "hold-start" && job.status === "pending"), false);
+  assert.equal(contact.automationPaused, false);
+  assert.equal(contact.engagementStatus, ENGAGEMENT.INITIAL_SMS_SENT);
+  assert.equal(store.data.messages.length, 1);
+  assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "hold-start" && job.status === "pending"), true);
 });
 
 test("manual hold tag cancels queued cadence before sending", async () => {
