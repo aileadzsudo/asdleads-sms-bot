@@ -1163,6 +1163,51 @@ async function releaseBackfillInitialJobs(limit = 250) {
   };
 }
 
+async function backfillInitialJobStatus() {
+  const jobs = (await store.listJobs())
+    .filter((job) => job.type === "initial_sms")
+    .filter((job) => (job.payload?.source || "") === "backfill")
+    .sort((a, b) => new Date(a.runAt || 0) - new Date(b.runAt || 0));
+  const pending = jobs.filter((job) => job.status === "pending");
+  const sentOrDone = jobs.filter((job) => ["done", "completed", "sent"].includes(job.status));
+  const cancelled = jobs.filter((job) => job.status === "cancelled");
+  const failed = jobs.filter((job) => job.status === "failed");
+  const skipped = jobs.filter((job) => job.status === "skipped");
+  return {
+    total: jobs.length,
+    pendingCount: pending.length,
+    sentOrDoneCount: sentOrDone.length,
+    cancelledCount: cancelled.length,
+    failedCount: failed.length,
+    skippedCount: skipped.length,
+    nextPending: pending.slice(0, 20).map((job) => ({
+      id: job.id,
+      contactId: job.contactId,
+      runAt: job.runAt,
+      status: job.status
+    }))
+  };
+}
+
+async function cancelPendingBackfillInitialJobs() {
+  const pending = (await store.listJobs())
+    .filter((job) => job.status === "pending")
+    .filter((job) => job.type === "initial_sms")
+    .filter((job) => (job.payload?.source || "") === "backfill");
+  const now = new Date().toISOString();
+  for (const job of pending) {
+    await store.updateJob(job.id, {
+      status: "cancelled",
+      cancelReason: "admin cancelled pending NR backfill",
+      finishedAt: now
+    });
+  }
+  return {
+    cancelledCount: pending.length,
+    cancelledJobIds: pending.map((job) => job.id)
+  };
+}
+
 async function rescheduleColdPmJobs() {
   const now = new Date();
   const jobs = (await store.listJobs())
@@ -1394,6 +1439,26 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await readJson(req);
       send(res, 200, { ok: true, ...(await releaseBackfillInitialJobs(payload.limit || 250)) });
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/api/admin/jobs/backfill-status") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      send(res, 200, { ok: true, ...(await backfillInitialJobStatus()) });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/jobs/cancel-backfill") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      send(res, 200, { ok: true, ...(await cancelPendingBackfillInitialJobs()) });
       return;
     }
 
