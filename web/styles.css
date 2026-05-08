@@ -90,6 +90,7 @@ select {
   font-size: 13px;
   line-height: 1.1;
   font-weight: 700;
+  letter-spacing: 0;
 }
 
 .brand span {
@@ -197,6 +198,18 @@ select {
   overflow: hidden;
 }
 
+.page-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px;
+}
+
+.page-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .page-header {
   display: flex;
   align-items: center;
@@ -241,6 +254,58 @@ select {
   overflow: auto;
 }
 
+.dashboard-grid {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.dashboard-grid.two {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metric-card {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.metric-card span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 7px;
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+}
+
+.metric-card small,
+.small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.muted-pad {
+  padding: 16px 18px;
+  margin: 0;
+}
+
 .panel {
   min-height: 0;
   display: flex;
@@ -269,6 +334,443 @@ select {
 .panel-body {
   flex: 1;
   min-height: 0;
+  overflow: auto;
+}
+
+.contact-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.contact-row {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.contact-row:hover,
+.contact-row.active {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+
+.contact-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.contact-title strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.contact-title em {
+  color: var(--text-muted);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.contact-preview {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.inbox-shell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cockpit {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 180px 360px minmax(360px, 1fr) 330px;
+  overflow: hidden;
+}
+
+.queue-rail,
+.thread-list,
+.thread-pane,
+.contact-rail {
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.queue-rail {
+  padding: 10px 8px;
+}
+
+.queue-item {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  text-transform: capitalize;
+}
+
+.queue-item.active {
+  background: var(--accent-soft);
+  border-color: #e8b689;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.thread-pane {
+  background: var(--bg);
+}
+
+.conversation-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+}
+
+.bubble-row {
+  display: flex;
+}
+
+.bubble-row.outbound {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: 76%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.bubble-row.outbound .bubble {
+  border-color: #e8b689;
+  background: var(--accent-soft);
+}
+
+.bubble p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.bubble small {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-faint);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+}
+
+.contact-rail {
+  border-right: 0;
+}
+
+.rail-hero {
+  display: flex;
+  gap: 12px;
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rail-hero h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.rail-hero p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 11px;
+}
+
+.rail-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.rail-section {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rail-section h3 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+dl,
+.summary-list {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 16px 18px;
+}
+
+dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.alert-stack {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.alert {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  font-size: 12px;
+}
+
+.alert.bad {
+  border-color: #e5b7b2;
+  background: #f7e0dd;
+  color: #8f2424;
+}
+
+.alert.info {
+  border-color: #b5c6e1;
+  background: #e2ebf7;
+  color: #214b8e;
+}
+
+.funnel-list {
+  display: grid;
+  padding: 14px 18px;
+}
+
+.funnel-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.kanban-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.table-wrap {
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.chart-box {
+  height: 320px;
+  padding: 18px;
+}
+
+.template-grid {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.template-editor span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 11px;
+}
+
+.template-editor textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.ab-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+  gap: 16px;
+}
+
+.ab-layout .panel:first-child,
+.ab-layout .panel:last-child {
+  grid-column: 1 / -1;
+}
+
+.cell-sub {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+}
+
+.experiment-editor {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.experiment-editor label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.experiment-editor input,
+.experiment-editor textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.experiment-editor textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.login-shell {
+  display: grid;
+  width: 100%;
+  height: 100dvh;
+  place-items: center;
+  background: var(--bg);
+}
+
+.login-card {
+  width: min(420px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.login-card h1 {
+  margin: 4px 0;
+}
+
+.login-card p {
+  color: var(--text-muted);
+}
+
+.login-card input {
+  width: 100%;
+  height: 42px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  margin-bottom: 12px;
 }
 
 .empty-state {

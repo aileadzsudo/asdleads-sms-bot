@@ -61,3 +61,51 @@ export function addContactNote(contactId: string, body: string) {
     body: JSON.stringify({ body })
   });
 }
+
+export function getDashboard() {
+  return request<any>("/api/admin/dashboard");
+}
+
+export function getTemplates() {
+  return request<any>("/api/admin/templates");
+}
+
+export function saveTemplates(overrides: Record<string, Record<string, string>>) {
+  return request<any>("/api/admin/templates/save", {
+    method: "POST",
+    body: JSON.stringify({ overrides })
+  });
+}
+
+export function resetTemplates() {
+  return request<any>("/api/admin/templates/reset", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export function getAbTests() {
+  return request<any>("/api/admin/ab-tests");
+}
+
+export function saveAbTests(experiments: any[]) {
+  return request<any>("/api/admin/ab-tests/save", {
+    method: "POST",
+    body: JSON.stringify({ experiments })
+  });
+}
+
+export function pushAbWinner(experimentId: string, variantId: string) {
+  return request<any>("/api/admin/ab-tests/push-live", {
+    method: "POST",
+    body: JSON.stringify({ experimentId, variantId })
+  });
+}
+
+export function setDashboardPassword(password: string) {
+  sessionStorage.setItem(passwordKey, password);
+}
+
+export function hasDashboardPassword() {
+  return Boolean(sessionStorage.getItem(passwordKey));
+}

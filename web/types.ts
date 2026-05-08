@@ -1,0 +1,87 @@
+export type IssueFlag = {
+  type: "urgent" | "warn" | "info";
+  code: string;
+  label: string;
+};
+
+export type ContactSummary = {
+  id: string;
+  name?: string;
+  phone?: string;
+  leadSource?: string;
+  timezone?: string;
+  engagementStatus?: string;
+  qualificationProgress?: string;
+  currentSequenceName?: string;
+  humanEscalationStatus?: boolean;
+  humanEscalationStage?: string;
+  escalationReason?: string;
+  automationPaused?: boolean;
+  automationPauseReason?: string;
+  lastInboundMessage?: string;
+  lastOutboundMessage?: string;
+  lastActivityAt?: string;
+  pendingJobs?: number;
+  failedJobs?: number;
+  messages?: number;
+  riskScore?: number;
+  issueFlags?: IssueFlag[];
+  ghlContactLink?: string;
+};
+
+export type Message = {
+  id?: string;
+  contactId?: string;
+  direction?: "inbound" | "outbound";
+  body?: string;
+  createdAt?: string;
+  templateGroup?: string;
+  templateKey?: string;
+};
+
+export type Job = {
+  id?: string;
+  contactId?: string;
+  type?: string;
+  status?: string;
+  runAt?: string;
+  finishedAt?: string;
+  error?: string;
+  lastError?: string;
+  skipReason?: string;
+  payload?: Record<string, any>;
+};
+
+export type ContactDetail = {
+  ok: boolean;
+  contact: ContactSummary & Record<string, any>;
+  messages: Message[];
+  jobs: Job[];
+  escalations: any[];
+  issueFlags: IssueFlag[];
+  timeline: any[];
+};
+
+export type DashboardData = {
+  ok: boolean;
+  generatedAt: string;
+  dryRun: boolean;
+  totals: Record<string, number>;
+  dailySummary?: Record<string, any>;
+  speedToLead?: Record<string, any>;
+  alerts?: Record<string, any[]>;
+  breakdowns?: Record<string, Record<string, number>>;
+  funnel?: any[];
+  activityHistory?: any[];
+  hotLeads?: ContactSummary[];
+  escalationSla?: any[];
+  botConfusion?: ContactSummary[];
+  appointmentPipeline?: any[];
+  sourcePerformance?: any[];
+  llmUsage?: Record<string, any>;
+  templatePerformance?: any[];
+  abTesting?: any[];
+  issueContacts?: ContactSummary[];
+  recentContacts?: ContactSummary[];
+  recentMessages?: Message[];
+};

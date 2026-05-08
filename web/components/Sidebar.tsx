@@ -35,7 +35,7 @@ export function Sidebar({ active }: SidebarProps) {
           <Icon d={ICONS.shield} size={15} stroke="#fff" sw={2} />
         </div>
         <div>
-          <strong>Support Desk</strong>
+          <strong>Accident Support Desk</strong>
           <span>Operator console</span>
         </div>
       </div>

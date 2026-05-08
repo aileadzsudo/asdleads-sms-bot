@@ -875,9 +875,13 @@ class SmsBot {
         ...contact,
         humanEscalationStage: "human_working",
         humanAcknowledgedAt: new Date().toISOString(),
-        humanEscalationStatus: true
+        humanEscalationStatus: true,
+        automationPaused: true,
+        automationPauseReason: "human_working",
+        engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN
       });
       await this.cancelHumanEscalationWatchdog(updated.id, "human acknowledged escalation");
+      await this.store.cancelJobsForContact(updated.id, "human acknowledged escalation");
       return updated;
     }
 
@@ -918,6 +922,11 @@ class SmsBot {
         lastInboundMessage: updated.lastInboundMessage
       });
       return updated;
+    }
+
+    if (["schedule_warm_followups", "chase_call_time", "resume_hot_followup"].includes(action)) {
+      await this.scheduleWarmFollowUps(contact, !isWithinTextingWindow(contact, this.config));
+      return this.store.getContact(contact.id);
     }
 
     if (["nq", "not_qualified"].includes(action)) {
@@ -1096,12 +1105,16 @@ class SmsBot {
   async handleCallTime(contact, text) {
     const parsed = parseCallTime(text, contact, this.config);
     if (!parsed) {
-      await this.sendBotMessage(contact, "What time works best for your call today or tomorrow?", { bypassQuietHours: true });
-      return contact;
+      const sent = await this.sendBotMessage(contact, "What time works best for your call today or tomorrow?", { bypassQuietHours: true });
+      const latest = sent || (await this.store.getContact(contact.id)) || contact;
+      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+      return latest;
     }
     if (parsed.type === "needs_specific_time") {
-      await this.sendBotMessage(contact, "What specific time later today works best?", { bypassQuietHours: true });
-      return contact;
+      const sent = await this.sendBotMessage(contact, "What specific time later today works best?", { bypassQuietHours: true });
+      const latest = sent || (await this.store.getContact(contact.id)) || contact;
+      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+      return latest;
     }
     if (parsed.type === "now") {
       const updated = await this.store.upsertContact({

@@ -361,8 +361,11 @@ test("human acknowledgement cancels escalation watchdog jobs", async () => {
   const contact = await bot.applyBotControl({ contactId: "human-ack", action: "human_acknowledged" });
 
   assert.equal(contact.humanEscalationStage, "human_working");
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "human_working");
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
   assert.equal(
-    Object.values(store.data.jobs).some((job) => job.contactId === "human-ack" && job.type === "human_escalation_sla" && job.status === "pending"),
+    Object.values(store.data.jobs).some((job) => job.contactId === "human-ack" && job.status === "pending"),
     false
   );
 });
@@ -633,6 +636,78 @@ test("warm follow-ups aggressively chase before entering re-engagement", async (
     60,
     120,
     240
+  ]);
+});
+
+test("vague call time reply schedules hot lead warm follow-ups", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "later-call",
+    ghlContactId: "later-call",
+    name: "Later Call",
+    phone: "+15550000052",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "no"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "later-call", message: "Later" });
+
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.match(store.getContact("later-call").lastOutboundMessage, /specific time/i);
+  const jobs = Object.values(store.data.jobs)
+    .filter((job) => job.contactId === "later-call" && job.status === "pending")
+    .sort((a, b) => new Date(a.runAt) - new Date(b.runAt));
+  assert.deepEqual(jobs.map((job) => job.type), [
+    "warm_followup",
+    "warm_followup",
+    "warm_followup",
+    "warm_followup",
+    "warm_followup",
+    "warm_followup",
+    "enter_reengagement"
+  ]);
+  assert.deepEqual(jobs.filter((job) => job.type === "warm_followup").map((job) => job.payload.minutes), [
+    5,
+    15,
+    30,
+    60,
+    120,
+    240
+  ]);
+});
+
+test("admin can restart hot call-time chase without sending a duplicate question", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "stuck-call-time",
+    ghlContactId: "stuck-call-time",
+    name: "Stuck Call Time",
+    phone: "+15550000053",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes",
+    lastOutboundMessage: "What specific time later today works best?"
+  });
+
+  const contact = await bot.applyBotControl({ contactId: "stuck-call-time", action: "chase_call_time" });
+
+  assert.equal(contact.lastOutboundMessage, "What specific time later today works best?");
+  const jobs = Object.values(store.data.jobs)
+    .filter((job) => job.contactId === "stuck-call-time" && job.status === "pending")
+    .sort((a, b) => new Date(a.runAt) - new Date(b.runAt));
+  assert.deepEqual(jobs.map((job) => job.type), [
+    "warm_followup",
+    "warm_followup",
+    "warm_followup",
+    "warm_followup",
+    "warm_followup",
+    "warm_followup",
+    "enter_reengagement"
   ]);
 });
 
