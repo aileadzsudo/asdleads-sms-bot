@@ -978,6 +978,26 @@ async function advancePendingJobs(steps = 1) {
   return results;
 }
 
+async function releaseBackfillInitialJobs(limit = 250) {
+  const now = new Date().toISOString();
+  const pending = (await store.listJobs())
+    .filter((job) => job.status === "pending")
+    .filter((job) => job.type === "initial_sms")
+    .filter((job) => (job.payload?.source || "") === "backfill")
+    .sort((a, b) => new Date(a.runAt || 0) - new Date(b.runAt || 0))
+    .slice(0, Math.max(1, Math.min(Number(limit || 250), BACKFILL_MAX_BATCH)));
+
+  for (const job of pending) {
+    await store.updateJob(job.id, { runAt: now, releasedAt: now });
+  }
+
+  return {
+    releasedCount: pending.length,
+    releasedJobIds: pending.map((job) => job.id),
+    results: pending.length ? await runDueJobs() : []
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/health") {
@@ -1166,6 +1186,17 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && req.url === "/api/admin/jobs/release-backfill") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      send(res, 200, { ok: true, ...(await releaseBackfillInitialJobs(payload.limit || 250)) });
+      return;
+    }
+
     if (req.method === "GET" && req.url.startsWith("/api/test/state")) {
       const url = new URL(req.url, `http://${req.headers.host}`);
       const contactId = url.searchParams.get("contactId");
@@ -1210,7 +1241,13 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJson(req);
       const tag = payload.tag || "NR";
       const maxContacts = Math.max(1, Math.min(Number(payload.maxContacts || 25), BACKFILL_MAX_BATCH));
-      const spacingMinutes = Math.max(1, Math.min(Number(payload.spacingMinutes || BACKFILL_DEFAULT_SPACING_MINUTES), 60));
+      const spacingMinutes = Math.max(
+        0,
+        Math.min(
+          payload.spacingMinutes === undefined ? BACKFILL_DEFAULT_SPACING_MINUTES : Number(payload.spacingMinutes),
+          60
+        )
+      );
       const previewOnly = Boolean(payload.previewOnly);
       const candidates = await loadBackfillCandidates({ ...payload, limit: Math.max(Number(payload.limit || maxContacts), maxContacts) });
       const summary = summarizeBackfillCandidates(candidates, tag);
