@@ -69,10 +69,8 @@ const humanReturnTemplates = {
 };
 
 const freshLeadFollowUpTemplates = {
-  1: "Hey [NAME], just checking back quickly 🙌 I still have your accident info open and wanted to make sure you do not miss out. Do you remember the date of the accident?",
-  2: "[NAME], William here again 👋 I only need a couple quick details to see if we can help. What was the date of the accident?",
-  3: "Quick follow-up, [NAME] 💰 cases like this can move fast, and waiting too long can hurt your options. What was the date of the accident?",
-  4: "Last quick check for now, [NAME] 🙏 if you still want help with the accident, reply with the date it happened and I can take it from there."
+  1: "Hey [NAME] 👋 just following up on my last message. I still have your accident info open and only need the date of the accident to see where you stand.",
+  2: "[NAME], William here again 🙌 I do not want you to miss out on help you may qualify for. What was the date of the accident?"
 };
 
 const reengagementTemplates = {

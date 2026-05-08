@@ -1715,7 +1715,7 @@ test("fresh no-response enrollment schedules aggressive same-day follow-ups", as
 
   assert.equal(freshJobs.length > 0, true);
   assert.deepEqual(
-    freshJobs.map((job) => job.payload.minutes).filter((minutes) => [15, 60, 120, 240].includes(minutes)),
+    freshJobs.map((job) => job.payload.minutes).filter((minutes) => [15, 60].includes(minutes)),
     freshJobs.map((job) => job.payload.minutes)
   );
 });
