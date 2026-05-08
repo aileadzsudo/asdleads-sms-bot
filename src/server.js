@@ -30,6 +30,10 @@ const JOB_RETRY_MINUTES = [5, 15, 60];
 const BACKFILL_DEFAULT_SPACING_MINUTES = 3;
 const BACKFILL_MAX_BATCH = 250;
 
+function isPermanentSmsBlock(error) {
+  return /DND is active for SMS|do not disturb|opted out|unsubscribed/i.test(error?.message || "");
+}
+
 async function notifyBotError(title, details = {}) {
   try {
     await slack.sendBotError(config, title, details);
@@ -933,6 +937,23 @@ async function runDueJobs() {
       await bot.runDueJob(job);
       results.push({ id: job.id, type: job.type, ok: true });
     } catch (error) {
+      if (isPermanentSmsBlock(error)) {
+        await store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          error: error.message,
+          skipReason: "permanent_sms_block"
+        });
+        await notifyBotError("SMS send skipped by GHL", {
+          "Job ID": job.id,
+          Type: job.type,
+          "Contact ID": job.contactId,
+          Reason: "GHL says SMS is blocked for this contact",
+          Error: error.message
+        });
+        results.push({ id: job.id, type: job.type, ok: false, skipped: true, error: error.message });
+        continue;
+      }
       const attempts = Number(job.attempts || 0) + 1;
       const retryDelay = JOB_RETRY_MINUTES[attempts - 1];
       if (retryDelay) {
