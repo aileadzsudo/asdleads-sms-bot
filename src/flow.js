@@ -678,8 +678,12 @@ class SmsBot {
 
   async refreshTimezoneFromContact(contact, source = "timezone_refresh") {
     const correctedTimezone = resolveContactTimezone(contact, this.config);
-    if (!correctedTimezone || correctedTimezone === contact.timezone) return contact;
-    const oldTimezone = contact.timezone || this.config.texting.defaultTimezone;
+    if (!correctedTimezone) return contact;
+    const displayedTimezone = timezoneFromText(contact.preferredCallTime || "");
+    const needsAppointmentRetime =
+      contact.preferredCallTimeIso && displayedTimezone && displayedTimezone !== correctedTimezone;
+    if (correctedTimezone === contact.timezone && !needsAppointmentRetime) return contact;
+    const oldTimezone = displayedTimezone || contact.timezone || this.config.texting.defaultTimezone;
     let patch = {
       ...contact,
       timezone: correctedTimezone,

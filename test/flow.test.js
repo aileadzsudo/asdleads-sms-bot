@@ -495,7 +495,7 @@ test("admin timezone refresh uses firm tag and preserves booked wall-clock time"
     name: "Admin Timezone",
     phone: "+15550000080",
     tags: ["lhpark_ca", "nr"],
-    timezone: "America/New_York",
+    timezone: "America/Los_Angeles",
     engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
     qualificationProgress: QUALIFICATION.CALL_BOOKED,
     preferredCallTime: "Sat, May 9, 2:00 PM EST",
