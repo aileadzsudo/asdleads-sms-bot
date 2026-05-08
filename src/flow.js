@@ -317,6 +317,35 @@ function anchorBackupTimeToPrimaryDate(parsed, contact, config) {
   };
 }
 
+function isPermanentSmsBlockError(error) {
+  return /DND is active for SMS|do not disturb|opted out|unsubscribed/i.test(error?.message || "");
+}
+
+function formatTimeOnly(date, contact, config) {
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone
+  }).format(date);
+}
+
+function roundToQuarterHour(date) {
+  const rounded = new Date(date);
+  const minutes = rounded.getMinutes();
+  const remainder = minutes % 15;
+  if (remainder >= 8) rounded.setMinutes(minutes + (15 - remainder), 0, 0);
+  else rounded.setMinutes(minutes - remainder, 0, 0);
+  return rounded;
+}
+
+function relativeTimeClarification(parsed, contact, config) {
+  if (!parsed.relativeTarget) return "";
+  const first = roundToQuarterHour(new Date(parsed.relativeTarget));
+  const second = addMinutes(first, 15);
+  return `Just to confirm, do you mean around ${formatTimeOnly(first, contact, config)} or ${formatTimeOnly(second, contact, config)}? Reply with the exact time that works best.`;
+}
+
 class SmsBot {
   constructor(store, config) {
     this.store = store;
@@ -374,6 +403,15 @@ class SmsBot {
     try {
       await ghl.sendSms(this.config, contact, message);
     } catch (error) {
+      if (isPermanentSmsBlockError(error)) {
+        await this.store.upsertContact({
+          ...contact,
+          lastSmsBlockedAt: new Date().toISOString(),
+          lastSmsBlockedReason: error.message
+        });
+        if (options.allowAfterOptOut || contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) return null;
+        throw error;
+      }
       await this.notifyBotError("GHL SMS send failed", {
         Name: contact.name || "unknown",
         Phone: contact.phone || "unknown",
@@ -1201,7 +1239,7 @@ class SmsBot {
     if (parsed.type === "needs_specific_time") {
       contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true });
       const normalizedText = normalize(text);
-      let question = "What specific time works best for your call today or tomorrow?";
+      let question = relativeTimeClarification(parsed, contact, this.config) || "What specific time works best for your call today or tomorrow?";
       if (/\btomorrow\b/.test(normalizedText)) question = "What specific time tomorrow works best?";
       if (/\b(today|later today|tonight)\b/.test(normalizedText)) question = "What specific time later today works best?";
       const sent = await this.sendBotMessage(contact, question, { bypassQuietHours: true });
@@ -1434,22 +1472,23 @@ class SmsBot {
     const fiveMinutes = addMinutes(appointment, -5);
     if (!sameDay) {
       const appointmentLocal = getLocalParts(appointment, timeZone);
-      const eveningBefore = localDateToUtc(
+      const morningReminderHour = appointmentLocal.hour <= 10 ? 8 : 9;
+      const morningReminder = localDateToUtc(
         {
           year: appointmentLocal.year,
           month: appointmentLocal.month,
-          day: appointmentLocal.day - 1,
-          hour: 19,
-          minute: 30
+          day: appointmentLocal.day,
+          hour: morningReminderHour,
+          minute: 0
         },
         timeZone
       );
-      if (eveningBefore > now) {
+      if (morningReminder > now && morningReminder < appointment) {
         await this.store.addJob({
           type: "appointment_reminder",
           contactId: contact.id,
-          runAt: eveningBefore.toISOString(),
-          payload: { templateKey: "nextDayEvening" }
+          runAt: morningReminder.toISOString(),
+          payload: { templateKey: "nextDayMorning" }
         });
       }
     }

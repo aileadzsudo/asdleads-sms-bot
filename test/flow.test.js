@@ -8,6 +8,7 @@ const { SmsBot, normalizePayload, callAskTemplateForTime } = require("../src/flo
 const { ENGAGEMENT, QUALIFICATION } = require("../src/constants");
 const { hasNoResponseTag, isNoResponseDisposition, isNoResponseSignal } = require("../src/disposition");
 const { render } = require("../src/templates");
+const { getLocalParts, localDateToUtc } = require("../src/time");
 const ghl = require("../src/adapters/ghl");
 
 function testConfig(dataFile) {
@@ -51,6 +52,31 @@ test("opt-out marks contact, cancels jobs, and sends one confirmation", async ()
   assert.equal(contact.optOutStatus, true);
   assert.equal(Object.values(store.data.jobs).every((job) => job.status === "cancelled"), true);
   assert.match(store.getContact("c1").lastOutboundMessage, /won't text you again/i);
+});
+
+test("GHL unsubscribe block during opt-out confirmation is not treated as a bot error", async () => {
+  const { bot, store } = makeBot();
+  const originalSendSms = ghl.sendSms;
+  ghl.sendSms = async () => {
+    throw new Error('GHL /conversations/messages failed: 400 {"message":"Cannot send message as +15550000000 has unsubscribed"}');
+  };
+  try {
+    store.upsertContact({
+      id: "stop-block",
+      ghlContactId: "stop-block",
+      name: "Stop Block",
+      phone: "+15550000000",
+      engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+      qualificationProgress: QUALIFICATION.NEEDS_FAULT
+    });
+
+    const contact = await bot.handleInboundSms({ contactId: "stop-block", message: "STOP" });
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.OPTED_OUT);
+    assert.equal(store.getContact("stop-block").lastSmsBlockedReason.includes("unsubscribed"), true);
+  } finally {
+    ghl.sendSms = originalSendSms;
+  }
 });
 
 test("template name personalization uses first name only", () => {
@@ -205,6 +231,64 @@ test("backup timeout confirms appointment while acknowledging no backup response
   assert.equal(store.getContact("backup-timeout-copy").awaitingBackupTime, false);
   assert.match(store.getContact("backup-timeout-copy").lastOutboundMessage, /did not get a backup time/i);
   assert.match(store.getContact("backup-timeout-copy").lastOutboundMessage, /reschedule/i);
+});
+
+test("appointment reminders use cadence based on time until appointment", async () => {
+  const { bot, store } = makeBot();
+  const soon = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "reminder-soon",
+    ghlContactId: "reminder-soon",
+    name: "Soon",
+    phone: "+15550000061",
+    timezone: "America/Chicago",
+    preferredCallTimeIso: soon
+  });
+  await bot.scheduleAppointmentReminders(store.getContact("reminder-soon"));
+  assert.deepEqual(
+    Object.values(store.data.jobs)
+      .filter((job) => job.contactId === "reminder-soon" && job.type === "appointment_reminder")
+      .map((job) => job.payload.templateKey),
+    ["sameDayFiveMinutes"]
+  );
+
+  const later = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "reminder-later",
+    ghlContactId: "reminder-later",
+    name: "Later",
+    phone: "+15550000062",
+    timezone: "America/Chicago",
+    preferredCallTimeIso: later
+  });
+  await bot.scheduleAppointmentReminders(store.getContact("reminder-later"));
+  assert.deepEqual(
+    Object.values(store.data.jobs)
+      .filter((job) => job.contactId === "reminder-later" && job.type === "appointment_reminder")
+      .map((job) => job.payload.templateKey),
+    ["sameDayOneHour", "sameDayFiveMinutes"]
+  );
+
+  const localNow = getLocalParts(new Date(), "America/Chicago");
+  const tomorrow = localDateToUtc(
+    { year: localNow.year, month: localNow.month, day: localNow.day + 1, hour: 15, minute: 0 },
+    "America/Chicago"
+  ).toISOString();
+  store.upsertContact({
+    id: "reminder-tomorrow",
+    ghlContactId: "reminder-tomorrow",
+    name: "Tomorrow",
+    phone: "+15550000063",
+    timezone: "America/Chicago",
+    preferredCallTimeIso: tomorrow
+  });
+  await bot.scheduleAppointmentReminders(store.getContact("reminder-tomorrow"));
+  assert.deepEqual(
+    Object.values(store.data.jobs)
+      .filter((job) => job.contactId === "reminder-tomorrow" && job.type === "appointment_reminder")
+      .map((job) => job.payload.templateKey),
+    ["nextDayMorning", "nextDayOneHour", "nextDayFiveMinutes"]
+  );
 });
 
 test("scheduled call can be rescheduled and old reminders are replaced", async () => {
@@ -872,6 +956,32 @@ test("early call time before qualification moves into scheduling without LLM", a
   assert.equal(contact.awaitingSpecificCallTime, true);
   assert.equal(contact.earlyCallTimeBeforeQualification, true);
   assert.match(contact.lastOutboundMessage, /specific time tomorrow/i);
+});
+
+test("relative call time asks for exact time options instead of booking", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "relative-call-time",
+    ghlContactId: "relative-call-time",
+    name: "Relative Time",
+    phone: "+15550000060",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "relative-call-time",
+    message: "Ok I will get with you in a hour"
+  });
+
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.equal(contact.appointmentId, undefined);
+  assert.match(contact.lastOutboundMessage, /do you mean around/i);
+  assert.match(contact.lastOutboundMessage, /exact time/i);
 });
 
 test("off-flow call-time replies escalate when they do not answer scheduling", async () => {

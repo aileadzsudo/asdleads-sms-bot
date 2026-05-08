@@ -223,10 +223,17 @@ function parseCallTime(text, contact, config, now = new Date()) {
     const startsAt = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, hour: 12, minute: 0 }, timeZone);
     return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: 0.85 };
   }
+  const relativeHours = t.match(/\b(?:in\s*|within\s*|about\s*|around\s*)?(a|an|one|\d{1,2})\s*(?:hr|hrs|hour|hours)\b/);
+  if (relativeHours) {
+    const rawAmount = relativeHours[1];
+    const amount = rawAmount === "a" || rawAmount === "an" || rawAmount === "one" ? 1 : Number(rawAmount);
+    const target = new Date(now.getTime() + amount * 60 * 60 * 1000);
+    return { type: "needs_specific_time", confidence: 0.84, relativeTarget: target.toISOString() };
+  }
   const relativeMinutes = t.match(/\b(?:in\s*)?(\d{1,3})\s*(?:min|mins|minute|minutes)\b/);
   if (relativeMinutes) {
     const startsAt = new Date(now.getTime() + Number(relativeMinutes[1]) * 60 * 1000);
-    return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: 0.85 };
+    return { type: "needs_specific_time", confidence: 0.84, relativeTarget: startsAt.toISOString() };
   }
   const match = t.match(/\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
   if (!match) return null;

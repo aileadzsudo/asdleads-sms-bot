@@ -46,7 +46,12 @@ test("parses call now and simple scheduled time", () => {
     parseCallTime("tomorrow is better late afternoon", contact, config, new Date("2026-05-07T15:00:00Z")).type,
     "needs_specific_time"
   );
-  assert.equal(parseCallTime("in 20 minutes", contact, config, new Date("2026-05-07T15:00:00Z")).type, "scheduled");
+  const relative = parseCallTime("in 20 minutes", contact, config, new Date("2026-05-07T15:00:00Z"));
+  assert.equal(relative.type, "needs_specific_time");
+  assert.equal(relative.relativeTarget, "2026-05-07T15:20:00.000Z");
+  const relativeHour = parseCallTime("in an hour", contact, config, new Date("2026-05-07T17:16:00Z"));
+  assert.equal(relativeHour.type, "needs_specific_time");
+  assert.equal(relativeHour.relativeTarget, "2026-05-07T18:16:00.000Z");
   const parsed = parseCallTime("tomorrow at 3pm", contact, config, new Date("2026-05-07T15:00:00Z"));
   assert.equal(parsed.type, "scheduled");
   assert.ok(parsed.startsAt);

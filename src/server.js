@@ -2022,6 +2022,10 @@ const server = http.createServer(async (req, res) => {
 
     send(res, 404, { ok: false, error: "not found" });
   } catch (error) {
+    if (isPermanentSmsBlock(error)) {
+      send(res, 202, { ok: true, skipped: true, reason: "permanent_sms_block", error: error.message });
+      return;
+    }
     if (req.method !== "GET" || !["/health", "/tester.css", "/training-status.css", "/integrations.css", "/backfill.css", "/dashboard.css"].includes(req.url)) {
       await notifyBotError("HTTP request failed", {
         Method: req.method,
