@@ -280,6 +280,14 @@ function humanContextResponse(contact, intent, config) {
   return "";
 }
 
+function looksLikeCallScheduling(text) {
+  const t = normalize(text);
+  return (
+    /\b(call|talk|speak|schedule|appointment|specialist|available|free|later|tomorrow|today|tonight|morning|afternoon|evening|noon)\b/.test(t) ||
+    /\b\d{1,2}(?::\d{2})?\s*(am|pm)\b/.test(t)
+  );
+}
+
 function hasExplicitCallDate(text) {
   const t = normalize(text);
   return /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|next month)\b/.test(t) ||
@@ -841,6 +849,15 @@ class SmsBot {
     }
     if (contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME) {
       return this.handleCallTime(contact, inbound.lastInboundMessage);
+    }
+
+    if (looksLikeCallScheduling(inbound.lastInboundMessage) && parseCallTime(inbound.lastInboundMessage, contact, this.config)) {
+      const schedulingContact = await this.store.upsertContact({
+        ...contact,
+        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+        earlyCallTimeBeforeQualification: true
+      });
+      return this.handleCallTime(schedulingContact, inbound.lastInboundMessage);
     }
 
     const answer = parseExpectedAnswer(contact.qualificationProgress, inbound.lastInboundMessage);

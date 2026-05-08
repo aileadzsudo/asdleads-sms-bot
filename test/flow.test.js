@@ -850,6 +850,30 @@ test("vague tomorrow daypart asks for exact time instead of booking", async () =
   assert.match(store.getContact("tomorrow-afternoon").lastOutboundMessage, /specific time tomorrow/i);
 });
 
+test("early call time before qualification moves into scheduling without LLM", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "early-call-time",
+    ghlContactId: "early-call-time",
+    name: "Early Time",
+    phone: "+15550000059",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "early-call-time",
+    message: "tomorrow late afternoon"
+  });
+
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.equal(contact.earlyCallTimeBeforeQualification, true);
+  assert.match(contact.lastOutboundMessage, /specific time tomorrow/i);
+});
+
 test("off-flow call-time replies escalate when they do not answer scheduling", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
