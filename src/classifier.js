@@ -179,11 +179,11 @@ function classifyHumanContextIntent(text, progress) {
 
 function isCallNow(text) {
   const t = normalize(text);
-  return /\b(call me now|call now|right now|now is fine|now is good|available now|i'm available now|im available now|i can talk now|asap|anytime|any time)\b/.test(t);
+  return /\b(call me now|call now|right now|now is fine|now is good|available now|i'm available now|im available now|i can talk now|asap)\b/.test(t);
 }
 
 function parseCallTime(text, contact, config, now = new Date()) {
-  const t = normalize(text);
+  const t = normalize(text).replace(/(\d)\s*([ap])\s*\.?\s*m\.?/g, "$1$2m");
   if (isCallNow(t)) return { type: "now", confidence: 0.95 };
   const timeZone = contact.timezone || config.texting.defaultTimezone;
   const local = getLocalParts(now, timeZone);
@@ -223,6 +223,36 @@ function parseCallTime(text, contact, config, now = new Date()) {
     const startsAt = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, hour: 12, minute: 0 }, timeZone);
     return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: 0.85 };
   }
+  const colonTime = t.match(/\b(?:at|after|around|about)?\s*(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
+  const simpleTime = t.match(
+    /\b(?:at|after|around|about)?\s*(\d{1,2})\s*(am|pm)?\b(?!\s*:)(?!\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b)/
+  );
+  const match = colonTime || simpleTime;
+  if (match) {
+    let hour = Number(match[1]);
+    const minute = Number(match[2] && /^\d{2}$/.test(match[2]) ? match[2] : 0);
+    const meridiem = colonTime ? match[3] : match[2];
+    if (meridiem === "pm" && hour < 12) hour += 12;
+    if (meridiem === "am" && hour === 12) hour = 0;
+    if (!meridiem && hour >= 1 && hour <= 7) hour += 12;
+    const startsAt = localDateToUtc(
+      { year: local.year, month: local.month, day: local.day + dayOffset, hour, minute },
+      timeZone
+    );
+    if (startsAt <= now) {
+      if (explicitToday) return { type: "needs_specific_time", confidence: 0.72 };
+      const futureOffset = weekdayMatch ? dayOffset + 7 : dayOffset + 1;
+      const futureStartsAt = localDateToUtc(
+        { year: local.year, month: local.month, day: local.day + futureOffset, hour, minute },
+        timeZone
+      );
+      return { type: "scheduled", startsAt: futureStartsAt.toISOString(), confidence: meridiem ? 0.88 : 0.68 };
+    }
+    return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: meridiem ? 0.9 : 0.7 };
+  }
+  if (/\b(anytime|any time)\b/.test(t)) {
+    return { type: "needs_specific_time", confidence: 0.78 };
+  }
   const relativeHours = t.match(/\b(?:in\s*|within\s*|about\s*|around\s*)?(a|an|one|\d{1,2})\s*(?:hr|hrs|hour|hours)\b/);
   if (relativeHours) {
     const rawAmount = relativeHours[1];
@@ -235,28 +265,7 @@ function parseCallTime(text, contact, config, now = new Date()) {
     const startsAt = new Date(now.getTime() + Number(relativeMinutes[1]) * 60 * 1000);
     return { type: "needs_specific_time", confidence: 0.84, relativeTarget: startsAt.toISOString() };
   }
-  const match = t.match(/\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
-  if (!match) return null;
-  let hour = Number(match[1]);
-  const minute = Number(match[2] || 0);
-  const meridiem = match[3];
-  if (meridiem === "pm" && hour < 12) hour += 12;
-  if (meridiem === "am" && hour === 12) hour = 0;
-  if (!meridiem && hour >= 1 && hour <= 7) hour += 12;
-  const startsAt = localDateToUtc(
-    { year: local.year, month: local.month, day: local.day + dayOffset, hour, minute },
-    timeZone
-  );
-  if (startsAt <= now) {
-    if (explicitToday) return { type: "needs_specific_time", confidence: 0.72 };
-    const futureOffset = weekdayMatch ? dayOffset + 7 : dayOffset + 1;
-    const futureStartsAt = localDateToUtc(
-      { year: local.year, month: local.month, day: local.day + futureOffset, hour, minute },
-      timeZone
-    );
-    return { type: "scheduled", startsAt: futureStartsAt.toISOString(), confidence: meridiem ? 0.88 : 0.68 };
-  }
-  return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: meridiem ? 0.9 : 0.7 };
+  return null;
 }
 
 function parseExpectedAnswer(progress, text) {

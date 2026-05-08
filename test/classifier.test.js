@@ -43,7 +43,7 @@ test("extracts accident date without needing AI", () => {
 test("parses call now and simple scheduled time", () => {
   assert.equal(parseCallTime("call me now", contact, config).type, "now");
   assert.equal(parseCallTime("I can talk now", contact, config).type, "now");
-  assert.equal(parseCallTime("anytime", contact, config).type, "now");
+  assert.equal(parseCallTime("anytime", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("can you call back later?", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("tomorrow morning", contact, config, new Date("2026-05-07T15:00:00Z")).type, "needs_specific_time");
   assert.equal(
@@ -59,6 +59,26 @@ test("parses call now and simple scheduled time", () => {
   const parsed = parseCallTime("tomorrow at 3pm", contact, config, new Date("2026-05-07T15:00:00Z"));
   assert.equal(parsed.type, "scheduled");
   assert.ok(parsed.startsAt);
+});
+
+test("future availability phrasing wins over call-now words", () => {
+  const pacificContact = { timezone: "America/Los_Angeles" };
+  const pacificConfig = { texting: { defaultTimezone: "America/Chicago" } };
+  const parsed = parseCallTime(
+    "yes I will be available anytime after 2:30p.m. - in about 40 minutes",
+    pacificContact,
+    pacificConfig,
+    new Date("2026-05-08T20:51:32.000Z")
+  );
+
+  assert.equal(parsed.type, "scheduled");
+  assert.equal(parsed.startsAt, "2026-05-08T21:30:00.000Z");
+});
+
+test("p.m. and a.m. punctuation is parsed as normal meridiem", () => {
+  const parsed = parseCallTime("I can do 4:15 p.m.", contact, config, new Date("2026-05-08T18:00:00Z"));
+  assert.equal(parsed.type, "scheduled");
+  assert.equal(parsed.startsAt, "2026-05-08T21:15:00.000Z");
 });
 
 test("parses weekday call times into the upcoming weekday", () => {

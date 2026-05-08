@@ -1831,7 +1831,7 @@ test("medical answer reuses recent call time given before scheduling step", asyn
   store.addMessage({
     contactId: "reuse-call-time",
     direction: "inbound",
-    body: "2"
+    body: "tomorrow at 2"
   });
 
   const contact = await bot.handleInboundSms({ contactId: "reuse-call-time", message: "No" });
@@ -1840,7 +1840,7 @@ test("medical answer reuses recent call time given before scheduling step", asyn
   assert.equal(store.getContact("reuse-call-time").medicalTreatmentAnswer, "no");
   assert.equal(store.getContact("reuse-call-time").qualificationProgress, QUALIFICATION.CALL_BOOKED);
   assert.ok(store.getContact("reuse-call-time").preferredCallTimeIso);
-  assert.equal(store.getContact("reuse-call-time").recoveredCallTimeMessage, "2");
+  assert.equal(store.getContact("reuse-call-time").recoveredCallTimeMessage, "tomorrow at 2");
   assert.match(store.getContact("reuse-call-time").lastOutboundMessage, /backup time/i);
   assert.equal(
     Object.values(store.data.jobs).some((job) => job.contactId === "reuse-call-time" && job.type === "appointment_reminder" && job.status === "pending"),
