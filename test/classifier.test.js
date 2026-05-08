@@ -23,6 +23,10 @@ test("detects natural opt-out language", () => {
 
 test("parses only the answer expected by current qualification progress", () => {
   assert.equal(parseExpectedAnswer(QUALIFICATION.NEEDS_FAULT, "the other driver was at fault").value, "not_at_fault");
+  assert.equal(
+    parseExpectedAnswer(QUALIFICATION.NEEDS_FAULT, "Yes it was yesterday and the driver hit my front fender").value,
+    "not_at_fault"
+  );
   assert.equal(parseExpectedAnswer(QUALIFICATION.NEEDS_MEDICAL, "I went to urgent care").value, "yes");
   assert.equal(parseExpectedAnswer(QUALIFICATION.NEEDS_FAULT, "who is this"), null);
 });

@@ -1263,7 +1263,12 @@ class SmsBot {
       await this.sendBotMessage(updated, qualificationTemplates.existingRepresentation, { bypassQuietHours: true });
       return this.store.getContact(updated.id);
     }
-    if (looksPostSignedOrFirmIssue(inbound.lastInboundMessage)) {
+    let dateAnswer = parseAccidentDate(inbound.lastInboundMessage);
+    if (dateAnswer && !contact.accidentDate) {
+      contact = await this.store.upsertContact({ ...contact, accidentDate: dateAnswer.value });
+    }
+    const answeredColdDateQuestion = Boolean(dateAnswer && canTreatDateAsColdOutreachAnswer(contact));
+    if (!answeredColdDateQuestion && looksPostSignedOrFirmIssue(inbound.lastInboundMessage)) {
       return this.escalate(contact, "post_intake_or_firm_issue");
     }
 
@@ -1345,13 +1350,13 @@ class SmsBot {
       return this.handleCallTime(contact, inbound.lastInboundMessage);
     }
 
-    const dateAnswer = parseAccidentDate(inbound.lastInboundMessage);
+    dateAnswer = dateAnswer || parseAccidentDate(inbound.lastInboundMessage);
     if (dateAnswer && !contact.accidentDate) {
       contact = await this.store.upsertContact({ ...contact, accidentDate: dateAnswer.value });
     }
 
     const reason = escalationReason(inbound.lastInboundMessage);
-    if (reason) {
+    if (reason && !(dateAnswer && canTreatDateAsColdOutreachAnswer(contact))) {
       await this.escalate(contact, reason);
       return contact;
     }
@@ -1477,6 +1482,17 @@ class SmsBot {
         engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
         qualificationProgress: contact.qualificationProgress || QUALIFICATION.NEEDS_FAULT
       });
+      if (updated.lastInboundMessage && updated.qualificationProgress === QUALIFICATION.NEEDS_FAULT) {
+        let resumeContact = updated;
+        const dateAnswer = parseAccidentDate(updated.lastInboundMessage);
+        if (dateAnswer && !resumeContact.accidentDate) {
+          resumeContact = await this.store.upsertContact({ ...resumeContact, accidentDate: dateAnswer.value });
+        }
+        const answer = parseExpectedAnswer(resumeContact.qualificationProgress, resumeContact.lastInboundMessage);
+        if (answer) {
+          return this.advanceQualification(resumeContact, answer);
+        }
+      }
       const template = currentQuestionTemplate(updated, this.config);
       if (template) {
         const sent = await this.sendBotMessage(updated, render(template, updated), { bypassQuietHours: true });

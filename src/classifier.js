@@ -118,7 +118,7 @@ function parseFaultAnswer(text) {
     return { value: "unsure_or_partial", confidence: 0.85 };
   }
   if (
-    /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|no|not me|they hit me|rear ended me|rear-ended me|i got hit|hit me|parked)\b/.test(
+    /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|no|not me|they hit me|driver hit me|driver hit my|driver hit|hit my car|hit my vehicle|hit my front|hit my fender|kept going|rear ended me|rear-ended me|i got hit|hit me|parked)\b/.test(
       t
     )
   ) {

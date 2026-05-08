@@ -1002,6 +1002,30 @@ test("return to bot can be triggered from a GHL tag", async () => {
   assert.match(store.getContact("return-tag").lastOutboundMessage, /Specialist/i);
 });
 
+test("return to bot uses last inbound answer instead of repeating the same question", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "return-smart",
+    ghlContactId: "return-smart",
+    name: "Pedro",
+    phone: "+15550000075",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "post_intake_or_firm_issue",
+    lastInboundMessage: "Yes it was yesterday may 7 2026 the driver hit my front fender and just kept going I filled a police report as well"
+  });
+
+  const contact = await bot.applyBotControl({ contactId: "return-smart", action: "return_to_bot" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("return-smart").accidentDate, "may 7 2026");
+  assert.equal(store.getContact("return-smart").faultAnswer, "not_at_fault");
+  assert.equal(store.getContact("return-smart").humanEscalationStatus, false);
+  assert.match(store.getContact("return-smart").lastOutboundMessage, /medical treatment/i);
+});
+
 test("NQ tag pauses automation without lead escalation", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -1153,6 +1177,27 @@ test("natural accident date sentence is accepted and advances to fault question"
   assert.equal(store.getContact("c6b").qualificationProgress, QUALIFICATION.NEEDS_FAULT);
   assert.equal(store.getContact("c6b").humanEscalationStatus, false);
   assert.match(store.getContact("c6b").lastOutboundMessage, /were you at fault/i);
+});
+
+test("accident date reply with police report detail still advances instead of escalating", async () => {
+  const { bot, store } = makeBot();
+  await bot.startFromNoResponseDisposition({
+    contactId: "c6c",
+    name: "Pedro",
+    phone: "+15550000074",
+    timezone: "America/Los_Angeles"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "c6c",
+    message: "Yes it was yesterday may 7 2026 the driver hit my front fender and just kept going I filled a police report as well"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("c6c").accidentDate, "may 7 2026");
+  assert.equal(store.getContact("c6c").faultAnswer, "not_at_fault");
+  assert.equal(store.getContact("c6c").humanEscalationStatus, false);
+  assert.match(store.getContact("c6c").lastOutboundMessage, /medical treatment/i);
 });
 
 test("repeated date replies do not escalate while fault is still needed", async () => {
