@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const path = require("node:path");
 
 function emptyStore() {
   return { contacts: {}, jobs: {}, messages: [], escalations: [], webhookEvents: {}, settings: {} };
@@ -36,6 +37,7 @@ class Store {
   }
 
   save() {
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
   }
 
