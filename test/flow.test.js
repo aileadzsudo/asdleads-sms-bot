@@ -326,6 +326,23 @@ test("appointment reminders use cadence based on time until appointment", async 
     ["sameDayOneHour", "sameDayFiveMinutes"]
   );
 
+  const nearOneHour = new Date(Date.now() + 70 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "reminder-near-one-hour",
+    ghlContactId: "reminder-near-one-hour",
+    name: "Near",
+    phone: "+15550000079",
+    timezone: "America/Chicago",
+    preferredCallTimeIso: nearOneHour
+  });
+  await bot.scheduleAppointmentReminders(store.getContact("reminder-near-one-hour"));
+  assert.deepEqual(
+    Object.values(store.data.jobs)
+      .filter((job) => job.contactId === "reminder-near-one-hour" && job.type === "appointment_reminder")
+      .map((job) => job.payload.templateKey),
+    ["sameDayFiveMinutes"]
+  );
+
   const localNow = getLocalParts(new Date(), "America/Chicago");
   const tomorrow = localDateToUtc(
     { year: localNow.year, month: localNow.month, day: localNow.day + 1, hour: 15, minute: 0 },
@@ -400,6 +417,44 @@ test("scheduled call time reply without reschedule keyword still updates appoint
 
   assert.equal(store.getContact("reschedule-2").humanEscalationStatus, undefined);
   assert.match(store.getContact("reschedule-2").preferredCallTime, /5:00 PM/);
+});
+
+test("state correction after booking keeps the wall-clock appointment time in the corrected timezone", async () => {
+  const { bot, store } = makeBot();
+  const originalUpdateAppointment = ghl.updateAppointment;
+  const updates = [];
+  ghl.updateAppointment = async (_config, _contact, appointmentId, startsAt, endsAt, notes) => {
+    updates.push({ appointmentId, startsAt, endsAt, notes });
+    return { id: appointmentId };
+  };
+  store.upsertContact({
+    id: "booking-timezone-correction",
+    ghlContactId: "booking-timezone-correction",
+    name: "Timezone Correction",
+    phone: "+15550000078",
+    timezone: "America/New_York",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Fri, May 8, 4:00 PM EST",
+    preferredCallTimeIso: "2026-05-08T20:00:00.000Z",
+    appointmentId: "appt-tz",
+    awaitingBackupTime: true
+  });
+
+  try {
+    const contact = await bot.handleInboundSms({
+      contactId: "booking-timezone-correction",
+      message: "Okay\nI am in California"
+    });
+
+    assert.equal(contact.timezone, "America/Los_Angeles");
+    assert.match(contact.preferredCallTime, /4:00 PM PST/);
+    assert.equal(contact.preferredCallTimeIso, "2026-05-08T23:00:00.000Z");
+    assert.equal(updates.some((update) => update.startsAt === "2026-05-08T23:00:00.000Z"), true);
+    assert.match(store.getContact("booking-timezone-correction").lastOutboundMessage, /4:00 PM PST/);
+  } finally {
+    ghl.updateAppointment = originalUpdateAppointment;
+  }
 });
 
 test("inbound message does not blank existing contact fields", async () => {

@@ -33,7 +33,7 @@ const {
   nextTextingWindow,
   sameLocalDay
 } = require("./time");
-const { resolveContactTimezone } = require("./timezoneResolver");
+const { resolveContactTimezone, timezoneFromText } = require("./timezoneResolver");
 const ghl = require("./adapters/ghl");
 const slack = require("./adapters/slack");
 const { chooseTemplateVariant } = require("./templateManager");
@@ -553,6 +553,14 @@ function appointmentNotes(contact, extra = {}) {
   return lines.join("\n");
 }
 
+function timezoneCorrectionFromText(text) {
+  const t = normalize(text);
+  if (!/\b(i am|i'm|im|we are|located|live|in|from|california|texas|florida|new york|arizona|nevada|washington|oregon|colorado)\b/.test(t)) {
+    return "";
+  }
+  return timezoneFromText(t);
+}
+
 class SmsBot {
   constructor(store, config) {
     this.store = store;
@@ -589,6 +597,59 @@ class SmsBot {
       });
       return false;
     }
+  }
+
+  async applyTimezoneCorrection(contact, inboundText) {
+    const correctedTimezone = timezoneCorrectionFromText(inboundText);
+    if (!correctedTimezone || correctedTimezone === contact.timezone) return contact;
+    const oldTimezone = contact.timezone || this.config.texting.defaultTimezone;
+    let patch = {
+      ...contact,
+      timezone: correctedTimezone,
+      timezoneCorrectedAt: new Date().toISOString(),
+      timezoneCorrectionSource: inboundText
+    };
+    if (contact.preferredCallTimeIso) {
+      const oldLocal = getLocalParts(new Date(contact.preferredCallTimeIso), oldTimezone);
+      const correctedStart = localDateToUtc(
+        {
+          year: oldLocal.year,
+          month: oldLocal.month,
+          day: oldLocal.day,
+          hour: oldLocal.hour,
+          minute: oldLocal.minute
+        },
+        correctedTimezone
+      );
+      patch = {
+        ...patch,
+        preferredCallTimeIso: correctedStart.toISOString(),
+        preferredCallTime: formatForContact(correctedStart, { ...contact, timezone: correctedTimezone }, this.config)
+      };
+      if (contact.appointmentId) {
+        try {
+          await ghl.updateAppointment(
+            this.config,
+            patch,
+            contact.appointmentId,
+            patch.preferredCallTimeIso,
+            addMinutes(correctedStart, 15).toISOString(),
+            appointmentNotes(patch, { reason: `Timezone corrected from ${oldTimezone} to ${correctedTimezone}.` })
+          );
+        } catch (error) {
+          await this.notifyBotError("GHL appointment timezone correction failed", {
+            Name: contact.name || "unknown",
+            Phone: contact.phone || "unknown",
+            "GHL contact": contact.ghlContactId || contact.id,
+            "Appointment ID": contact.appointmentId || "unknown",
+            Error: error.message
+          });
+        }
+      }
+    }
+    const updated = await this.store.upsertContact(patch);
+    if (updated.preferredCallTimeIso) await this.scheduleAppointmentReminders(updated);
+    return updated;
   }
 
   async scheduleHumanEscalationWatchdog(contact, reason) {
@@ -1176,6 +1237,7 @@ class SmsBot {
     if (hasManualHumanHoldTag(contact)) {
       return this.stopForManualHoldTag(contact);
     }
+    contact = await this.applyTimezoneCorrection(contact, inbound.lastInboundMessage);
     if (hasExistingRepresentation(inbound.lastInboundMessage)) {
       const updated = await this.store.upsertContact({
         ...contact,
@@ -1956,6 +2018,7 @@ class SmsBot {
     const sameDay = sameLocalDay(now, appointment, timeZone);
     const oneHour = addMinutes(appointment, -60);
     const fiveMinutes = addMinutes(appointment, -5);
+    const minimumGapBeforeOneHour = addMinutes(now, 20);
     if (!sameDay) {
       const appointmentLocal = getLocalParts(appointment, timeZone);
       const morningReminderHour = appointmentLocal.hour <= 10 ? 8 : 9;
@@ -1978,7 +2041,7 @@ class SmsBot {
         });
       }
     }
-    if (oneHour > now) {
+    if (oneHour > minimumGapBeforeOneHour) {
       await this.store.addJob({
         type: "appointment_reminder",
         contactId: contact.id,

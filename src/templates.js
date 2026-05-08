@@ -183,9 +183,9 @@ const warmFollowUpTemplates = {
 
 const reminderTemplates = {
   nextDayMorning: "Good morning [NAME]! 👋 Quick reminder, you have a call scheduled with your Accident Support Desk Specialist today at [TIME]. They'll call from a local number, so please keep your phone close 💪",
-  nextDayOneHour: "Hi [NAME], William here! Your call with your Specialist is in about an hour at [TIME] ⏰ Just making sure you're still good for it. Reply YES to confirm or let me know if you need to reschedule!",
+  nextDayOneHour: "Hi [NAME], William here! Quick reminder, your Specialist call is in about an hour at [TIME] ⏰ They'll call from a local number, so please keep your phone close.",
   nextDayFiveMinutes: "[NAME] your Specialist is calling you in 5 minutes! 📞 Pick up even if the number looks unfamiliar, that's them. You're almost at the finish line! 🏁",
-  sameDayOneHour: "Hey [NAME]! Your call is coming up in about an hour at [TIME] ⏰ Still good to go? Reply YES to confirm or let me know if you need to push it back!",
+  sameDayOneHour: "Hey [NAME]! Quick reminder, your Specialist call is coming up in about an hour at [TIME] ⏰ They'll call from a local number, so please keep your phone close.",
   sameDayFiveMinutes: "[NAME], your Specialist is calling in 5 minutes! 📞 Pick up even if the number looks unfamiliar, that's them. Can't wait to get you some clarity on your case 💪"
 };
 
