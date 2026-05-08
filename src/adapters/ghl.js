@@ -93,6 +93,7 @@ function extractContacts(payload) {
 async function searchContactsByTag(config, tag = "NR", options = {}) {
   const limit = Math.max(1, Math.min(Number(options.limit || 100), 100));
   const page = Math.max(1, Number(options.page || 1));
+  const normalizedTag = String(tag || "NR").replace(/^#/, "").toLowerCase();
   const payload = await ghlSearch(config, "/contacts/search", {
     locationId: config.ghl.locationId,
     page,
@@ -101,7 +102,7 @@ async function searchContactsByTag(config, tag = "NR", options = {}) {
       {
         field: "tags",
         operator: "contains",
-        value: tag
+        value: normalizedTag
       }
     ]
   });
