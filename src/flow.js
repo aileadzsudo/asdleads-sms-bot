@@ -1,6 +1,7 @@
 const { ENGAGEMENT, QUALIFICATION } = require("./constants");
 const {
   coldOutreachTemplates,
+  freshLeadFollowUpTemplates,
   qualificationTemplates,
   reengagementTemplates,
   persistentReengagementTemplates,
@@ -39,6 +40,7 @@ const REENGAGEMENT_DAYS = [1, 2, 3, 4, 5, 6, 7];
 const REENGAGEMENT_SLOTS = ["am", "pm"];
 const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
 const HUMAN_REPLY_TIMEOUT_MINUTES = 5;
+const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 60, 120, 240];
 
 function customValue(payload, key) {
   return payload.customData?.[key] || payload.custom_data?.[key] || "";
@@ -175,6 +177,13 @@ function hasAnyTag(contact, names) {
 
 function hasManualHumanHoldTag(contact) {
   return hasAnyTag(contact, ["human_hold", "keep_human", "manual_hold", "do_not_return_to_bot", "follow_up", "followup", "manual_follow_up"]);
+}
+
+function hasExistingRepresentation(text) {
+  const t = normalize(text);
+  return /\b(already|currently|now)\s+(have|got|hired|with|represented by|working with)\s+(a\s+)?(lawyer|attorney|law firm|representation|counsel)\b/.test(t) ||
+    /\b(i have|i've got|ive got|my)\s+(a\s+)?(lawyer|attorney|law firm|representation)\b/.test(t) ||
+    /\b(represented|have representation|already represented)\b/.test(t);
 }
 
 function isBenignAppointmentAcknowledgement(text) {
@@ -652,6 +661,25 @@ class SmsBot {
     }
   }
 
+  async scheduleFreshLeadFollowUps(contact) {
+    await this.store.cancelJobsForContact(contact.id, "fresh lead follow-ups replaced", (job) => job.type === "fresh_lead_followup");
+    const now = new Date();
+    const timeZone = contact.timezone || this.config.texting.defaultTimezone;
+    const pmSlot = localSlotDate(contact, this.config, 0, "pm");
+    for (const [index, minutes] of FRESH_LEAD_FOLLOW_UP_MINUTES.entries()) {
+      const runAt = addMinutes(now, minutes);
+      if (!sameLocalDay(now, runAt, timeZone)) continue;
+      if (!isWithinTextingWindow(contact, this.config, runAt)) continue;
+      if (Math.abs(runAt.getTime() - pmSlot.getTime()) <= 45 * 60 * 1000) continue;
+      await this.store.addJob({
+        type: "fresh_lead_followup",
+        contactId: contact.id,
+        runAt: runAt.toISOString(),
+        payload: { step: index + 1, minutes }
+      });
+    }
+  }
+
   async scheduleReengagement(contact, options = {}) {
     let sequence = "";
     if (contact.qualificationProgress === QUALIFICATION.NEEDS_FAULT) sequence = "after_date";
@@ -717,7 +745,7 @@ class SmsBot {
         type: "initial_sms",
         contactId: contact.id,
         runAt: nextTextingWindow(contact, this.config).toISOString(),
-        payload: { templateKey: "day_1_am" }
+        payload: { templateKey: "day_1_am", source: "fresh" }
       });
       return contact;
     }
@@ -731,6 +759,7 @@ class SmsBot {
       sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || contact.sentColdTemplateKeys || []), "day_1_am"]))
     });
     await this.scheduleColdOutreach(afterInitial);
+    await this.scheduleFreshLeadFollowUps(afterInitial);
     await this.store.addJob({
       type: "cold_entry_check",
       contactId: afterInitial.id,
@@ -811,7 +840,7 @@ class SmsBot {
     await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
     if (resolution.duplicateConflict) return contact;
     await this.store.cancelJobsForContact(contact.id, "contact replied", (job) =>
-      ["send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "cold_entry_check"].includes(job.type)
+      ["fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "cold_entry_check"].includes(job.type)
     );
 
     if (isOptOut(inbound.lastInboundMessage)) {
@@ -839,6 +868,18 @@ class SmsBot {
     }
     if (hasManualHumanHoldTag(contact)) {
       return this.stopForManualHoldTag(contact);
+    }
+    if (hasExistingRepresentation(inbound.lastInboundMessage)) {
+      const updated = await this.store.upsertContact({
+        ...contact,
+        automationPaused: true,
+        automationPauseReason: "existing_representation",
+        currentSequenceName: "",
+        qualificationProgress: QUALIFICATION.COMPLETE
+      });
+      await this.store.cancelJobsForContact(updated.id, "existing representation");
+      await this.sendBotMessage(updated, qualificationTemplates.existingRepresentation, { bypassQuietHours: true });
+      return this.store.getContact(updated.id);
     }
     if (looksPostSignedOrFirmIssue(inbound.lastInboundMessage)) {
       return this.escalate(contact, "post_intake_or_firm_issue");
@@ -1641,6 +1682,7 @@ class SmsBot {
     const outboundJobTypes = [
       "initial_sms",
       "send_message",
+      "fresh_lead_followup",
       "send_cold_template",
       "warm_followup",
       "enter_reengagement",
@@ -1676,7 +1718,7 @@ class SmsBot {
       await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString() });
       return;
     }
-    if (["initial_sms", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "appointment_reminder", "missed_call_followup"].includes(job.type)) {
+    if (["initial_sms", "fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "appointment_reminder", "missed_call_followup"].includes(job.type)) {
       if (!isWithinTextingWindow(contact, this.config)) {
         await this.store.updateJob(job.id, {
           status: "pending",
@@ -1714,6 +1756,7 @@ class SmsBot {
         sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || fresh.sentColdTemplateKeys || []), "day_1_am"]))
       });
       await this.scheduleColdOutreach(updated);
+      if (job.payload?.source !== "backfill") await this.scheduleFreshLeadFollowUps(updated);
       await this.store.addJob({
         type: "cold_entry_check",
         contactId: updated.id,
@@ -1741,6 +1784,23 @@ class SmsBot {
         currentMessageCountForDay: job.payload.slot === "pm" ? 2 : 1,
         sentColdTemplateKeys: sentKeys
       });
+    }
+    if (job.type === "fresh_lead_followup") {
+      const fresh = await this.store.getContact(job.contactId);
+      const step = Number(job.payload.step || 1);
+      const template = freshLeadFollowUpTemplates[step];
+      if (template) {
+        const rendered = await this.renderManagedTemplate(fresh, "freshLeadFollowUpTemplates", String(step), template);
+        const sent = await this.sendBotMessage(fresh, rendered.message, rendered.meta);
+        await this.store.upsertContact({
+          ...(sent || fresh),
+          engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+          currentSequenceName: "fresh_lead_follow_up",
+          currentSequenceDay: 1,
+          currentSequenceSlot: `fresh_${step}`,
+          currentMessageCountForDay: Number(fresh.currentMessageCountForDay || 1) + 1
+        });
+      }
     }
     if (job.type === "warm_followup") {
       const fresh = await this.store.getContact(job.contactId);

@@ -467,6 +467,28 @@ test("post-intake firm issues are escalated instead of qualified", async () => {
   assert.equal(store.getContact("support-1").humanEscalationStatus, true);
 });
 
+test("existing representation gets a polite response and pauses automation", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "represented-1",
+    ghlContactId: "represented-1",
+    name: "Represented",
+    phone: "+15550000067",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+  store.addJob({ type: "send_cold_template", contactId: "represented-1", runAt: new Date().toISOString(), payload: {} });
+
+  const contact = await bot.handleInboundSms({ contactId: "represented-1", message: "I already have a lawyer" });
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "existing_representation");
+  assert.equal(contact.qualificationProgress, QUALIFICATION.COMPLETE);
+  assert.match(contact.lastOutboundMessage, /second opinion/i);
+  assert.equal(store.data.escalations.length, 0);
+  assert.equal(Object.values(store.data.jobs).every((job) => job.status === "cancelled"), true);
+});
+
 test("human escalation schedules SLA watchdog jobs", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -1353,6 +1375,32 @@ test("immediate no-response enrollment queues cold outreach without duplicates",
   assert.equal(afterReschedule.length, firstScheduled.length);
 });
 
+test("fresh no-response enrollment schedules aggressive same-day follow-ups", async () => {
+  const { bot, store } = makeBot();
+  const cadenceTimezone = ["America/Chicago", "America/Los_Angeles", "Pacific/Honolulu", "Pacific/Kiritimati"].find((timeZone) => {
+    const local = getLocalParts(new Date(), timeZone);
+    return local.hour >= 8 && local.hour <= 17;
+  }) || "America/Chicago";
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "fresh-cadence-1",
+    name: "Fresh Cadence",
+    phone: "+15550000068",
+    timezone: cadenceTimezone,
+    tags: ["NR"]
+  });
+
+  const freshJobs = Object.values(store.data.jobs)
+    .filter((job) => job.contactId === contact.id && job.type === "fresh_lead_followup" && job.status === "pending")
+    .sort((a, b) => new Date(a.runAt) - new Date(b.runAt));
+
+  assert.equal(freshJobs.length > 0, true);
+  assert.deepEqual(
+    freshJobs.map((job) => job.payload.minutes).filter((minutes) => [15, 60, 120, 240].includes(minutes)),
+    freshJobs.map((job) => job.payload.minutes)
+  );
+});
+
 test("backfill queues initial SMS instead of sending immediately", async () => {
   const { bot, store } = makeBot();
   const runAt = new Date(Date.now() + 30 * 60 * 1000);
@@ -1376,6 +1424,10 @@ test("backfill queues initial SMS instead of sending immediately", async () => {
       (job) => job.contactId === "backfill-1" && job.type === "initial_sms" && job.status === "pending"
     ),
     true
+  );
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "backfill-1" && job.type === "fresh_lead_followup"),
+    false
   );
 });
 

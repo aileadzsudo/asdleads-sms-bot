@@ -49,6 +49,7 @@ const qualificationTemplates = {
   callAsk: "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with an Accident Support Desk Specialist who can create a compensation gameplan for you. Are you open for a call now or later today? 📞",
   clarify: "I want to make sure I understood you correctly 🙏 Can you answer that last question with a quick yes, no, or not sure?",
   optOutConfirm: "No problem, we won't text you again. If you change your mind, please feel free to reach back out.",
+  existingRepresentation: "No worries at all 🙏 We're always here to help. If you ever feel unsatisfied or unhappy with your current representation, please feel free to reach back out any time. We'd be happy to give you a second opinion on your case and see if we can help.",
   callNow: "Perfect! 🔥 I'm connecting you with a Specialist right now, you should be getting a call within the next few minutes. Make sure your phone is on and available. What's the best number to reach you at?",
   delay: "So sorry for the small wait, our Specialist is just finishing up with another client. You're next, should be calling within the next 3-5 minutes! 📞",
   backupAsk: "Perfect, I've got you down for [TIME]! 📅 Just to make sure we don't miss each other, is there a backup time that works too, just in case something comes up on either end?",
@@ -58,6 +59,13 @@ const qualificationTemplates = {
   rescheduleAsk: "No problem 👍 What new time works best for your call today or tomorrow?",
   rescheduleNeedsSpecificTime: "No problem 👍 What specific time should I move your call to?",
   rescheduleConfirmed: "Done, I moved your Specialist call to [TIME]. 📅 We'll send you a reminder before the call, and they'll call from a local number."
+};
+
+const freshLeadFollowUpTemplates = {
+  1: "Hey [NAME], just checking back quickly 🙌 I still have your accident info open and wanted to make sure you do not miss out. Do you remember the date of the accident?",
+  2: "[NAME], William here again 👋 I only need a couple quick details to see if we can help. What was the date of the accident?",
+  3: "Quick follow-up, [NAME] 💰 cases like this can move fast, and waiting too long can hurt your options. What was the date of the accident?",
+  4: "Last quick check for now, [NAME] 🙏 if you still want help with the accident, reply with the date it happened and I can take it from there."
 };
 
 const reengagementTemplates = {
@@ -208,6 +216,7 @@ function render(template, contact, extra = {}) {
 module.exports = {
   coldOutreachTemplates,
   qualificationTemplates,
+  freshLeadFollowUpTemplates,
   reengagementTemplates,
   persistentReengagementTemplates,
   warmFollowUpTemplates,

@@ -5,6 +5,7 @@ const EXPERIMENTS_KEY = "template_experiments";
 
 const TEMPLATE_GROUPS = {
   coldOutreachTemplates: "Cold Outreach",
+  freshLeadFollowUpTemplates: "Fresh Lead Follow-Up",
   qualificationTemplates: "Qualification",
   reengagementTemplates: "Fast Re-Engagement",
   persistentReengagementTemplates: "Daily Re-Engagement",
