@@ -190,8 +190,8 @@ function summarizeBackfillCandidates(candidates, tag = "NR") {
   };
 }
 
-function nextBackfillRunAt(contact, index, spacingMinutes) {
-  let runAt = addMinutes(new Date(), index * spacingMinutes);
+function nextBackfillRunAt(contact, index, spacingMinutes, startOffsetMinutes = 0) {
+  let runAt = addMinutes(new Date(), startOffsetMinutes + index * spacingMinutes);
   let guard = 0;
   while (!isWithinTextingWindow(contact, config, runAt) && guard < 10) {
     runAt = nextTextingWindow(contact, config, runAt);
@@ -1544,6 +1544,7 @@ const server = http.createServer(async (req, res) => {
           60
         )
       );
+      const startOffsetMinutes = Math.max(0, Math.min(Number(payload.startOffsetMinutes || 0), 24 * 60));
       const previewOnly = Boolean(payload.previewOnly);
       const candidates = await loadBackfillCandidates({ ...payload, limit: Math.max(Number(payload.limit || maxContacts), maxContacts) });
       const summary = summarizeBackfillCandidates(candidates, tag);
@@ -1553,7 +1554,7 @@ const server = http.createServer(async (req, res) => {
       if (!previewOnly) {
         for (const [index, contact] of selected.entries()) {
           try {
-            const runAt = nextBackfillRunAt(contact, index, spacingMinutes);
+            const runAt = nextBackfillRunAt(contact, index, spacingMinutes, startOffsetMinutes);
             queued.push(await bot.queueNoResponseBackfill({ ...contact, disposition: "NR" }, runAt));
           } catch (error) {
             failed.push({ contact, error: error.message });
@@ -1566,6 +1567,7 @@ const server = http.createServer(async (req, res) => {
         dryRun: config.dryRun,
         tag,
         spacingMinutes,
+        startOffsetMinutes,
         selectedCount: selected.length,
         queuedCount: queued.filter((item) => item.status === "queued").length,
         skippedDuringQueueCount: queued.filter((item) => item.status === "skipped").length,
