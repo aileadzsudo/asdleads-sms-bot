@@ -554,6 +554,56 @@ test("admin timezone refresh uses firm tag and preserves booked wall-clock time"
   }
 });
 
+test("admin primary call time repair uses latest inbound without sending another SMS", async () => {
+  const { bot, store } = makeBot();
+  const originalUpdateAppointment = ghl.updateAppointment;
+  const updates = [];
+  const targetLocal = getLocalParts(new Date(), "America/Los_Angeles");
+  const targetIso = localDateToUtc(
+    {
+      year: targetLocal.year,
+      month: targetLocal.month,
+      day: targetLocal.day + 1,
+      hour: 14,
+      minute: 0
+    },
+    "America/Los_Angeles"
+  ).toISOString();
+  ghl.updateAppointment = async (_config, _contact, appointmentId, startsAt, endsAt, notes) => {
+    updates.push({ appointmentId, startsAt, endsAt, notes });
+    return { id: appointmentId };
+  };
+  store.upsertContact({
+    id: "admin-primary-repair",
+    ghlContactId: "admin-primary-repair",
+    name: "Primary Repair",
+    phone: "+15550000082",
+    tags: ["lhpark_ca"],
+    timezone: "America/Los_Angeles",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Sat, May 9, 2:00 PM EST",
+    preferredCallTimeIso: "2026-05-09T18:00:00.000Z",
+    backupCallTime: "Fri, May 8, 2:00 PM PST",
+    backupCallTimeIso: "2026-05-08T21:00:00.000Z",
+    appointmentId: "appt-primary-repair",
+    lastInboundMessage: "U can call tomorrow at 2 pm",
+    lastOutboundMessage: "old message"
+  });
+
+  try {
+    const contact = await bot.applyBotControl({ contactId: "admin-primary-repair", action: "repair_primary_call_time" });
+
+    assert.equal(contact.preferredCallTimeIso, targetIso);
+    assert.match(contact.preferredCallTime, /2:00 PM PST/);
+    assert.equal(contact.backupCallTime, "");
+    assert.equal(contact.lastOutboundMessage, "old message");
+    assert.equal(updates.some((update) => update.appointmentId === "appt-primary-repair" && update.startsAt === targetIso), true);
+  } finally {
+    ghl.updateAppointment = originalUpdateAppointment;
+  }
+});
+
 test("inbound message does not blank existing contact fields", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

@@ -1629,6 +1629,10 @@ class SmsBot {
       return this.refreshTimezoneFromContact(contact, "admin_timezone_refresh");
     }
 
+    if (["repair_primary_call_time", "fix_primary_call_time", "correct_primary_call_time"].includes(action)) {
+      return this.repairPrimaryCallTimeFromLastInbound(contact);
+    }
+
     if (["nq", "not_qualified"].includes(action)) {
       return this.stopForNqTag({ ...contact, tags: [...normalizeTags(contact.tags), "NQ"] });
     }
@@ -2065,6 +2069,81 @@ class SmsBot {
     });
     await this.scheduleAppointmentReminders(latest);
     return latest;
+  }
+
+  async repairPrimaryCallTimeFromLastInbound(contact) {
+    contact = await this.hydrateContactTags(contact, { force: true });
+    const message = contact.lastInboundMessage || contact.recoveredCallTimeMessage || "";
+    const parsed = parseCallTime(message, contact, this.config);
+    if (parsed?.type !== "scheduled") {
+      return this.store.upsertContact({
+        ...contact,
+        lastPrimaryCallTimeRepairError: "latest inbound message did not contain a scheduled call time",
+        lastPrimaryCallTimeRepairAt: new Date().toISOString()
+      });
+    }
+
+    const startsAt = parsed.startsAt;
+    const endsAt = addMinutes(new Date(startsAt), 15).toISOString();
+    let appointment = null;
+    try {
+      appointment = await ghl.updateAppointment(
+        this.config,
+        contact,
+        contact.appointmentId,
+        startsAt,
+        endsAt,
+        appointmentNotes(
+          {
+            ...contact,
+            preferredCallTime: formatForContact(new Date(startsAt), contact, this.config),
+            preferredCallTimeIso: startsAt,
+            backupCallTime: ""
+          },
+          { backupTime: "none", reason: "Primary call time repaired from latest inbound message." }
+        )
+      );
+    } catch (error) {
+      await this.notifyBotError("GHL appointment primary time repair failed", {
+        Name: contact.name || "unknown",
+        Phone: contact.phone || "unknown",
+        "GHL contact": contact.ghlContactId || contact.id,
+        "Appointment ID": contact.appointmentId || "unknown",
+        "Requested start": startsAt,
+        Error: error.message
+      });
+      return this.store.upsertContact({
+        ...contact,
+        lastPrimaryCallTimeRepairError: error.message,
+        lastPrimaryCallTimeRepairAt: new Date().toISOString()
+      });
+    }
+
+    const display = formatForContact(new Date(startsAt), contact, this.config);
+    const updated = await this.store.upsertContact({
+      ...contact,
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.CALL_BOOKED,
+      preferredCallTime: display,
+      preferredCallTimeIso: startsAt,
+      appointmentId: appointment.id || appointment.appointment?.id || contact.appointmentId || "",
+      backupCallTime: "",
+      backupCallTimeIso: "",
+      backupCallTimeType: "",
+      backupWindowStartHour: "",
+      backupWindowStartMinute: "",
+      backupWindowEndHour: "",
+      backupWindowEndMinute: "",
+      awaitingBackupTime: false,
+      lastPrimaryCallTimeRepairError: "",
+      lastPrimaryCallTimeRepairAt: new Date().toISOString(),
+      lastPrimaryCallTimeRepairSource: message
+    });
+    await this.store.cancelJobsForContact(updated.id, "primary call time repaired", (job) =>
+      ["appointment_reminder", "backup_time_timeout", "backup_no_show_reminder"].includes(job.type)
+    );
+    await this.scheduleAppointmentReminders(updated);
+    return updated;
   }
 
   async handleBackupTime(contact, text) {
