@@ -904,6 +904,7 @@ async function integrationStatus() {
       slackChannel: config.slack.channel,
       slackBotErrorsChannel: config.slack.botErrorsChannel,
       slackBookingChannel: config.slack.bookingChannel,
+      slackSendInDryRun: config.slack.sendInDryRun,
       llmFallbackEnabled: config.llm.fallbackEnabled
     },
     checks: {

@@ -95,6 +95,7 @@
           ["Escalations channel", configured.slackChannel || "missing"],
           ["Bot errors channel", configured.slackBotErrorsChannel || "missing"],
           ["Booking channel", configured.slackBookingChannel || "missing"],
+          ["Slack during dry run", configured.slackSendInDryRun ? "enabled" : "blocked"],
           ["Team", slack.value?.team || "-"],
           ["Bot user", slack.value?.user || slack.error || "-"]
         ]);
@@ -129,7 +130,9 @@
           items.push("Add SLACK_BOOKING_CHANNEL for appointment-booked notifications.");
         }
         if (data.dryRun) {
-          items.push("Keep DRY_RUN on while testing. Real SMS, real booking, and real Slack sends should wait until the bot passes tester scenarios.");
+          items.push(data.configured.slackSendInDryRun
+            ? "DRY_RUN is on. Real SMS and booking stay blocked, but Slack alerts are enabled for testing."
+            : "Keep DRY_RUN on while testing. Set SLACK_SEND_IN_DRY_RUN=true when you are ready to test real Slack alerts without sending SMS.");
         }
         items.push("After the OpenAI batch completes, update rules, then run full tester conversations before turning on live webhooks.");
         $("nextSteps").innerHTML = items.map((item) => `<div class="job"><span>${escapeHtml(item)}</span></div>`).join("");

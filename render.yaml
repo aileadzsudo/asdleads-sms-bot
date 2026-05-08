@@ -16,6 +16,8 @@ services:
         value: 0.0.0.0
       - key: DRY_RUN
         value: "true"
+      - key: SLACK_SEND_IN_DRY_RUN
+        value: "false"
       - key: LLM_FALLBACK_ENABLED
         value: "true"
       - key: OPENAI_CLASSIFIER_MODEL

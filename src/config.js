@@ -57,7 +57,8 @@ function loadConfig() {
       token: process.env.SLACK_BOT_TOKEN || "",
       channel: process.env.SLACK_ESCALATION_CHANNEL || "#sms-esiliation",
       botErrorsChannel: process.env.SLACK_BOT_ERRORS_CHANNEL || "",
-      bookingChannel: process.env.SLACK_BOOKING_CHANNEL || process.env.SLACK_ESCALATION_CHANNEL || "#sms-esiliation"
+      bookingChannel: process.env.SLACK_BOOKING_CHANNEL || process.env.SLACK_ESCALATION_CHANNEL || "#sms-esiliation",
+      sendInDryRun: String(process.env.SLACK_SEND_IN_DRY_RUN || "false").toLowerCase() === "true"
     },
     texting: {
       defaultTimezone: process.env.DEFAULT_TIMEZONE || "America/Chicago",

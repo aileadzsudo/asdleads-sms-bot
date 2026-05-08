@@ -28,8 +28,8 @@ function baseEscalationText(config, contact, title, reason, extra = {}) {
 }
 
 async function postSlack(config, text, channel = config.slack.channel) {
-  if (config.dryRun || !config.slack.token) {
-    return { ok: true, skipped: true, reason: "Slack post skipped by dry run or missing token", channel, text };
+  if ((config.dryRun && !config.slack.sendInDryRun) || !config.slack.token) {
+    return { ok: true, skipped: true, reason: "Slack post skipped by dry run setting or missing token", channel, text };
   }
   const response = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
