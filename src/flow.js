@@ -1498,6 +1498,17 @@ class SmsBot {
           return this.advanceQualification(resumeContact, answer);
         }
       }
+      if (updated.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME) {
+        const recentCallTime = await this.recentCallTimeCandidate(updated);
+        if (recentCallTime) {
+          const withRecoveredTime = await this.store.upsertContact({
+            ...updated,
+            recoveredCallTimeMessage: recentCallTime.message,
+            recoveredCallTimeAt: new Date().toISOString()
+          });
+          return this.handleCallTime(withRecoveredTime, recentCallTime.message);
+        }
+      }
       const template = currentQuestionTemplate(updated, this.config);
       if (template) {
         const sent = await this.sendBotMessage(updated, render(template, updated), { bypassQuietHours: true });

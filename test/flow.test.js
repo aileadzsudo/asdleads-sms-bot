@@ -1026,6 +1026,38 @@ test("return to bot uses last inbound answer instead of repeating the same quest
   assert.match(store.getContact("return-smart").lastOutboundMessage, /medical treatment/i);
 });
 
+test("return to bot at scheduling reuses recent call time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "return-call-time",
+    ghlContactId: "return-call-time",
+    name: "Pedro",
+    phone: "+15550000077",
+    timezone: "America/Los_Angeles",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "no"
+  });
+  store.addMessage({
+    contactId: "return-call-time",
+    direction: "inbound",
+    body: "Yes, I am open"
+  });
+  store.addMessage({
+    contactId: "return-call-time",
+    direction: "inbound",
+    body: "2"
+  });
+
+  const contact = await bot.applyBotControl({ contactId: "return-call-time", action: "return_to_bot" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.equal(store.getContact("return-call-time").qualificationProgress, QUALIFICATION.CALL_BOOKED);
+  assert.equal(store.getContact("return-call-time").recoveredCallTimeMessage, "2");
+  assert.match(store.getContact("return-call-time").lastOutboundMessage, /backup time/i);
+});
+
 test("NQ tag pauses automation without lead escalation", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
