@@ -1,0 +1,1619 @@
+const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
+const { execFile } = require("node:child_process");
+const { loadConfig } = require("./config");
+const { createStore } = require("./storeFactory");
+const { SmsBot } = require("./flow");
+const { isNoResponseDisposition } = require("./disposition");
+const { addMinutes, isWithinTextingWindow, nextTextingWindow } = require("./time");
+const {
+  editableTemplates,
+  loadTemplateExperiments,
+  loadTemplateOverrides,
+  resetTemplateOverrides,
+  saveTemplateExperiments,
+  saveTemplateOverrides
+} = require("./templateManager");
+const ghl = require("./adapters/ghl");
+const slack = require("./adapters/slack");
+
+const config = loadConfig();
+let store = null;
+let bot = null;
+const publicDir = path.join(__dirname, "..", "public");
+const rootDir = path.join(__dirname, "..");
+const reportDir = config.reportDir;
+const trainingDbPath = process.env.TRAINING_DB_PATH || path.join(config.dataDir, "training.sqlite");
+let lastAutoAppliedBatchId = "";
+const JOB_RETRY_MINUTES = [5, 15, 60];
+const BACKFILL_DEFAULT_SPACING_MINUTES = 3;
+const BACKFILL_MAX_BATCH = 250;
+
+async function notifyBotError(title, details = {}) {
+  try {
+    await slack.sendBotError(config, title, details);
+  } catch (error) {
+    console.error("bot error notification failed", title, error.message);
+  }
+}
+
+async function readJson(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw) return {};
+  return JSON.parse(raw);
+}
+
+function requireWebhookSecret(req) {
+  if (!config.webhookSecret) return { ok: true };
+  const provided = req.headers["x-webhook-secret"] || req.headers["x-asdleads-secret"];
+  if (provided === config.webhookSecret) return { ok: true };
+  return { ok: false, reason: "invalid webhook secret" };
+}
+
+function requireAdmin(req) {
+  if (!config.adminPassword) return { ok: true };
+  const provided = req.headers["x-admin-password"];
+  if (provided === config.adminPassword) return { ok: true };
+  return { ok: false, reason: "invalid admin password" };
+}
+
+function webhookEventId(req, payload) {
+  return (
+    req.headers["x-ghl-event-id"] ||
+    req.headers["x-event-id"] ||
+    payload.eventId ||
+    payload.messageId ||
+    payload.idempotencyKey ||
+    payload.id ||
+    ""
+  );
+}
+
+async function dedupeWebhook(req, payload, fallbackPrefix) {
+  const id = webhookEventId(req, payload);
+  if (!id) return { id: "", duplicate: false, skipped: true };
+  const result = await store.recordWebhookEvent(id, payload);
+  return { id, duplicate: !result.inserted };
+}
+
+function normalizeTagList(tags) {
+  if (!tags) return [];
+  if (Array.isArray(tags)) return tags.map((tag) => String(tag).toLowerCase().trim());
+  return String(tags)
+    .split(/[,\s]+/)
+    .map((tag) => tag.toLowerCase().trim())
+    .filter(Boolean);
+}
+
+function hasTag(tags, tag) {
+  const wanted = String(tag || "").toLowerCase().replace(/^#/, "").replace(/[-\s]+/g, "_");
+  return normalizeTagList(tags).some((item) => item.replace(/^#/, "").replace(/[-\s]+/g, "_") === wanted);
+}
+
+function firstValue(source, keys) {
+  for (const key of keys) {
+    const value = key.split(".").reduce((acc, part) => (acc && acc[part] !== undefined ? acc[part] : undefined), source);
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return "";
+}
+
+function normalizeBackfillContact(raw = {}) {
+  const contact = raw.contact || raw;
+  const firstName = firstValue(contact, ["firstName", "first_name"]);
+  const lastName = firstValue(contact, ["lastName", "last_name"]);
+  const fullName = firstValue(contact, ["name", "fullName", "contactName"]) || [firstName, lastName].filter(Boolean).join(" ");
+  return {
+    contactId: firstValue(contact, ["id", "contactId", "ghlContactId", "_id"]),
+    ghlContactId: firstValue(contact, ["id", "contactId", "ghlContactId", "_id"]),
+    name: fullName,
+    phone: firstValue(contact, ["phone", "phoneNumber", "mobile", "number"]),
+    timezone: firstValue(contact, ["timezone", "timeZone"]),
+    state: firstValue(contact, ["state", "locationState", "address.state"]),
+    leadSource: firstValue(contact, ["source", "leadSource", "attributionSource"]) || "GHL backfill",
+    tags: contact.tags || contact.contactTags || [],
+    ghlContactLink: firstValue(contact, ["ghlContactLink", "contactLink"])
+  };
+}
+
+function backfillEligibility(contact, tag = "NR") {
+  if (!contact.contactId && !contact.phone) return { eligible: false, reason: "missing contact id and phone" };
+  if (!contact.phone) return { eligible: false, reason: "missing phone" };
+  if (tag && !hasTag(contact.tags, tag)) return { eligible: false, reason: `missing ${tag} tag` };
+  if (hasTag(contact.tags, "NQ") || hasTag(contact.tags, "not_qualified")) return { eligible: false, reason: "NQ tag" };
+  if (hasTag(contact.tags, "signed")) return { eligible: false, reason: "signed tag" };
+  if (hasTag(contact.tags, "DNC") || hasTag(contact.tags, "do_not_contact") || hasTag(contact.tags, "opt_out")) {
+    return { eligible: false, reason: "DNC/opt-out tag" };
+  }
+  return { eligible: true, reason: "" };
+}
+
+function dedupeContacts(contacts) {
+  const seen = new Set();
+  const deduped = [];
+  for (const contact of contacts) {
+    const key = contact.contactId || String(contact.phone || "").replace(/\D/g, "");
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(contact);
+  }
+  return deduped;
+}
+
+async function loadBackfillCandidates(payload = {}) {
+  if (Array.isArray(payload.contacts) && payload.contacts.length) {
+    return payload.contacts.map(normalizeBackfillContact);
+  }
+  const tag = payload.tag || "NR";
+  const limit = Math.max(1, Math.min(Number(payload.limit || 100), BACKFILL_MAX_BATCH));
+  const page = Math.max(1, Number(payload.page || 1));
+  const result = await ghl.searchContactsByTag(config, tag, { limit, page });
+  return result.contacts.map(normalizeBackfillContact);
+}
+
+function summarizeBackfillCandidates(candidates, tag = "NR") {
+  const normalized = dedupeContacts(candidates);
+  const eligible = [];
+  const skipped = [];
+  for (const contact of normalized) {
+    const check = backfillEligibility(contact, tag);
+    if (check.eligible) eligible.push(contact);
+    else skipped.push({ contact, reason: check.reason });
+  }
+  return {
+    tag,
+    totalSeen: candidates.length,
+    unique: normalized.length,
+    eligible,
+    skipped
+  };
+}
+
+function nextBackfillRunAt(contact, index, spacingMinutes) {
+  let runAt = addMinutes(new Date(), index * spacingMinutes);
+  let guard = 0;
+  while (!isWithinTextingWindow(contact, config, runAt) && guard < 10) {
+    runAt = nextTextingWindow(contact, config, runAt);
+    guard += 1;
+  }
+  return runAt;
+}
+
+function increment(map, key) {
+  const safeKey = key || "unknown";
+  map[safeKey] = (map[safeKey] || 0) + 1;
+}
+
+function minutesBetween(start, end) {
+  if (!start || !end) return null;
+  const value = (new Date(end) - new Date(start)) / 60000;
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function average(values) {
+  const clean = values.filter((value) => Number.isFinite(value));
+  if (!clean.length) return null;
+  return clean.reduce((sum, value) => sum + value, 0) / clean.length;
+}
+
+function lastActivityAt(contact, messagesByContact) {
+  const messages = messagesByContact.get(contact.id) || [];
+  const messageTimes = messages.map((message) => message.createdAt).filter(Boolean);
+  return (
+    contact.lastResponseTimestamp ||
+    contact.lastOutboundTimestamp ||
+    contact.humanAcknowledgedAt ||
+    contact.escalatedAt ||
+    messageTimes[messageTimes.length - 1] ||
+    contact.backfilledAt ||
+    ""
+  );
+}
+
+function contactIssueFlags(contact, jobs = [], messages = [], escalations = []) {
+  const flags = [];
+  const pendingJobs = jobs.filter((job) => job.status === "pending");
+  const failedJobs = jobs.filter((job) => job.status === "failed");
+  const dueJobs = pendingJobs.filter((job) => job.runAt && new Date(job.runAt) <= new Date());
+  const needsFutureAutomation = [
+    "initial_sms_sent",
+    "cold_outreach",
+    "active_conversation",
+    "warm_follow_up",
+    "re_engagement",
+    "missed_call",
+    "call_scheduled"
+  ].includes(contact.engagementStatus);
+
+  if (contact.humanEscalationStatus && contact.humanEscalationStage === "human_review_pending") {
+    flags.push({ type: "urgent", code: "unacknowledged_escalation", label: "Human escalation not acknowledged" });
+  }
+  if (failedJobs.length) {
+    flags.push({ type: "urgent", code: "failed_jobs", label: `${failedJobs.length} failed job(s)` });
+  }
+  if (dueJobs.length) {
+    flags.push({ type: "warn", code: "due_jobs", label: `${dueJobs.length} due job(s)` });
+  }
+  if (contact.automationPauseReason === "duplicate_phone_conflict") {
+    flags.push({ type: "warn", code: "duplicate_phone_conflict", label: "Duplicate phone conflict" });
+  }
+  if (!contact.timezone) {
+    flags.push({ type: "warn", code: "missing_timezone", label: "Missing timezone" });
+  }
+  if (contact.automationPaused) {
+    flags.push({ type: "info", code: "automation_paused", label: `Paused: ${contact.automationPauseReason || "unknown"}` });
+  }
+  if (needsFutureAutomation && !pendingJobs.length && !contact.automationPaused && !contact.optOutStatus) {
+    flags.push({ type: "warn", code: "no_pending_automation", label: "Active status but no pending automation" });
+  }
+  if (contact.lastLlmClassification?.error || contact.lastLlmError) {
+    flags.push({ type: "warn", code: "llm_issue", label: "LLM fallback issue" });
+  }
+  if (escalations.some((item) => String(item.reason || "").includes("low_confidence"))) {
+    flags.push({ type: "warn", code: "low_confidence", label: "Low confidence classification" });
+  }
+  if (!messages.length && contact.engagementStatus && contact.engagementStatus !== "new_lead") {
+    flags.push({ type: "warn", code: "no_messages", label: "No stored conversation messages" });
+  }
+  return flags;
+}
+
+function groupByContactId(items) {
+  const map = new Map();
+  for (const item of items) {
+    if (!map.has(item.contactId)) map.set(item.contactId, []);
+    map.get(item.contactId).push(item);
+  }
+  return map;
+}
+
+function summarizeContact(contact, jobsByContact, messagesByContact, escalationsByContact) {
+  const jobs = jobsByContact.get(contact.id) || [];
+  const messages = messagesByContact.get(contact.id) || [];
+  const escalations = escalationsByContact.get(contact.id) || [];
+  return {
+    id: contact.id,
+    name: contact.name,
+    phone: contact.phone,
+    leadSource: contact.leadSource,
+    timezone: contact.timezone,
+    engagementStatus: contact.engagementStatus,
+    qualificationProgress: contact.qualificationProgress,
+    currentSequenceName: contact.currentSequenceName,
+    currentSequenceDay: contact.currentSequenceDay,
+    automationPaused: contact.automationPaused,
+    automationPauseReason: contact.automationPauseReason,
+    humanEscalationStatus: contact.humanEscalationStatus,
+    humanEscalationStage: contact.humanEscalationStage,
+    escalationReason: contact.escalationReason,
+    lastInboundMessage: contact.lastInboundMessage,
+    lastOutboundMessage: contact.lastOutboundMessage,
+    lastActivityAt: lastActivityAt(contact, messagesByContact),
+    pendingJobs: jobs.filter((job) => job.status === "pending").length,
+    failedJobs: jobs.filter((job) => job.status === "failed").length,
+    messages: messages.length,
+    escalations: escalations.length,
+    riskScore: leadRiskScore(contact, jobs, messages, escalations),
+    issueFlags: contactIssueFlags(contact, jobs, messages, escalations),
+    ghlContactLink: contact.ghlContactLink
+  };
+}
+
+function leadRiskScore(contact, jobs = [], messages = [], escalations = []) {
+  let score = 0;
+  if (contact.engagementStatus === "ready_for_call") score += 50;
+  if (contact.engagementStatus === "active_conversation") score += 30;
+  if (contact.engagementStatus === "warm_follow_up") score += 24;
+  if (contact.engagementStatus === "call_scheduled") score += 35;
+  if (contact.faultAnswer) score += 10;
+  if (contact.medicalTreatmentAnswer) score += 15;
+  if (messages.some((message) => message.direction === "inbound")) score += 10;
+  if (escalations.length) score += 12;
+  if (jobs.some((job) => job.status === "failed")) score += 15;
+  if (contact.automationPaused || contact.optOutStatus) score -= 50;
+  return Math.max(0, Math.min(100, score));
+}
+
+function contactTimeline(contact, messages = [], jobs = [], escalations = []) {
+  const events = [];
+  for (const message of messages) {
+    events.push({
+      at: message.createdAt,
+      type: message.direction === "inbound" ? "inbound_sms" : "outbound_sms",
+      title: message.direction === "inbound" ? "PC replied" : "Bot sent SMS",
+      detail: message.body || "",
+      template: [message.templateGroup, message.templateKey].filter(Boolean).join(":")
+    });
+  }
+  for (const job of jobs) {
+    events.push({
+      at: job.finishedAt || job.runAt || job.createdAt,
+      type: `job_${job.status || "unknown"}`,
+      title: `${job.type || "job"} ${job.status || ""}`.trim(),
+      detail: job.error || job.lastError || job.cancelReason || "",
+      template: job.payload?.templateKey || ""
+    });
+  }
+  for (const escalation of escalations) {
+    events.push({
+      at: escalation.createdAt,
+      type: "escalation",
+      title: `Escalated: ${escalation.reason || "unknown"}`,
+      detail: escalation.lastInboundMessage || "",
+      template: ""
+    });
+  }
+  if (contact.escalatedAt) {
+    events.push({ at: contact.escalatedAt, type: "human_escalation", title: "Human escalation started", detail: contact.escalationReason || "", template: "" });
+  }
+  if (contact.humanAcknowledgedAt) {
+    events.push({ at: contact.humanAcknowledgedAt, type: "human_ack", title: "Human acknowledged", detail: contact.humanEscalationStage || "", template: "" });
+  }
+  if (contact.appointmentRescheduledAt) {
+    events.push({ at: contact.appointmentRescheduledAt, type: "appointment", title: "Appointment rescheduled", detail: contact.preferredCallTime || "", template: "" });
+  }
+  return events.filter((event) => event.at).sort((a, b) => new Date(a.at) - new Date(b.at));
+}
+
+function lifecycleFunnel(contacts) {
+  const count = (predicate) => contacts.filter(predicate).length;
+  return [
+    { key: "started", label: "Bot Started", count: contacts.length },
+    { key: "replied", label: "Replied", count: count((contact) => contact.lastResponseTimestamp || contact.lastInboundMessage) },
+    { key: "fault", label: "Fault Answer", count: count((contact) => contact.faultAnswer) },
+    { key: "medical", label: "Medical Answer", count: count((contact) => contact.medicalTreatmentAnswer) },
+    { key: "ready", label: "Ready / Requested Call", count: count((contact) => ["ready_for_call", "call_scheduled"].includes(contact.engagementStatus)) },
+    { key: "booked", label: "Booked", count: count((contact) => contact.engagementStatus === "call_scheduled" || contact.appointmentId) },
+    { key: "missed", label: "Missed Call", count: count((contact) => contact.engagementStatus === "missed_call") },
+    { key: "opted_out", label: "Opted Out", count: count((contact) => contact.optOutStatus || contact.engagementStatus === "opted_out") }
+  ];
+}
+
+function sourcePerformance(contacts) {
+  const map = new Map();
+  for (const contact of contacts) {
+    const source = contact.leadSource || "unknown";
+    const item = map.get(source) || { source, contacts: 0, replied: 0, escalated: 0, booked: 0, optedOut: 0 };
+    item.contacts += 1;
+    if (contact.lastInboundMessage || contact.lastResponseTimestamp) item.replied += 1;
+    if (contact.humanEscalationStatus || contact.engagementStatus === "escalated_to_human") item.escalated += 1;
+    if (contact.appointmentId || contact.engagementStatus === "call_scheduled") item.booked += 1;
+    if (contact.optOutStatus || contact.engagementStatus === "opted_out") item.optedOut += 1;
+    map.set(source, item);
+  }
+  return Array.from(map.values())
+    .map((item) => ({
+      ...item,
+      replyRate: item.contacts ? item.replied / item.contacts : 0,
+      bookingRate: item.contacts ? item.booked / item.contacts : 0
+    }))
+    .sort((a, b) => b.contacts - a.contacts)
+    .slice(0, 20);
+}
+
+function timezoneHeatmap(messages, contactsById) {
+  const buckets = {};
+  for (const message of messages) {
+    if (message.direction !== "inbound" || !message.createdAt) continue;
+    const contact = contactsById.get(message.contactId) || {};
+    const timezone = contact.timezone || "unknown";
+    const hour = new Date(message.createdAt).getHours();
+    const key = `${timezone}|${hour}`;
+    buckets[key] = (buckets[key] || 0) + 1;
+  }
+  return Object.entries(buckets)
+    .map(([key, count]) => {
+      const [timezone, hour] = key.split("|");
+      return { timezone, hour: Number(hour), count };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 36);
+}
+
+function appointmentPipeline(contacts, jobsByContact) {
+  return contacts
+    .filter((contact) => contact.appointmentId || contact.engagementStatus === "call_scheduled" || contact.engagementStatus === "ready_for_call" || contact.engagementStatus === "missed_call")
+    .map((contact) => {
+      const jobs = jobsByContact.get(contact.id) || [];
+      return {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        status: contact.engagementStatus,
+        preferredCallTime: contact.preferredCallTime,
+        preferredCallTimeIso: contact.preferredCallTimeIso,
+        appointmentId: contact.appointmentId,
+        confirmed: Boolean(contact.appointmentConfirmed),
+        reminderJobs: jobs.filter((job) => job.type === "appointment_reminder" && job.status === "pending").length,
+        missedFollowups: jobs.filter((job) => job.type === "missed_call_followup").length
+      };
+    })
+    .sort((a, b) => new Date(a.preferredCallTimeIso || 0) - new Date(b.preferredCallTimeIso || 0))
+    .slice(0, 80);
+}
+
+function abTestingPerformance(messages, experiments = []) {
+  const inboundByContact = groupByContactId(messages.filter((message) => message.direction === "inbound"));
+  return experiments.map((experiment) => {
+    const variants = experiment.variants.map((variant) => {
+      const sends = messages.filter(
+        (message) =>
+          message.direction === "outbound" &&
+          message.templateExperimentId === experiment.id &&
+          message.templateVariantId === variant.id
+      );
+      const repliedContacts = new Set();
+      for (const send of sends) {
+        const laterInbound = (inboundByContact.get(send.contactId) || []).some(
+          (message) => new Date(message.createdAt) > new Date(send.createdAt)
+        );
+        if (laterInbound) repliedContacts.add(send.contactId);
+      }
+      return {
+        id: variant.id,
+        name: variant.name,
+        weight: variant.weight,
+        sends: sends.length,
+        replies: repliedContacts.size,
+        responseRate: sends.length ? repliedContacts.size / sends.length : 0
+      };
+    });
+    return { ...experiment, variants };
+  });
+}
+
+function templatePerformance(messages, templates = []) {
+  const inboundByContact = groupByContactId(messages.filter((message) => message.direction === "inbound"));
+  const rows = [];
+  for (const group of templates) {
+    for (const template of group.templates || []) {
+      const sends = messages.filter(
+        (message) =>
+          message.direction === "outbound" &&
+          message.templateGroup === group.group &&
+          message.templateKey === template.key
+      );
+      const repliedContacts = new Set();
+      for (const send of sends) {
+        const laterInbound = (inboundByContact.get(send.contactId) || []).some(
+          (message) => new Date(message.createdAt) > new Date(send.createdAt)
+        );
+        if (laterInbound) repliedContacts.add(send.contactId);
+      }
+      rows.push({
+        group: group.group,
+        groupLabel: group.label,
+        key: template.key,
+        body: template.value,
+        sends: sends.length,
+        replies: repliedContacts.size,
+        responseRate: sends.length ? repliedContacts.size / sends.length : 0
+      });
+    }
+  }
+  return rows.sort((a, b) => b.sends - a.sends || a.groupLabel.localeCompare(b.groupLabel)).slice(0, 200);
+}
+
+function activityHistory(messages, escalations, contacts) {
+  const days = [];
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - 364);
+  for (let index = 0; index < 365; index += 1) {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    const key = date.toISOString().slice(0, 10);
+    days.push({ key, label: `${date.getMonth() + 1}/${date.getDate()}`, inbound: 0, outbound: 0, escalations: 0, bookings: 0 });
+  }
+  const byKey = new Map(days.map((item) => [item.key, item]));
+  for (const message of messages) {
+    if (!message.createdAt) continue;
+    const key = new Date(message.createdAt).toISOString().slice(0, 10);
+    const item = byKey.get(key);
+    if (!item) continue;
+    if (message.direction === "inbound") item.inbound += 1;
+    if (message.direction === "outbound") item.outbound += 1;
+  }
+  for (const escalation of escalations) {
+    if (!escalation.createdAt) continue;
+    const item = byKey.get(new Date(escalation.createdAt).toISOString().slice(0, 10));
+    if (item) item.escalations += 1;
+  }
+  for (const contact of contacts) {
+    const bookingAt = contact.appointmentRescheduledAt || contact.appointmentBookedAt || (contact.appointmentId ? contact.lastOutboundTimestamp : "");
+    if (!bookingAt) continue;
+    const item = byKey.get(new Date(bookingAt).toISOString().slice(0, 10));
+    if (item) item.bookings += 1;
+  }
+  return days;
+}
+
+async function dashboardMetrics() {
+  const [contacts, messages, jobs, escalations, health, experiments] = await Promise.all([
+    store.listContacts ? store.listContacts() : [],
+    store.listMessages(),
+    store.listJobs(),
+    store.listEscalations(),
+    store.health(),
+    loadTemplateExperiments(store)
+  ]);
+  const since24h = Date.now() - 24 * 60 * 60 * 1000;
+  const templates = editableTemplates();
+  const engagement = {};
+  const qualification = {};
+  const sequences = {};
+  const messagesByContact = groupByContactId(messages);
+  const jobsByContact = groupByContactId(jobs);
+  const escalationsByContact = groupByContactId(escalations);
+  const contactsById = new Map(contacts.map((contact) => [contact.id, contact]));
+  for (const contact of contacts) {
+    increment(engagement, contact.engagementStatus);
+    increment(qualification, contact.qualificationProgress);
+    increment(sequences, contact.currentSequenceName || "none");
+  }
+  const outboundMessages = messages.filter((message) => message.direction === "outbound");
+  const inboundMessages = messages.filter((message) => message.direction === "inbound");
+  const escalations24h = escalations.filter((item) => new Date(item.createdAt).getTime() >= since24h);
+  const outbound24h = outboundMessages.filter((message) => new Date(message.createdAt).getTime() >= since24h);
+  const inbound24h = inboundMessages.filter((message) => new Date(message.createdAt).getTime() >= since24h);
+  const pendingJobs = jobs.filter((job) => job.status === "pending");
+  const failedJobs = jobs.filter((job) => job.status === "failed");
+  const dueJobs = pendingJobs.filter((job) => job.runAt && new Date(job.runAt) <= new Date());
+  const unacknowledged = contacts.filter(
+    (contact) => contact.humanEscalationStatus && contact.humanEscalationStage === "human_review_pending"
+  );
+  const ackSpeeds = contacts
+    .map((contact) => minutesBetween(contact.escalatedAt, contact.humanAcknowledgedAt))
+    .filter((value) => value !== null);
+  const duplicateConflicts = contacts.filter((contact) => contact.automationPauseReason === "duplicate_phone_conflict");
+  const missingTimezone = contacts.filter((contact) => !contact.timezone);
+  const paused = contacts.filter((contact) => contact.automationPaused);
+  const contactSummaries = contacts.map((contact) => summarizeContact(contact, jobsByContact, messagesByContact, escalationsByContact));
+  const hotLeads = contactSummaries
+    .filter((contact) => contact.riskScore >= 35 && !contact.automationPaused && contact.engagementStatus !== "opted_out")
+    .sort((a, b) => b.riskScore - a.riskScore || new Date(b.lastActivityAt || 0) - new Date(a.lastActivityAt || 0))
+    .slice(0, 50);
+  const allIssueContacts = contactSummaries
+    .filter((contact) => contact.issueFlags.length)
+    .sort((a, b) => {
+      const priority = (item) => (item.issueFlags.some((flag) => flag.type === "urgent") ? 2 : item.issueFlags.some((flag) => flag.type === "warn") ? 1 : 0);
+      return priority(b) - priority(a) || new Date(b.lastActivityAt || 0) - new Date(a.lastActivityAt || 0);
+    });
+  const issueContacts = allIssueContacts.slice(0, 75);
+  const recentContacts = contactSummaries
+    .sort((a, b) => new Date(b.lastActivityAt || 0) - new Date(a.lastActivityAt || 0))
+    .slice(0, 50);
+  const escalationSla = contacts
+    .filter((contact) => contact.humanEscalationStatus)
+    .map((contact) => {
+      const waitingMinutes = minutesBetween(contact.escalatedAt, contact.humanAcknowledgedAt || new Date().toISOString());
+      return {
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        stage: contact.humanEscalationStage,
+        reason: contact.escalationReason,
+        escalatedAt: contact.escalatedAt,
+        acknowledgedAt: contact.humanAcknowledgedAt,
+        waitingMinutes,
+        bucket: waitingMinutes === null ? "unknown" : waitingMinutes <= 5 ? "0-5" : waitingMinutes <= 15 ? "5-15" : "15+"
+      };
+    })
+    .sort((a, b) => (b.waitingMinutes || 0) - (a.waitingMinutes || 0))
+    .slice(0, 75);
+  const botConfusion = contactSummaries
+    .filter((contact) =>
+      contact.issueFlags.some((flag) => ["low_confidence", "llm_issue"].includes(flag.code)) ||
+      String(contact.escalationReason || "").includes("low_confidence") ||
+      String(contact.escalationReason || "").includes("llm")
+    )
+    .slice(0, 60);
+  const templateUsage = messages
+    .filter((message) => message.direction === "outbound" && (message.templateGroup || message.templateKey))
+    .reduce((map, message) => {
+      increment(map, [message.templateGroup || "unknown", message.templateKey || "unknown"].join(":"));
+      return map;
+    }, {});
+  const llmContacts = contacts.filter((contact) => contact.lastLlmClassification || contact.lastLlmError);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const bookedToday = contacts.filter((contact) => contact.appointmentId && new Date(contact.appointmentRescheduledAt || contact.lastOutboundTimestamp || contact.escalatedAt || 0) >= todayStart);
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    dryRun: config.dryRun,
+    health,
+    totals: {
+      contacts: contacts.length,
+      messages: messages.length,
+      outboundMessages: outboundMessages.length,
+      inboundMessages: inboundMessages.length,
+      outbound24h: outbound24h.length,
+      inbound24h: inbound24h.length,
+      escalations: escalations.length,
+      escalations24h: escalations24h.length,
+      pendingJobs: pendingJobs.length,
+      dueJobs: dueJobs.length,
+      failedJobs: failedJobs.length,
+      unacknowledgedEscalations: unacknowledged.length,
+      callScheduled: contacts.filter((contact) => contact.engagementStatus === "call_scheduled").length,
+      readyForCall: contacts.filter((contact) => contact.engagementStatus === "ready_for_call").length,
+      optedOut: contacts.filter((contact) => contact.optOutStatus || contact.engagementStatus === "opted_out").length,
+      issueContacts: allIssueContacts.length
+    },
+    speedToLead: {
+      acknowledgedCount: ackSpeeds.length,
+      averageMinutes: average(ackSpeeds),
+      fastestMinutes: ackSpeeds.length ? Math.min(...ackSpeeds) : null,
+      slowestMinutes: ackSpeeds.length ? Math.max(...ackSpeeds) : null
+    },
+    dailySummary: {
+      date: todayStart.toISOString(),
+      started: contacts.filter((contact) => new Date(contact.backfilledAt || contact.lastOutboundTimestamp || 0) >= todayStart).length,
+      inbound: inboundMessages.filter((message) => new Date(message.createdAt).getTime() >= todayStart.getTime()).length,
+      outbound: outboundMessages.filter((message) => new Date(message.createdAt).getTime() >= todayStart.getTime()).length,
+      escalations: escalations.filter((item) => new Date(item.createdAt).getTime() >= todayStart.getTime()).length,
+      booked: bookedToday.length,
+      failedJobs: failedJobs.length,
+      issueContacts: allIssueContacts.length
+    },
+    breakdowns: {
+      engagement,
+      qualification,
+      sequences,
+      templateUsage,
+      jobsByType: jobs.reduce((map, job) => {
+        increment(map, `${job.type}:${job.status}`);
+        return map;
+      }, {}),
+      escalationsByReason: escalations.reduce((map, item) => {
+        increment(map, item.reason);
+        return map;
+      }, {})
+    },
+    alerts: {
+      unacknowledgedEscalations: unacknowledged.map((contact) => ({
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        reason: contact.escalationReason,
+        escalatedAt: contact.escalatedAt,
+        lastInboundMessage: contact.lastInboundMessage
+      })),
+      failedJobs: failedJobs.slice(0, 25),
+      dueJobs: dueJobs.slice(0, 25),
+      duplicateConflicts: duplicateConflicts.map((contact) => ({
+        id: contact.id,
+        phone: contact.phone,
+        duplicateActiveContactIds: contact.duplicateActiveContactIds
+      })),
+      missingTimezone: missingTimezone.slice(0, 25).map((contact) => ({ id: contact.id, name: contact.name, phone: contact.phone })),
+      paused: paused.slice(0, 25).map((contact) => ({
+        id: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        reason: contact.automationPauseReason
+      }))
+    },
+    funnel: lifecycleFunnel(contacts),
+    activityHistory: activityHistory(messages, escalations, contacts),
+    hotLeads,
+    escalationSla,
+    botConfusion,
+    appointmentPipeline: appointmentPipeline(contacts, jobsByContact),
+    sourcePerformance: sourcePerformance(contacts),
+    timezoneHeatmap: timezoneHeatmap(messages, contactsById),
+    llmUsage: {
+      contactsClassified: llmContacts.length,
+      fallbackEnabled: config.llm.fallbackEnabled,
+      estimatedCostLow: llmContacts.length ? llmContacts.length * 0.001 : 0,
+      failures: contacts.filter((contact) => contact.lastLlmError || contact.lastLlmClassification?.error).length
+    },
+    abTesting: abTestingPerformance(messages, experiments),
+    templatePerformance: templatePerformance(messages, templates),
+    issueContacts,
+    recentContacts,
+    recentMessages: messages.slice(-50).reverse()
+  };
+}
+
+async function dashboardContactDetail(contactId) {
+  const [contact, messages, jobs, escalations] = await Promise.all([
+    store.getContact(contactId),
+    store.listMessages(contactId),
+    store.listJobs(contactId),
+    store.listEscalations(contactId)
+  ]);
+  if (!contact) return null;
+  return {
+    ok: true,
+    contact,
+    messages,
+    jobs,
+    escalations,
+    issueFlags: contactIssueFlags(contact, jobs, messages, escalations),
+    timeline: contactTimeline(contact, messages, jobs, escalations)
+  };
+}
+
+function send(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body, null, 2));
+}
+
+function sendFile(res, filePath, contentType) {
+  res.writeHead(200, { "Content-Type": contentType });
+  fs.createReadStream(filePath).pipe(res);
+}
+
+function runPythonJson(scriptName, args, timeout = 120_000) {
+  return new Promise((resolve, reject) => {
+    execFile("python3", [path.join(rootDir, "scripts", scriptName), ...args], {
+      cwd: rootDir,
+      timeout,
+      maxBuffer: 10 * 1024 * 1024
+    }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (parseError) {
+        reject(new Error(`Could not parse training DB output: ${parseError.message}`));
+      }
+    });
+  });
+}
+
+function runPythonText(scriptName, args = [], timeout = 120_000) {
+  return new Promise((resolve, reject) => {
+    execFile("python3", [path.join(rootDir, "scripts", scriptName), ...args], {
+      cwd: rootDir,
+      timeout,
+      maxBuffer: 10 * 1024 * 1024
+    }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message));
+        return;
+      }
+      resolve(stdout.trim());
+    });
+  });
+}
+
+function runTrainingDb(args) {
+  return runPythonJson("ghl_training_db.py", args);
+}
+
+async function safeJson(label, task) {
+  try {
+    return { ok: true, value: await task() };
+  } catch (error) {
+    return { ok: false, label, error: error.message };
+  }
+}
+
+function fileInfo(filePath) {
+  if (!fs.existsSync(filePath)) return { exists: false };
+  const stats = fs.statSync(filePath);
+  return {
+    exists: true,
+    path: filePath,
+    bytes: stats.size,
+    updatedAt: stats.mtime.toISOString()
+  };
+}
+
+async function trainingStatus() {
+  const [dbSummary, llmSummary, batchStatus] = await Promise.all([
+    safeJson("database summary", () => runTrainingDb(["summary"])),
+    safeJson("LLM label summary", () => runPythonJson("llm_label_examples.py", ["summary"])),
+    safeJson("OpenAI batch status", () => runPythonJson("llm_batch_examples.py", ["status"]))
+  ]);
+  return {
+    ok: true,
+    checkedAt: new Date().toISOString(),
+    database: dbSummary,
+    llm: llmSummary,
+    batch: batchStatus,
+    files: {
+      database: fileInfo(trainingDbPath),
+      report: fileInfo(path.join(reportDir, "training_report.md")),
+      ruleCandidates: fileInfo(path.join(reportDir, "rule_candidates.json"))
+    }
+  };
+}
+
+async function applyBatchAndRefreshReports() {
+  const applyResult = await runPythonJson("llm_batch_examples.py", ["apply"], 600_000);
+  let reportResult = null;
+  let ruleCandidateResult = null;
+  if (applyResult.ok) {
+    reportResult = await runPythonText("build_training_report.py", [], 120_000);
+    ruleCandidateResult = await runPythonJson("generate_rule_candidates.py", [], 120_000);
+  }
+  return {
+    ok: applyResult.ok,
+    apply: applyResult,
+    report: reportResult,
+    ruleCandidates: ruleCandidateResult,
+    status: await trainingStatus()
+  };
+}
+
+async function slackAuthStatus() {
+  if (!config.slack.token) {
+    return { ok: false, configured: false, reason: "SLACK_BOT_TOKEN is missing" };
+  }
+  const response = await fetch("https://slack.com/api/auth.test", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.slack.token}`,
+      "Content-Type": "application/json"
+    },
+    body: "{}"
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    return { ok: false, configured: true, status: response.status, error: data.error || "Slack auth failed" };
+  }
+  return {
+    ok: true,
+    configured: true,
+    team: data.team,
+    user: data.user,
+    botId: data.bot_id || "",
+    channelConfigured: config.slack.channel
+  };
+}
+
+async function integrationStatus() {
+  const [ghl, openaiBatch, slack] = await Promise.all([
+    safeJson("GHL API check", () => runTrainingDb(["api-check"])),
+    safeJson("OpenAI batch status", () => runPythonJson("llm_batch_examples.py", ["status"])),
+    safeJson("Slack auth", () => slackAuthStatus())
+  ]);
+  return {
+    ok: true,
+    checkedAt: new Date().toISOString(),
+    dryRun: config.dryRun,
+    configured: {
+      ghlToken: Boolean(config.ghl.token),
+      ghlLocationId: Boolean(config.ghl.locationId),
+      ghlCalendarId: Boolean(config.ghl.calendarId),
+      openaiKey: Boolean(config.llm.apiKey),
+      slackToken: Boolean(config.slack.token),
+      slackChannel: config.slack.channel,
+      slackBotErrorsChannel: config.slack.botErrorsChannel,
+      slackBookingChannel: config.slack.bookingChannel,
+      llmFallbackEnabled: config.llm.fallbackEnabled
+    },
+    checks: {
+      ghl,
+      openaiBatch,
+      slack
+    }
+  };
+}
+
+async function autoApplyCompletedBatch() {
+  const status = await runPythonJson("llm_batch_examples.py", ["status"]);
+  const batch = status.batch;
+  if (!batch || batch.status !== "completed" || batch.id === lastAutoAppliedBatchId) return;
+  const result = await applyBatchAndRefreshReports();
+  if (result.ok || result.apply?.alreadyApplied) {
+    lastAutoAppliedBatchId = batch.id;
+  }
+}
+
+async function runDueJobs() {
+  const jobs = await store.dueJobs();
+  const results = [];
+  for (const job of jobs) {
+    try {
+      await bot.runDueJob(job);
+      results.push({ id: job.id, type: job.type, ok: true });
+    } catch (error) {
+      const attempts = Number(job.attempts || 0) + 1;
+      const retryDelay = JOB_RETRY_MINUTES[attempts - 1];
+      if (retryDelay) {
+        await store.updateJob(job.id, {
+          status: "pending",
+          attempts,
+          runAt: new Date(Date.now() + retryDelay * 60 * 1000).toISOString(),
+          lastError: error.message
+        });
+      } else {
+        await store.updateJob(job.id, {
+          status: "failed",
+          attempts,
+          finishedAt: new Date().toISOString(),
+          error: error.message
+        });
+      }
+      await notifyBotError("Scheduled job failed", {
+        "Job ID": job.id,
+        Type: job.type,
+        "Contact ID": job.contactId,
+        Attempt: String(attempts),
+        Retry: retryDelay ? `${retryDelay} minutes` : "no retries left",
+        Error: error.message
+      });
+      results.push({ id: job.id, type: job.type, ok: false, retryInMinutes: retryDelay || 0, error: error.message });
+    }
+  }
+  return results;
+}
+
+async function advancePendingJobs(steps = 1) {
+  const results = [];
+  for (let index = 0; index < steps; index += 1) {
+    const pending = (await store.listJobs())
+      .filter((job) => job.status === "pending")
+      .sort((a, b) => new Date(a.runAt) - new Date(b.runAt));
+    if (!pending.length) break;
+    const nextJob = pending[0];
+    await store.updateJob(nextJob.id, { runAt: new Date().toISOString() });
+    results.push(...(await runDueJobs()));
+  }
+  return results;
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === "GET" && req.url === "/health") {
+      const storage = store ? await store.health() : { ok: false, type: "not_initialized" };
+      send(res, storage.ok ? 200 : 503, {
+        ok: storage.ok,
+        time: new Date().toISOString(),
+        storage,
+        dryRun: config.dryRun,
+        llmFallbackEnabled: config.llm.fallbackEnabled
+      });
+      return;
+    }
+
+    if (req.method === "GET" && (req.url === "/" || req.url === "/tester")) {
+      sendFile(res, path.join(publicDir, "tester.html"), "text/html; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/review") {
+      sendFile(res, path.join(publicDir, "review.html"), "text/html; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/training-status") {
+      sendFile(res, path.join(publicDir, "training-status.html"), "text/html; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/integrations") {
+      sendFile(res, path.join(publicDir, "integrations.html"), "text/html; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/backfill") {
+      sendFile(res, path.join(publicDir, "backfill.html"), "text/html; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && (req.url === "/dashboard" || req.url.startsWith("/dashboard/"))) {
+      sendFile(res, path.join(publicDir, "dashboard.html"), "text/html; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && (req.url === "/tester.css" || req.url === "/review.css")) {
+      sendFile(res, path.join(publicDir, "tester.css"), "text/css; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/training-status.css") {
+      sendFile(res, path.join(publicDir, "training-status.css"), "text/css; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/integrations.css") {
+      sendFile(res, path.join(publicDir, "integrations.css"), "text/css; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/backfill.css") {
+      sendFile(res, path.join(publicDir, "backfill.css"), "text/css; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/dashboard.css") {
+      sendFile(res, path.join(publicDir, "dashboard.css"), "text/css; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/reports/training_report.md") {
+      sendFile(res, path.join(reportDir, "training_report.md"), "text/markdown; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/reports/rule_candidates.json") {
+      sendFile(res, path.join(reportDir, "rule_candidates.json"), "application/json; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/webhooks/ghl/disposition") {
+      const auth = requireWebhookSecret(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const dedupe = await dedupeWebhook(req, payload, "disposition");
+      if (dedupe.duplicate) {
+        send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
+        return;
+      }
+      const disposition = payload.disposition || payload.customDisposition;
+      if (!isNoResponseDisposition(disposition)) {
+        send(res, 202, { ok: true, ignored: true, reason: "disposition was not no response or NR" });
+        return;
+      }
+      const contact = await bot.startFromNoResponseDisposition(payload);
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/webhooks/ghl/inbound-sms") {
+      const auth = requireWebhookSecret(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const dedupe = await dedupeWebhook(req, payload, "inbound");
+      if (dedupe.duplicate) {
+        send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
+        return;
+      }
+      const contact = await bot.handleInboundSms(payload);
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/webhooks/ghl/missed-call") {
+      const auth = requireWebhookSecret(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const dedupe = await dedupeWebhook(req, payload, "missed-call");
+      if (dedupe.duplicate) {
+        send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
+        return;
+      }
+      const contact = await bot.markMissedCall(payload);
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/webhooks/ghl/bot-control") {
+      const auth = requireWebhookSecret(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const dedupe = await dedupeWebhook(req, payload, "bot-control");
+      if (dedupe.duplicate) {
+        send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
+        return;
+      }
+      const contact = await bot.applyBotControl(payload);
+      send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/jobs/tick") {
+      send(res, 200, { ok: true, results: await runDueJobs() });
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/test/state")) {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const contactId = url.searchParams.get("contactId");
+      send(res, 200, {
+        ok: true,
+        dryRun: config.dryRun,
+        llmFallbackEnabled: config.llm.fallbackEnabled,
+        contact: contactId ? await store.getContact(contactId) : null,
+        jobs: await store.listJobs(contactId || ""),
+        messages: await store.listMessages(contactId || ""),
+        escalations: await store.listEscalations(contactId || "")
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/test/reset") {
+      await store.reset();
+      send(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/backfill/preview") {
+      const payload = await readJson(req);
+      const tag = payload.tag || "NR";
+      const candidates = await loadBackfillCandidates(payload);
+      const summary = summarizeBackfillCandidates(candidates, tag);
+      send(res, 200, {
+        ok: true,
+        dryRun: config.dryRun,
+        tag,
+        totalSeen: summary.totalSeen,
+        unique: summary.unique,
+        eligibleCount: summary.eligible.length,
+        skippedCount: summary.skipped.length,
+        eligible: summary.eligible.slice(0, 25),
+        skipped: summary.skipped.slice(0, 25)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/backfill/start") {
+      const payload = await readJson(req);
+      const tag = payload.tag || "NR";
+      const maxContacts = Math.max(1, Math.min(Number(payload.maxContacts || 25), BACKFILL_MAX_BATCH));
+      const spacingMinutes = Math.max(1, Math.min(Number(payload.spacingMinutes || BACKFILL_DEFAULT_SPACING_MINUTES), 60));
+      const previewOnly = Boolean(payload.previewOnly);
+      const candidates = await loadBackfillCandidates({ ...payload, limit: Math.max(Number(payload.limit || maxContacts), maxContacts) });
+      const summary = summarizeBackfillCandidates(candidates, tag);
+      const selected = summary.eligible.slice(0, maxContacts);
+      const queued = [];
+      const failed = [];
+      if (!previewOnly) {
+        for (const [index, contact] of selected.entries()) {
+          try {
+            const runAt = nextBackfillRunAt(contact, index, spacingMinutes);
+            queued.push(await bot.queueNoResponseBackfill({ ...contact, disposition: "NR" }, runAt));
+          } catch (error) {
+            failed.push({ contact, error: error.message });
+          }
+        }
+      }
+      send(res, 200, {
+        ok: true,
+        previewOnly,
+        dryRun: config.dryRun,
+        tag,
+        spacingMinutes,
+        selectedCount: selected.length,
+        queuedCount: queued.filter((item) => item.status === "queued").length,
+        skippedDuringQueueCount: queued.filter((item) => item.status === "skipped").length,
+        failedCount: failed.length,
+        queued,
+        failed,
+        skipped: summary.skipped.slice(0, 25)
+      });
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/admin/dashboard")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      send(res, 200, await dashboardMetrics());
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/admin/contact")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const contactId = url.searchParams.get("contactId") || "";
+      const detail = contactId ? await dashboardContactDetail(contactId) : null;
+      send(res, detail ? 200 : 404, detail || { ok: false, error: "contact not found" });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/contact/action") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const contact = await bot.applyBotControl({
+        contactId: payload.contactId,
+        action: payload.action
+      });
+      if (!contact) {
+        send(res, 404, { ok: false, error: "contact not found" });
+        return;
+      }
+      send(res, 200, await dashboardContactDetail(contact.id));
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/contact/note") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const contact = await store.getContact(payload.contactId);
+      if (!contact) {
+        send(res, 404, { ok: false, error: "contact not found" });
+        return;
+      }
+      const notes = [...(contact.adminNotes || []), {
+        note: String(payload.note || "").trim(),
+        createdAt: new Date().toISOString()
+      }].filter((item) => item.note);
+      const updated = await store.upsertContact({ ...contact, adminNotes: notes });
+      send(res, 200, await dashboardContactDetail(updated.id));
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/contact/bulk-action") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const contactIds = Array.isArray(payload.contactIds) ? payload.contactIds.slice(0, 100) : [];
+      const results = [];
+      for (const contactId of contactIds) {
+        const contact = await bot.applyBotControl({ contactId, action: payload.action });
+        results.push({ contactId, ok: Boolean(contact), status: contact?.engagementStatus || "" });
+      }
+      send(res, 200, { ok: true, results });
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/admin/templates")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      send(res, 200, { ok: true, groups: editableTemplates() });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/templates/save") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const overrides = await saveTemplateOverrides(store, payload.overrides || {});
+      send(res, 200, { ok: true, overrides, groups: editableTemplates() });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/templates/reset") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      await resetTemplateOverrides(store);
+      send(res, 200, { ok: true, groups: editableTemplates() });
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/admin/ab-tests")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const [experiments, messages] = await Promise.all([loadTemplateExperiments(store), store.listMessages()]);
+      const templates = editableTemplates();
+      send(res, 200, {
+        ok: true,
+        experiments: abTestingPerformance(messages, experiments),
+        templates,
+        templatePerformance: templatePerformance(messages, templates)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/ab-tests/save") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const experiments = await saveTemplateExperiments(store, payload.experiments || []);
+      const messages = await store.listMessages();
+      const templates = editableTemplates();
+      send(res, 200, {
+        ok: true,
+        experiments: abTestingPerformance(messages, experiments),
+        templates,
+        templatePerformance: templatePerformance(messages, templates)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/ab-tests/push-live") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const experiments = await loadTemplateExperiments(store);
+      const experiment = experiments.find((item) => item.id === payload.experimentId);
+      const variant = experiment?.variants?.find((item) => item.id === payload.variantId);
+      if (!experiment || !variant) {
+        send(res, 404, { ok: false, error: "experiment or variant not found" });
+        return;
+      }
+      const current = store.getSetting ? await store.getSetting("template_overrides") : null;
+      const overrides = current?.value || {};
+      overrides[experiment.group] = overrides[experiment.group] || {};
+      overrides[experiment.group][experiment.key] = variant.body;
+      await saveTemplateOverrides(store, overrides);
+      const updatedExperiments = experiments.map((item) =>
+        item.id === experiment.id ? { ...item, status: "winner", winnerVariantId: variant.id } : item
+      );
+      await saveTemplateExperiments(store, updatedExperiments);
+      const messages = await store.listMessages();
+      const templates = editableTemplates();
+      send(res, 200, {
+        ok: true,
+        pushed: { group: experiment.group, key: experiment.key, variantId: variant.id },
+        experiments: abTestingPerformance(messages, updatedExperiments),
+        templates,
+        templatePerformance: templatePerformance(messages, templates)
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/test/llm-fallback") {
+      const payload = await readJson(req);
+      config.llm.fallbackEnabled = Boolean(payload.enabled);
+      send(res, 200, { ok: true, enabled: config.llm.fallbackEnabled });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/test/seed-no-response") {
+      const payload = await readJson(req);
+      const contact = await bot.startFromNoResponseDisposition({
+        contactId: payload.contactId || "test-contact",
+        name: payload.name || "Test Lead",
+        phone: payload.phone || "+15550001111",
+        timezone: payload.timezone || config.texting.defaultTimezone,
+        leadSource: payload.leadSource || "tester",
+        disposition: "no response"
+      });
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/test/seed-scheduled-call") {
+      const payload = await readJson(req);
+      const startsAt = payload.startsAt || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const contact = await store.upsertContact({
+        contactId: payload.contactId || "test-contact",
+        id: payload.contactId || "test-contact",
+        ghlContactId: payload.contactId || "test-contact",
+        name: payload.name || "Test Lead",
+        phone: payload.phone || "+15550001111",
+        timezone: payload.timezone || config.texting.defaultTimezone,
+        leadSource: payload.leadSource || "tester",
+        engagementStatus: "call_scheduled",
+        qualificationProgress: "call_booked",
+        preferredCallTime: new Intl.DateTimeFormat("en-US", {
+          timeZone: payload.timezone || config.texting.defaultTimezone,
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          timeZoneName: "short"
+        }).format(new Date(startsAt)),
+        preferredCallTimeIso: startsAt,
+        appointmentId: payload.appointmentId || "test-appointment"
+      });
+      await store.cancelJobsForContact(contact.id, "tester scheduled call reset");
+      await bot.scheduleAppointmentReminders(contact);
+      await store.addMessage({
+        contactId: contact.id,
+        direction: "outbound",
+        body: `Tester scheduled call at ${contact.preferredCallTime}`
+      });
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/test/missed-call") {
+      const payload = await readJson(req);
+      const contact = await bot.markMissedCall({
+        contactId: payload.contactId || "test-contact",
+        name: payload.name || "Test Lead",
+        phone: payload.phone || "+15550001111",
+        timezone: payload.timezone || config.texting.defaultTimezone,
+        leadSource: payload.leadSource || "tester",
+        preferredCallTime: payload.preferredCallTime,
+        preferredCallTimeIso: payload.preferredCallTimeIso
+      });
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/test/bot-control") {
+      const payload = await readJson(req);
+      const contact = await bot.applyBotControl({
+        contactId: payload.contactId || "test-contact",
+        action: payload.action,
+        name: payload.name,
+        phone: payload.phone,
+        timezone: payload.timezone,
+        leadSource: payload.leadSource
+      });
+      send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/test/reply") {
+      const payload = await readJson(req);
+      const contact = await bot.handleInboundSms({
+        contactId: payload.contactId || "test-contact",
+        message: payload.message || "",
+        name: payload.name,
+        phone: payload.phone,
+        timezone: payload.timezone,
+        leadSource: payload.leadSource
+      });
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/test/advance") {
+      const payload = await readJson(req);
+      const steps = Math.max(1, Math.min(Number(payload.steps || 1), 25));
+      send(res, 200, { ok: true, results: await advancePendingJobs(steps) });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/training/init") {
+      send(res, 200, await runTrainingDb(["init"]));
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/training/import") {
+      const payload = await readJson(req);
+      const maxPages = String(Math.max(1, Math.min(Number(payload.maxPages || 1), 500)));
+      const pageSize = String(Math.max(10, Math.min(Number(payload.pageSize || 100), 500)));
+      send(res, 200, await runTrainingDb(["import", "--max-pages", maxPages, "--page-size", pageSize]));
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/training/summary")) {
+      send(res, 200, await runTrainingDb(["summary"]));
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/training/status")) {
+      send(res, 200, await trainingStatus());
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/integrations/status")) {
+      send(res, 200, await integrationStatus());
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/training/apply-batch") {
+      send(res, 200, await applyBatchAndRefreshReports());
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/training/examples")) {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const limit = url.searchParams.get("limit") || "25";
+      const offset = url.searchParams.get("offset") || "0";
+      const mode = url.searchParams.get("mode") || "unlabeled";
+      send(res, 200, await runTrainingDb(["examples", "--limit", limit, "--offset", offset, "--mode", mode]));
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/training/label") {
+      const payload = await readJson(req);
+      send(res, 200, await runTrainingDb([
+        "label",
+        "--id",
+        String(payload.id),
+        "--label",
+        String(payload.label || ""),
+        "--notes",
+        String(payload.notes || "")
+      ]));
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/training/phrases")) {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const limit = url.searchParams.get("limit") || "100";
+      send(res, 200, await runTrainingDb(["phrases", "--limit", limit]));
+      return;
+    }
+
+    send(res, 404, { ok: false, error: "not found" });
+  } catch (error) {
+    if (req.method !== "GET" || !["/health", "/tester.css", "/training-status.css", "/integrations.css", "/backfill.css", "/dashboard.css"].includes(req.url)) {
+      await notifyBotError("HTTP request failed", {
+        Method: req.method,
+        Path: req.url,
+        Error: error.message
+      });
+    }
+    send(res, 500, { ok: false, error: error.message });
+  }
+});
+
+async function initApp() {
+  if (store && bot) return { store, bot };
+  store = await createStore(config);
+  await loadTemplateOverrides(store);
+  bot = new SmsBot(store, config);
+  return { store, bot };
+}
+
+if (require.main === module) {
+  initApp().then(() => {
+    server.listen(config.port, config.host, () => {
+      console.log(`ASDleads SMS bot listening on http://${config.host}:${config.port}`);
+    });
+    setInterval(() => {
+      runDueJobs().catch(async (error) => {
+        console.error("job tick failed", error);
+        await notifyBotError("Job tick failed", { Error: error.message });
+      });
+    }, 60_000);
+    if (String(process.env.AUTO_APPLY_LLM_BATCH || "false").toLowerCase() === "true") {
+      const batchPollMs = Number(process.env.BATCH_POLL_INTERVAL_MS || 30 * 60 * 1000);
+      setInterval(() => {
+        autoApplyCompletedBatch().catch(async (error) => {
+          console.error("batch auto-apply failed", error);
+          await notifyBotError("Batch auto-apply failed", { Error: error.message });
+        });
+      }, batchPollMs);
+      autoApplyCompletedBatch().catch(async (error) => {
+        console.error("batch auto-apply failed", error);
+        await notifyBotError("Batch auto-apply failed", { Error: error.message });
+      });
+    }
+  }).catch((error) => {
+    console.error("failed to initialize app", error);
+    process.exit(1);
+  });
+}
+
+process.on("unhandledRejection", (reason) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  console.error("unhandled rejection", error);
+  notifyBotError("Unhandled promise rejection", { Error: error.message }).catch(() => {});
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("uncaught exception", error);
+  notifyBotError("Uncaught exception", { Error: error.message }).finally(() => {
+    process.exit(1);
+  });
+});
+
+module.exports = { server, runDueJobs, initApp, notifyBotError };

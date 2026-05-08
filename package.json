@@ -1,0 +1,17 @@
+{
+  "name": "asdleads-sms-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production-ready SMS follow-up and call-booking backend for ASDleads.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.20.0"
+  }
+}

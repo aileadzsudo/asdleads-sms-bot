@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ASDleads NR Backfill</title>
+    <link rel="stylesheet" href="/backfill.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="toolbar">
+        <div>
+          <h1>NR Backfill</h1>
+          <p>Controlled activation for existing GoHighLevel NR leads.</p>
+        </div>
+        <div class="toolbar-actions">
+          <a class="link-button secondary" href="/dashboard">Dashboard</a>
+          <a class="link-button secondary" href="/tester">Tester</a>
+          <a class="link-button secondary" href="/integrations">Integrations</a>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="panel">
+          <h2>Controls</h2>
+          <div class="form-grid">
+            <label>
+              NR tag
+              <input id="tag" value="NR" />
+            </label>
+            <label>
+              Pull limit
+              <input id="limit" type="number" min="1" max="250" value="100" />
+            </label>
+            <label>
+              Max to queue
+              <input id="maxContacts" type="number" min="1" max="250" value="25" />
+            </label>
+            <label>
+              Spacing minutes
+              <input id="spacingMinutes" type="number" min="1" max="60" value="3" />
+            </label>
+          </div>
+          <div class="button-row">
+            <button id="previewBtn" type="button">Preview Eligible Leads</button>
+            <button id="startBtn" type="button">Queue Selected Batch</button>
+          </div>
+          <p id="status" class="small">Ready.</p>
+        </div>
+
+        <div class="panel">
+          <h2>Manual Contacts</h2>
+          <p class="small">Optional: paste contacts JSON from GHL export/API. If empty, the app tries the GHL tag search API.</p>
+          <textarea id="contactsJson" placeholder='[{"id":"abc","name":"Alex","phone":"+15555550123","tags":["NR"]}]'></textarea>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Results</h2>
+        <div id="summary" class="summary"></div>
+        <div id="results" class="results"></div>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function payload() {
+        let contacts = [];
+        const raw = $("contactsJson").value.trim();
+        if (raw) contacts = JSON.parse(raw);
+        return {
+          tag: $("tag").value.trim() || "NR",
+          limit: Number($("limit").value || 100),
+          maxContacts: Number($("maxContacts").value || 25),
+          spacingMinutes: Number($("spacingMinutes").value || 3),
+          contacts
+        };
+      }
+
+      async function api(path, body) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      function setBusy(value) {
+        $("previewBtn").disabled = value;
+        $("startBtn").disabled = value;
+      }
+
+      function setStatus(message, type = "info") {
+        $("status").textContent = message;
+        $("status").dataset.type = type;
+      }
+
+      function render(data) {
+        $("summary").innerHTML = [
+          ["Dry run", data.dryRun ? "yes" : "no"],
+          ["Tag", data.tag],
+          ["Total seen", data.totalSeen ?? "—"],
+          ["Unique", data.unique ?? "—"],
+          ["Eligible", data.eligibleCount ?? data.selectedCount ?? "—"],
+          ["Skipped", data.skippedCount ?? data.skipped?.length ?? "—"],
+          ["Queued", data.queuedCount ?? "—"],
+          ["Failed", data.failedCount ?? "—"]
+        ]
+          .map(([key, value]) => `<div><strong>${key}</strong><span>${value}</span></div>`)
+          .join("");
+
+        const eligible = data.eligible || [];
+        const queued = data.queued || [];
+        const skipped = data.skipped || [];
+        const failed = data.failed || [];
+        $("results").innerHTML = [
+          ...eligible.map((item) => resultItem("eligible", item.name, item.phone, item.contactId)),
+          ...queued.map((item) => resultItem(item.status, item.contact?.name, item.contact?.phone, item.runAt || item.reason)),
+          ...skipped.map((item) => resultItem("skipped", item.contact?.name, item.contact?.phone, item.reason)),
+          ...failed.map((item) => resultItem("failed", item.contact?.name, item.contact?.phone, item.error))
+        ].join("");
+      }
+
+      function resultItem(status, name, phone, detail) {
+        return `<div class="result ${status}"><strong>${status}</strong><span>${name || "unknown"} · ${phone || "no phone"}</span><small>${detail || ""}</small></div>`;
+      }
+
+      async function run(label, fn) {
+        setBusy(true);
+        setStatus(`${label}...`);
+        try {
+          const data = await fn();
+          render(data);
+          setStatus(`${label} complete.`, "success");
+        } catch (error) {
+          setStatus(error.message || String(error), "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      $("previewBtn").addEventListener("click", () => run("Preview", () => api("/api/backfill/preview", payload())));
+      $("startBtn").addEventListener("click", () => run("Queueing batch", () => api("/api/backfill/start", payload())));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ASDleads Integrations</title>
+    <link rel="stylesheet" href="/integrations.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="toolbar" aria-label="Integration controls">
+        <div>
+          <h1>Integration Checks</h1>
+          <p>Safe connection checks for GHL, OpenAI, Slack, and calendar configuration.</p>
+        </div>
+        <div class="toolbar-actions">
+          <a class="link-button secondary" href="/training-status">Status</a>
+          <a class="link-button secondary" href="/tester">Tester</a>
+          <button id="refreshBtn" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="integration-grid">
+        <article class="panel">
+          <h2>GoHighLevel</h2>
+          <p id="ghlState" class="status-copy">Checking...</p>
+          <dl id="ghlFacts" class="state-list wide-list"></dl>
+        </article>
+
+        <article class="panel">
+          <h2>OpenAI</h2>
+          <p id="openaiState" class="status-copy">Checking...</p>
+          <dl id="openaiFacts" class="state-list wide-list"></dl>
+        </article>
+
+        <article class="panel">
+          <h2>Slack</h2>
+          <p id="slackState" class="status-copy">Checking...</p>
+          <dl id="slackFacts" class="state-list wide-list"></dl>
+        </article>
+
+        <article class="panel">
+          <h2>Calendar</h2>
+          <p id="calendarState" class="status-copy">Checking...</p>
+          <dl id="calendarFacts" class="state-list wide-list"></dl>
+        </article>
+      </section>
+
+      <section class="panel">
+        <h2>Next Integration Steps</h2>
+        <div id="nextSteps" class="jobs"></div>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      async function api(path) {
+        const response = await fetch(path);
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      async function refresh() {
+        const data = await api("/api/integrations/status");
+        render(data);
+      }
+
+      function render(data) {
+        const configured = data.configured || {};
+        const checks = data.checks || {};
+        const ghl = checks.ghl || {};
+        const openai = checks.openaiBatch || {};
+        const slack = checks.slack || {};
+
+        $("ghlState").textContent = stateText(ghl, "GHL read access works.", "GHL read access needs attention.");
+        $("ghlFacts").innerHTML = facts([
+          ["API token", configured.ghlToken ? "configured" : "missing"],
+          ["Location ID", configured.ghlLocationId ? "configured" : "missing"],
+          ["Message export", ghl.ok ? "reachable" : ghl.error || "not checked"],
+          ["Sample messages", ghl.value?.sampleMessageCount ?? "-"]
+        ]);
+
+        $("openaiState").textContent = stateText(openai, "OpenAI batch access works.", "OpenAI batch access needs attention.");
+        $("openaiFacts").innerHTML = facts([
+          ["API key", configured.openaiKey ? "configured" : "missing"],
+          ["LLM fallback", configured.llmFallbackEnabled ? "on" : "off"],
+          ["Batch status", openai.value?.batch?.status || openai.error || "-"],
+          ["Batch total", openai.value?.batch?.request_counts?.total ?? "-"]
+        ]);
+
+        $("slackState").textContent = stateText(slack, "Slack token is valid.", "Slack token/channel needs attention.");
+        $("slackFacts").innerHTML = facts([
+          ["Bot token", configured.slackToken ? "configured" : "missing"],
+          ["Escalations channel", configured.slackChannel || "missing"],
+          ["Bot errors channel", configured.slackBotErrorsChannel || "missing"],
+          ["Booking channel", configured.slackBookingChannel || "missing"],
+          ["Team", slack.value?.team || "-"],
+          ["Bot user", slack.value?.user || slack.error || "-"]
+        ]);
+
+        $("calendarState").textContent = configured.ghlCalendarId
+          ? "Calendar ID is configured. Real appointment creation stays off while DRY_RUN is on."
+          : "Calendar ID is missing.";
+        $("calendarFacts").innerHTML = facts([
+          ["Calendar ID", configured.ghlCalendarId ? "configured" : "missing"],
+          ["Dry run", data.dryRun ? "on" : "off"],
+          ["Real booking", data.dryRun ? "blocked safely" : "enabled"]
+        ]);
+
+        renderNextSteps(data);
+      }
+
+      function renderNextSteps(data) {
+        const items = [];
+        if (!data.configured.ghlToken || !data.configured.ghlLocationId) {
+          items.push("Finish GHL token and location configuration.");
+        }
+        if (!data.configured.ghlCalendarId) {
+          items.push("Add the GoHighLevel calendar ID before testing appointment creation.");
+        }
+        if (!data.configured.slackToken) {
+          items.push("Add Slack bot token before testing escalations.");
+        }
+        if (!data.configured.slackBotErrorsChannel) {
+          items.push("Add SLACK_BOT_ERRORS_CHANNEL for duplicate-phone notices and internal bot errors.");
+        }
+        if (!data.configured.slackBookingChannel) {
+          items.push("Add SLACK_BOOKING_CHANNEL for appointment-booked notifications.");
+        }
+        if (data.dryRun) {
+          items.push("Keep DRY_RUN on while testing. Real SMS, real booking, and real Slack sends should wait until the bot passes tester scenarios.");
+        }
+        items.push("After the OpenAI batch completes, update rules, then run full tester conversations before turning on live webhooks.");
+        $("nextSteps").innerHTML = items.map((item) => `<div class="job"><span>${escapeHtml(item)}</span></div>`).join("");
+      }
+
+      function stateText(result, okText, badText) {
+        if (result.ok && result.value?.ok !== false) return okText;
+        return result.error || result.value?.reason || badText;
+      }
+
+      function facts(items) {
+        return items.map(([key, value]) => `<dt>${key}</dt><dd>${escapeHtml(value ?? "-")}</dd>`).join("");
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      $("refreshBtn").addEventListener("click", () => refresh().catch((error) => alert(error.message)));
+      refresh().catch((error) => {
+        $("ghlState").textContent = error.message;
+      });
+    </script>
+  </body>
+</html>

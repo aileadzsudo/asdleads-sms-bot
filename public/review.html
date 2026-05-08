@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ASDleads Reply Review</title>
+    <link rel="stylesheet" href="/review.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="toolbar" aria-label="Review controls">
+        <div>
+          <h1>Reply Review Database</h1>
+          <p>Pull GHL SMS history, label real lead replies, and turn patterns into better bot rules.</p>
+        </div>
+        <div class="toolbar-actions">
+          <a class="link-button secondary" href="/training-status">Status</a>
+          <a class="link-button secondary" href="/integrations">Integrations</a>
+          <a class="link-button secondary" href="/tester">Tester</a>
+          <button id="initBtn" class="secondary" type="button">Init DB</button>
+          <button id="sampleImportBtn" type="button">Import Sample</button>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="panel chat-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Unlabeled Lead Replies</h2>
+              <p id="statusText">Loading...</p>
+            </div>
+            <div class="toolbar-actions">
+              <button id="refreshBtn" class="secondary" type="button">Refresh</button>
+              <button id="fullImportBtn" class="secondary" type="button">Import More</button>
+            </div>
+          </div>
+          <div id="examples" class="examples"></div>
+        </div>
+
+        <aside class="side">
+          <div class="panel">
+            <h2>Database Summary</h2>
+            <dl id="summary" class="state-list"></dl>
+          </div>
+
+          <div class="panel">
+            <h2>Label Counts</h2>
+            <div id="labelCounts" class="jobs"></div>
+          </div>
+
+          <div class="panel">
+            <h2>Common Phrases</h2>
+            <div id="phrases" class="jobs"></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const labels = [
+        "accident_date",
+        "fault_not_at_fault",
+        "fault_at_fault",
+        "fault_unclear",
+        "medical_yes",
+        "medical_no",
+        "call_now",
+        "call_later",
+        "opt_out",
+        "wrong_number",
+        "asks_who_this_is",
+        "human_request",
+        "prefers_text",
+        "document_or_report",
+        "confused",
+        "needs_escalation",
+        "off_topic"
+      ];
+
+      const $ = (id) => document.getElementById(id);
+      let offset = 0;
+
+      async function api(path, body) {
+        const response = await fetch(path, {
+          method: body ? "POST" : "GET",
+          headers: body ? { "Content-Type": "application/json" } : {},
+          body: body ? JSON.stringify(body) : undefined
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      async function loadAll() {
+        const [summary, examples, phrases] = await Promise.all([
+          api("/api/training/summary"),
+          api(`/api/training/examples?mode=unlabeled&limit=20&offset=${offset}`),
+          api("/api/training/phrases?limit=30")
+        ]);
+        renderSummary(summary);
+        renderExamples(examples.examples || []);
+        renderPhrases(phrases.phrases || []);
+      }
+
+      function renderSummary(data) {
+        $("statusText").textContent = `${data.examples || 0} examples, ${data.unlabeled || 0} unlabeled.`;
+        $("summary").innerHTML = [
+          ["Messages", data.messages],
+          ["Examples", data.examples],
+          ["Labeled", data.labeled],
+          ["Unlabeled", data.unlabeled],
+          ["Last import", data.lastImport?.status || "none"],
+          ["Pages", data.lastImport?.pages || "—"]
+        ].map(([k, v]) => `<dt>${k}</dt><dd>${v ?? "—"}</dd>`).join("");
+        $("labelCounts").innerHTML = (data.labelCounts || []).length
+          ? data.labelCounts.map((row) => `<div class="job"><strong>${row.label}</strong><span>${row.n}</span></div>`).join("")
+          : '<div class="empty small">No labels yet.</div>';
+      }
+
+      function renderExamples(items) {
+        const root = $("examples");
+        if (!items.length) {
+          root.innerHTML = '<div class="empty">No unlabeled replies found yet. Import messages first or refresh.</div>';
+          return;
+        }
+        root.innerHTML = "";
+        for (const item of items) {
+          const card = document.createElement("article");
+          card.className = "review-card";
+          card.innerHTML = `
+            <div class="turn outbound"><span>Previous human text</span><p>${escapeHtml(item.previous_outbound_message || "No previous outbound message found")}</p></div>
+            <div class="turn inbound"><span>Lead reply</span><p>${escapeHtml(item.lead_message)}</p></div>
+            <div class="turn outbound muted-turn"><span>Next human text</span><p>${escapeHtml(item.next_outbound_message || "No next outbound message found")}</p></div>
+            <div class="suggestion">Suggested: <strong>${escapeHtml(item.suggested_label || "unclassified")}</strong></div>
+            <div class="label-grid">
+              ${labels.map((label) => `<button type="button" class="label-btn" data-id="${item.id}" data-label="${label}">${label}</button>`).join("")}
+            </div>
+          `;
+          root.appendChild(card);
+        }
+        root.querySelectorAll(".label-btn").forEach((button) => {
+          button.addEventListener("click", async () => {
+            await api("/api/training/label", { id: button.dataset.id, label: button.dataset.label });
+            await loadAll();
+          });
+        });
+      }
+
+      function renderPhrases(items) {
+        $("phrases").innerHTML = items.length
+          ? items.map((row) => `<div class="job"><strong>${escapeHtml(row.phrase)}</strong><span>${escapeHtml(row.label)} · ${row.n}</span></div>`).join("")
+          : '<div class="empty small">No phrases yet.</div>';
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      $("initBtn").addEventListener("click", async () => {
+        await api("/api/training/init", {});
+        await loadAll();
+      });
+
+      $("sampleImportBtn").addEventListener("click", async () => {
+        $("statusText").textContent = "Importing one sample page from GHL...";
+        await api("/api/training/import", { maxPages: 1, pageSize: 100 });
+        await loadAll();
+      });
+
+      $("fullImportBtn").addEventListener("click", async () => {
+        $("statusText").textContent = "Importing more pages from GHL...";
+        await api("/api/training/import", { maxPages: 10, pageSize: 100 });
+        await loadAll();
+      });
+
+      $("refreshBtn").addEventListener("click", loadAll);
+      loadAll().catch((error) => {
+        $("statusText").textContent = error.message;
+      });
+    </script>
+  </body>
+</html>

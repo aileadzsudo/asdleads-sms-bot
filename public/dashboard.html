@@ -1,0 +1,1533 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ASDleads SMS Bot Dashboard</title>
+    <link rel="stylesheet" href="/dashboard.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <strong>ASDleads</strong>
+          <span>SMS Bot Admin</span>
+        </div>
+        <nav class="side-nav" aria-label="Dashboard sections">
+          <a href="/dashboard" data-page-link="overview">Overview</a>
+          <a href="/dashboard/leads" data-page-link="leads">Leads</a>
+          <a href="/dashboard/issues" data-page-link="issues">Issues</a>
+          <a href="/dashboard/appointments" data-page-link="appointments">Appointments</a>
+          <a href="/dashboard/performance" data-page-link="performance">Performance</a>
+          <a href="/dashboard/ab-testing" data-page-link="ab-testing">A/B Testing</a>
+          <a href="/dashboard/templates" data-page-link="templates">Templates</a>
+          <a href="/dashboard/review" data-page-link="review">Review</a>
+        </nav>
+        <div class="side-tools">
+          <a href="/tester">Tester</a>
+          <a href="/backfill">Backfill</a>
+          <a href="/integrations">Integrations</a>
+        </div>
+      </aside>
+
+      <main class="app">
+        <section class="toolbar">
+          <div>
+            <h1 id="pageTitle">Overview</h1>
+            <p id="pageSubtitle">Quick executive readout of bot volume, replies, bookings, and risk.</p>
+          </div>
+          <div class="toolbar-actions">
+            <button id="refreshBtn" type="button">Refresh</button>
+          </div>
+        </section>
+
+        <section id="authPanel" class="panel auth-panel" hidden>
+          <h2>Admin Access</h2>
+          <p class="small">Enter the dashboard password configured as <code>ADMIN_PASSWORD</code>.</p>
+          <form id="authForm" class="auth-form">
+            <input id="adminPassword" type="password" autocomplete="current-password" placeholder="Dashboard password" />
+            <button type="submit">Unlock</button>
+          </form>
+        </section>
+
+        <section class="status-strip" aria-live="polite">
+          <div id="modeBadge" class="badge">Checking...</div>
+          <div id="storageBadge" class="badge">Storage</div>
+          <div id="generatedBadge" class="badge">Updated</div>
+        </section>
+
+        <section class="page-section" data-page="overview">
+          <section class="metric-grid" id="metrics"></section>
+          <section class="grid wide-left">
+            <div class="panel">
+              <div class="section-header">
+                <div>
+                  <h2>Live Conversations</h2>
+                  <p class="small">Recent replies and active leads that may need attention.</p>
+                </div>
+                <button class="secondary" type="button" data-page-jump="leads">View all</button>
+              </div>
+              <div id="overviewLive" class="conversation-list"></div>
+            </div>
+            <div class="panel">
+              <h2>Today At A Glance</h2>
+              <div id="dailySummary" class="summary-grid friendly"></div>
+            </div>
+          </section>
+          <section class="grid wide-left">
+            <div class="panel">
+              <div class="section-header">
+                <div>
+                  <h2>Lead Status Board</h2>
+                  <p class="small">Where contacts are sitting in the bot lifecycle.</p>
+                </div>
+                <button class="secondary" type="button" data-page-jump="performance">Analytics</button>
+              </div>
+              <div id="overviewStatusBoard" class="status-board"></div>
+            </div>
+            <div class="panel">
+              <div class="section-header">
+                <h2>Needs Attention</h2>
+                <button class="secondary" type="button" data-page-jump="issues">Open issues</button>
+              </div>
+              <div id="alerts" class="alert-list"></div>
+            </div>
+          </section>
+          <section class="grid">
+            <div class="panel">
+              <h2>Escalation Queue</h2>
+              <div id="overviewEscalations" class="mini-list"></div>
+            </div>
+            <div class="panel">
+              <h2>Upcoming Calls</h2>
+              <div id="overviewCalls" class="mini-list"></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page-section" data-page="leads" hidden>
+          <section class="panel command-panel">
+            <div class="section-header">
+              <div>
+                <h2>Lead Command Center</h2>
+                <p class="small">Search, filter, bulk pause, bulk return, and inspect contact history.</p>
+              </div>
+              <div class="bulk-actions">
+                <input id="contactSearch" placeholder="Search name, phone, source, status..." />
+                <select id="statusFilter">
+                  <option value="">All statuses</option>
+                  <option value="hot">Hot leads</option>
+                  <option value="issue">Needs review</option>
+                  <option value="escalated_to_human">Escalated</option>
+                  <option value="call_scheduled">Booked calls</option>
+                  <option value="automation_paused">Paused</option>
+                </select>
+                <button id="bulkPauseBtn" class="secondary" type="button">Pause Selected</button>
+                <button id="bulkReturnBtn" class="secondary" type="button">Return Selected</button>
+              </div>
+            </div>
+            <div id="filteredContacts" class="contact-cards"></div>
+          </section>
+          <section class="grid wide-left">
+            <div class="panel">
+              <h2>Recent Contacts</h2>
+              <div id="contacts" class="table-wrap"></div>
+            </div>
+            <div class="panel">
+              <h2>Recent Messages</h2>
+              <div id="messages" class="message-list"></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page-section" data-page="issues" hidden>
+          <section class="grid">
+            <div class="panel">
+              <h2>Escalation SLA</h2>
+              <div id="slaList" class="mini-list"></div>
+            </div>
+            <div class="panel">
+              <h2>Bot Confusion Queue</h2>
+              <div id="botConfusion" class="contact-cards compact"></div>
+            </div>
+          </section>
+          <section class="grid">
+            <div class="panel">
+              <h2>Hot Leads</h2>
+              <p class="small">High-priority contacts based on recent replies, booking intent, escalations, and pending automation.</p>
+              <div id="hotLeads" class="contact-cards compact"></div>
+            </div>
+            <div class="panel">
+              <h2>Safety Monitor</h2>
+              <p class="small">System risks that should be reviewed before the bot keeps moving contacts forward.</p>
+              <div id="safetyMonitor" class="alert-list"></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-header">
+              <div>
+                <h2>Issue Queue</h2>
+                <p class="small">Contacts where the bot may be stuck, paused, missing data, or waiting on humans.</p>
+              </div>
+            </div>
+            <div id="issueContacts" class="contact-cards"></div>
+          </section>
+          <section class="panel">
+            <h2>Human Speed To Lead</h2>
+            <div id="speed" class="speed-panel"></div>
+          </section>
+        </section>
+
+        <section class="page-section" data-page="appointments" hidden>
+          <section class="grid wide-left">
+            <div class="panel">
+              <h2>Appointment Pipeline</h2>
+              <div id="appointmentPipeline" class="table-wrap"></div>
+            </div>
+            <div class="panel">
+              <h2>Automation Assist</h2>
+              <p class="small">LLM fallback use and failure count for messages the rules could not confidently classify.</p>
+              <div id="llmUsage" class="summary-grid"></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page-section" data-page="performance" hidden>
+          <section class="panel chart-panel">
+            <div class="section-header">
+              <div>
+                <h2>Activity Explorer</h2>
+                <p class="small">Choose week, month, or year; toggle metrics; click a day to inspect counts.</p>
+              </div>
+              <div class="chart-controls">
+                <div class="segmented" aria-label="Date range">
+                  <button type="button" data-range="7">Week</button>
+                  <button type="button" data-range="30" class="is-active">Month</button>
+                  <button type="button" data-range="365">Year</button>
+                </div>
+                <div class="metric-toggles">
+                  <label><input type="checkbox" data-chart-metric="outbound" checked /> Sent</label>
+                  <label><input type="checkbox" data-chart-metric="inbound" checked /> Replies</label>
+                  <label><input type="checkbox" data-chart-metric="bookings" /> Bookings</label>
+                  <label><input type="checkbox" data-chart-metric="escalations" /> Escalations</label>
+                </div>
+              </div>
+            </div>
+            <div id="activityChart" class="activity-chart"></div>
+            <div id="activityDetail" class="activity-detail"></div>
+          </section>
+          <section class="grid">
+            <div class="panel">
+              <h2>Source Performance</h2>
+              <div id="sourcePerformance" class="table-wrap"></div>
+            </div>
+            <div class="panel">
+              <h2>Reply Time Heatmap</h2>
+              <div id="timezoneHeatmap" class="heatmap-list"></div>
+            </div>
+          </section>
+          <section class="grid">
+            <div class="panel">
+              <h2>Lifecycle Funnel</h2>
+              <div id="funnel" class="funnel-list"></div>
+            </div>
+            <div class="panel">
+              <h2>Lifecycle Status</h2>
+              <div id="engagement" class="bar-list"></div>
+            </div>
+          </section>
+          <section class="grid">
+            <div class="panel">
+              <h2>Qualification</h2>
+              <div id="qualification" class="bar-list"></div>
+            </div>
+          </section>
+          <section class="grid">
+            <div class="panel">
+              <h2>Sequences</h2>
+              <div id="sequences" class="bar-list"></div>
+            </div>
+            <div class="panel">
+              <h2>Escalation Reasons</h2>
+              <div id="reasons" class="bar-list"></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page-section" data-page="ab-testing" hidden>
+          <section class="panel script-command">
+            <div class="section-header">
+              <div>
+                <h2>Live Script Library</h2>
+                <p class="small">Current bot copy, actual sends, replies, and response rate. Start tests from the rows that matter.</p>
+              </div>
+              <div class="bulk-actions">
+                <input id="scriptSearch" placeholder="Search scripts, copy, sequence..." />
+                <select id="scriptGroupFilter">
+                  <option value="">All script groups</option>
+                </select>
+              </div>
+            </div>
+            <div id="scriptPerformanceSummary" class="summary-grid friendly"></div>
+            <div id="currentScriptPerformance" class="table-wrap script-table"></div>
+          </section>
+          <section class="grid wide-left">
+            <div class="panel">
+              <div class="section-header">
+                <div>
+                  <h2>Experiment Builder</h2>
+                  <p class="small">Pick one SMS template, write a variation, set traffic split, then activate the test.</p>
+                </div>
+                <div class="bulk-actions">
+                  <button id="loadAbTestsBtn" class="secondary" type="button">Load Tests</button>
+                  <button id="addAbTestBtn" type="button">New Test</button>
+                  <button id="saveAbTestsBtn" type="button">Save Tests</button>
+                </div>
+              </div>
+              <div id="abStatus" class="small">A/B tests not loaded yet.</div>
+              <div id="abEditor" class="ab-editor"></div>
+            </div>
+            <div class="panel">
+              <h2>How To Use This</h2>
+              <div class="explain-list">
+                <div><strong>1. Draft</strong><span>Create a variant for a specific template.</span></div>
+                <div><strong>2. Activate</strong><span>The bot splits future sends by contact, so the same contact stays consistent.</span></div>
+                <div><strong>3. Read Results</strong><span>Compare sends, replies, and response rate by variant.</span></div>
+                <div><strong>4. Push Winner</strong><span>Copy the winning variant into the template editor and save it live.</span></div>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <h2>Variant Performance</h2>
+            <div id="abPerformance" class="ab-performance"></div>
+          </section>
+        </section>
+
+        <section class="page-section" data-page="templates" hidden>
+          <section class="panel">
+            <div class="section-header">
+              <div>
+                <h2>Template Editor</h2>
+                <p class="small">Change live bot copy and emoji usage. Save applies immediately to future messages.</p>
+              </div>
+              <div class="bulk-actions">
+                <button id="loadTemplatesBtn" class="secondary" type="button">Load Templates</button>
+                <button id="saveTemplatesBtn" type="button">Save Template Changes</button>
+                <button id="resetTemplatesBtn" class="danger" type="button">Reset Templates</button>
+              </div>
+            </div>
+            <div id="templateStatus" class="small">Templates not loaded yet.</div>
+            <div id="templateEditor" class="template-editor"></div>
+          </section>
+        </section>
+
+        <section class="page-section" data-page="review" hidden>
+          <section class="grid">
+            <div class="panel">
+              <h2>Quality Review Queue</h2>
+              <div id="qualityQueue" class="contact-cards compact"></div>
+            </div>
+            <div class="panel">
+              <h2>Replay Simulator</h2>
+              <p class="small">Open any contact, read the timeline, then use the tester to replay the conversation against the current templates and LLM fallback.</p>
+              <a class="link-button" href="/tester">Open Tester</a>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <aside id="detailDrawer" class="drawer" aria-hidden="true">
+      <div class="drawer-backdrop" data-close-detail></div>
+      <section class="drawer-panel" aria-label="Contact details">
+        <div class="drawer-header">
+          <div>
+            <p class="small">Contact Detail</p>
+            <h2 id="detailName">Select a contact</h2>
+            <p id="detailPhone" class="small"></p>
+          </div>
+          <button class="secondary icon-button" type="button" data-close-detail>Close</button>
+        </div>
+        <div id="detailBody" class="detail-body"></div>
+      </section>
+    </aside>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const passwordKey = "asd_dashboard_password";
+      let state = null;
+      let selectedContactId = "";
+      let abData = { experiments: [], templates: [] };
+      let activityRange = 30;
+      let selectedActivityKey = "";
+      const activityMetrics = {
+        outbound: { label: "Sent", color: "#2563eb" },
+        inbound: { label: "Replies", color: "#15803d" },
+        bookings: { label: "Bookings", color: "#7c3aed" },
+        escalations: { label: "Escalations", color: "#dc2626" }
+      };
+      const pages = {
+        overview: ["Overview", "Quick executive readout of bot volume, replies, bookings, and risk."],
+        leads: ["Leads", "Search, filter, inspect, and control active lead automation."],
+        issues: ["Issues", "Find stuck contacts, bot confusion, human SLA misses, and safety problems."],
+        appointments: ["Appointments", "Track booked calls, confirmations, reminders, missed calls, and reschedules."],
+        performance: ["Performance", "Review source quality, lifecycle conversion, reply timing, and sequence mix."],
+        templates: ["Templates", "Edit live SMS templates, wording, and emoji usage for future messages."],
+        "ab-testing": ["A/B Testing", "Create SMS variants, activate traffic splits, and compare response rates."],
+        review: ["Review", "Quality review and replay tools for improving bot behavior."]
+      };
+
+      function currentPage() {
+        const part = location.pathname.replace(/^\/dashboard\/?/, "").split("/")[0] || "overview";
+        return pages[part] ? part : "overview";
+      }
+
+      function setPage(page, push = false) {
+        const safePage = pages[page] ? page : "overview";
+        if (push) history.pushState({}, "", safePage === "overview" ? "/dashboard" : `/dashboard/${safePage}`);
+        for (const section of document.querySelectorAll(".page-section")) {
+          section.hidden = section.dataset.page !== safePage;
+        }
+        for (const link of document.querySelectorAll("[data-page-link]")) {
+          link.classList.toggle("is-active", link.dataset.pageLink === safePage);
+        }
+        $("pageTitle").textContent = pages[safePage][0];
+        $("pageSubtitle").textContent = pages[safePage][1];
+        if (safePage === "templates" && !$("templateEditor").innerHTML.trim()) loadTemplates();
+        if (safePage === "ab-testing" && !$("abEditor").innerHTML.trim()) loadAbTests();
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function fmtNumber(value) {
+        return new Intl.NumberFormat("en-US").format(value || 0);
+      }
+
+      function fmtMinutes(value) {
+        if (value === null || value === undefined) return "No data yet";
+        if (value < 1) return "<1 min";
+        if (value < 60) return `${Math.round(value)} min`;
+        return `${(value / 60).toFixed(1)} hr`;
+      }
+
+      function fmtDate(value) {
+        if (!value) return "-";
+        return new Intl.DateTimeFormat("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit"
+        }).format(new Date(value));
+      }
+
+      function cleanLabel(value) {
+        return String(value || "unknown").replaceAll("_", " ");
+      }
+
+      function safeHref(value) {
+        try {
+          const url = new URL(value);
+          return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+        } catch {
+          return "";
+        }
+      }
+
+      function adminHeaders() {
+        const password = sessionStorage.getItem(passwordKey) || "";
+        return password ? { "x-admin-password": password } : {};
+      }
+
+      async function fetchDashboard() {
+        const response = await fetch("/api/admin/dashboard", { headers: adminHeaders() });
+        if (response.status === 401) {
+          $("authPanel").hidden = false;
+          throw new Error("Dashboard password required.");
+        }
+        if (!response.ok) throw new Error(await response.text());
+        $("authPanel").hidden = true;
+        return response.json();
+      }
+
+      async function fetchContact(contactId) {
+        const response = await fetch(`/api/admin/contact?contactId=${encodeURIComponent(contactId)}`, { headers: adminHeaders() });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      async function postContactAction(contactId, action) {
+        const response = await fetch("/api/admin/contact/action", {
+          method: "POST",
+          headers: { ...adminHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ contactId, action })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      async function postNote(contactId, note) {
+        const response = await fetch("/api/admin/contact/note", {
+          method: "POST",
+          headers: { ...adminHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ contactId, note })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      async function postBulkAction(contactIds, action) {
+        const response = await fetch("/api/admin/contact/bulk-action", {
+          method: "POST",
+          headers: { ...adminHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ contactIds, action })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      async function templateApi(path, body) {
+        const response = await fetch(path, {
+          method: body ? "POST" : "GET",
+          headers: body ? { ...adminHeaders(), "Content-Type": "application/json" } : adminHeaders(),
+          body: body ? JSON.stringify(body) : undefined
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      async function abApi(path, body) {
+        const response = await fetch(path, {
+          method: body ? "POST" : "GET",
+          headers: body ? { ...adminHeaders(), "Content-Type": "application/json" } : adminHeaders(),
+          body: body ? JSON.stringify(body) : undefined
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      function metric(label, value, note = "") {
+        return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(note)}</small></div>`;
+      }
+
+      function renderMetrics(data) {
+        const totals = data.totals || {};
+        $("metrics").innerHTML = [
+          metric("Contacts", fmtNumber(totals.contacts), "tracked by bot"),
+          metric("Needs Review", fmtNumber(totals.issueContacts), "issue queue"),
+          metric("Outbound SMS", fmtNumber(totals.outboundMessages), `${fmtNumber(totals.outbound24h)} last 24h`),
+          metric("Inbound SMS", fmtNumber(totals.inboundMessages), `${fmtNumber(totals.inbound24h)} last 24h`),
+          metric("Escalations", fmtNumber(totals.escalations), `${fmtNumber(totals.escalations24h)} last 24h`),
+          metric("Ready Now", fmtNumber(totals.readyForCall), "urgent call requests"),
+          metric("Booked Calls", fmtNumber(totals.callScheduled), "scheduled"),
+          metric("Failed Jobs", fmtNumber(totals.failedJobs), "must be reviewed")
+        ].join("");
+      }
+
+      function renderBars(id, values) {
+        const entries = Object.entries(values || {}).sort((a, b) => b[1] - a[1]);
+        const max = Math.max(1, ...entries.map((entry) => entry[1]));
+        $(id).innerHTML = entries.length
+          ? entries.map(([label, value]) => `
+              <div class="bar-row">
+                <div class="bar-label"><span>${escapeHtml(cleanLabel(label))}</span><strong>${fmtNumber(value)}</strong></div>
+                <div class="bar"><span style="width:${Math.max(6, (value / max) * 100)}%"></span></div>
+              </div>
+            `).join("")
+          : '<p class="small">No data yet.</p>';
+      }
+
+      function alertItem(type, title, detail) {
+        return `<div class="alert ${type}"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
+      }
+
+      function renderAlerts(data) {
+        const alerts = data.alerts || {};
+        const totals = data.totals || {};
+        const items = [];
+        if (totals.unacknowledgedEscalations) {
+          items.push(alertItem("urgent", `${totals.unacknowledgedEscalations} unacknowledged escalation(s)`, "Click to open the issue queue."));
+        }
+        if (totals.failedJobs) {
+          items.push(alertItem("urgent", `${totals.failedJobs} failed scheduled job(s)`, "Click to review failed automation."));
+        }
+        if (totals.dueJobs) {
+          items.push(alertItem("warn", `${totals.dueJobs} due job(s) waiting`, "Click to review scheduled jobs."));
+        }
+        if ((alerts.duplicateConflicts || []).length) {
+          items.push(alertItem("warn", `${alerts.duplicateConflicts.length} duplicate phone conflict(s)`, "Bot paused these to protect duplicate GHL contacts."));
+        }
+        if ((alerts.missingTimezone || []).length) {
+          items.push(alertItem("warn", `${alerts.missingTimezone.length} contact(s) missing timezone`, "Default timezone will be used unless GHL supplies one."));
+        }
+        if ((alerts.paused || []).length) {
+          items.push(alertItem("info", `${alerts.paused.length} paused contact(s)`, "Includes NQ, signed, DNC, duplicate, or human-paused records."));
+        }
+        $("alerts").innerHTML = items.length
+          ? items.map((item) => `<button class="alert-button" type="button" data-page-jump="issues">${item}</button>`).join("")
+          : '<p class="small">No active issues found.</p>';
+      }
+
+      function renderSpeed(data) {
+        const speed = data.speedToLead || {};
+        $("speed").innerHTML = [
+          metric("Average Ack", fmtMinutes(speed.averageMinutes), `${fmtNumber(speed.acknowledgedCount)} acknowledged`),
+          metric("Fastest", fmtMinutes(speed.fastestMinutes), "best response"),
+          metric("Slowest", fmtMinutes(speed.slowestMinutes), "needs coaching if high")
+        ].join("");
+      }
+
+      function chips(flags = []) {
+        return flags.map((flag) => `<span class="chip ${escapeHtml(flag.type)}">${escapeHtml(flag.label)}</span>`).join("");
+      }
+
+      function contactCard(contact) {
+        return `
+          <button class="contact-card" type="button" data-contact-id="${escapeHtml(contact.id)}">
+            <div>
+              <strong>${escapeHtml(contact.name || "Unknown")}</strong>
+              <span>${escapeHtml(contact.phone || "")}</span>
+            </div>
+            <div class="contact-card-status">
+              <span>${escapeHtml(cleanLabel(contact.engagementStatus))}</span>
+              <small>${escapeHtml(fmtDate(contact.lastActivityAt))}</small>
+            </div>
+            <div class="chip-row">${chips(contact.issueFlags)}</div>
+          </button>
+        `;
+      }
+
+      function selectableContactCard(contact) {
+        return `
+          <div class="contact-card selectable">
+            <label class="select-line">
+              <input type="checkbox" class="bulk-select" value="${escapeHtml(contact.id)}" />
+              <span>Select</span>
+            </label>
+            <button class="card-open" type="button" data-contact-id="${escapeHtml(contact.id)}">
+              <strong>${escapeHtml(contact.name || "Unknown")}</strong>
+              <span>${escapeHtml(contact.phone || "")}</span>
+              <small>${escapeHtml(cleanLabel(contact.engagementStatus))} · risk ${escapeHtml(contact.riskScore || 0)}</small>
+              <div class="chip-row">${chips(contact.issueFlags)}</div>
+            </button>
+          </div>
+        `;
+      }
+
+      function allCommandContacts() {
+        if (!state) return [];
+        const map = new Map();
+        for (const contact of [...(state.hotLeads || []), ...(state.issueContacts || []), ...(state.recentContacts || [])]) {
+          map.set(contact.id, contact);
+        }
+        return Array.from(map.values());
+      }
+
+      function renderFilteredContacts() {
+        const search = $("contactSearch").value.toLowerCase().trim();
+        const filter = $("statusFilter").value;
+        const contacts = allCommandContacts().filter((contact) => {
+          const haystack = [
+            contact.name,
+            contact.phone,
+            contact.leadSource,
+            contact.engagementStatus,
+            contact.qualificationProgress,
+            contact.currentSequenceName
+          ].join(" ").toLowerCase();
+          if (search && !haystack.includes(search)) return false;
+          if (filter === "hot" && !(contact.riskScore >= 35)) return false;
+          if (filter === "issue" && !(contact.issueFlags || []).length) return false;
+          if (filter === "automation_paused" && !contact.automationPaused) return false;
+          if (filter && !["hot", "issue", "automation_paused"].includes(filter) && contact.engagementStatus !== filter) return false;
+          return true;
+        });
+        $("filteredContacts").innerHTML = contacts.length ? contacts.slice(0, 80).map(selectableContactCard).join("") : '<p class="small">No contacts match this filter.</p>';
+      }
+
+      function renderIssueContacts(data) {
+        $("issueContacts").innerHTML = (data.issueContacts || []).length
+          ? data.issueContacts.map(contactCard).join("")
+          : '<p class="small">No issue contacts right now.</p>';
+      }
+
+      function renderContactCards(id, contacts) {
+        if (!$(id)) return;
+        $(id).innerHTML = (contacts || []).length ? contacts.map(contactCard).join("") : '<p class="small">No contacts in this queue.</p>';
+      }
+
+      function renderFunnel(data) {
+        const funnel = data.funnel || [];
+        const max = Math.max(1, funnel[0]?.count || 0);
+        $("funnel").innerHTML = funnel.map((item) => `
+          <div class="funnel-row">
+            <div><strong>${escapeHtml(item.label)}</strong><span>${fmtNumber(item.count)}</span></div>
+            <div class="bar"><span style="width:${Math.max(4, (item.count / max) * 100)}%"></span></div>
+          </div>
+        `).join("");
+      }
+
+      function renderSummaryGrid(id, values) {
+        $(id).innerHTML = Object.entries(values || {}).map(([key, value]) => metric(cleanLabel(key), typeof value === "number" ? fmtNumber(value) : value)).join("");
+      }
+
+      function renderFriendlyDailySummary(data) {
+        const summary = data.dailySummary || {};
+        const rows = [
+          ["Started today", summary.started || 0, "contacts entered bot flow"],
+          ["Replies today", summary.inbound || 0, "lead responses received"],
+          ["SMS sent today", summary.outbound || 0, "bot messages delivered/queued"],
+          ["Escalations today", summary.escalations || 0, "human review needed"],
+          ["Booked today", summary.booked || 0, "appointments created"],
+          ["Issues open", summary.issueContacts || 0, "contacts needing review"]
+        ];
+        $("dailySummary").innerHTML = rows.map(([label, value, note]) => metric(label, fmtNumber(value), note)).join("");
+      }
+
+      function renderOverviewLive(data) {
+        const contacts = (data.hotLeads || data.recentContacts || []).slice(0, 5);
+        $("overviewLive").innerHTML = contacts.length
+          ? contacts.map((contact) => `
+              <button class="conversation-row" type="button" data-contact-id="${escapeHtml(contact.id)}">
+                <div><strong>${escapeHtml(contact.name || "Unknown")}</strong><span>${escapeHtml(contact.lastInboundMessage || contact.lastOutboundMessage || "No message preview")}</span></div>
+                <small>${escapeHtml(fmtDate(contact.lastActivityAt))}</small>
+              </button>
+            `).join("")
+          : '<p class="small">No active conversations yet.</p>';
+      }
+
+      function renderOverviewStatusBoard(data) {
+        const engagement = data.breakdowns?.engagement || {};
+        const cards = [
+          ["New Lead", engagement.new_lead || 0],
+          ["Cold Outreach", (engagement.initial_sms_sent || 0) + (engagement.cold_outreach || 0)],
+          ["Active Conversation", (engagement.active_conversation || 0) + (engagement.warm_follow_up || 0)],
+          ["Call Scheduled", engagement.call_scheduled || 0],
+          ["Escalated", engagement.escalated_to_human || 0],
+          ["Opted Out", engagement.opted_out || 0]
+        ];
+        $("overviewStatusBoard").innerHTML = cards.map(([label, value]) => `
+          <button class="status-card" type="button" data-page-jump="leads">
+            <strong>${fmtNumber(value)}</strong>
+            <span>${escapeHtml(label)}</span>
+          </button>
+        `).join("");
+      }
+
+      function renderOverviewEscalations(data) {
+        const items = (data.escalationSla || []).slice(0, 5);
+        $("overviewEscalations").innerHTML = items.length
+          ? items.map((item) => `
+              <button class="mini-row ${item.bucket === "15+" ? "failed" : "pending"}" type="button" data-contact-id="${escapeHtml(item.id)}">
+                <strong>${escapeHtml(item.name || "Unknown")}</strong>
+                <span>${escapeHtml(fmtMinutes(item.waitingMinutes))} waiting · ${escapeHtml(item.reason || "human review")}</span>
+              </button>
+            `).join("")
+          : '<p class="small">No escalations waiting right now.</p>';
+      }
+
+      function renderOverviewCalls(data) {
+        const calls = (data.appointmentPipeline || []).slice(0, 5);
+        $("overviewCalls").innerHTML = calls.length
+          ? calls.map((item) => `
+              <button class="mini-row pending" type="button" data-contact-id="${escapeHtml(item.id)}">
+                <strong>${escapeHtml(item.name || "Unknown")}</strong>
+                <span>${escapeHtml(item.preferredCallTime || "No time saved")} · ${item.confirmed ? "confirmed" : "not confirmed"}</span>
+              </button>
+            `).join("")
+          : '<p class="small">No upcoming calls yet.</p>';
+      }
+
+      function activeChartMetrics() {
+        return Array.from(document.querySelectorAll("[data-chart-metric]:checked")).map((input) => input.dataset.chartMetric);
+      }
+
+      function activityRows() {
+        const rows = (state?.activityHistory || []).slice(-activityRange);
+        if (activityRange !== 365) return rows;
+        const months = new Map();
+        for (const row of rows) {
+          const date = new Date(`${row.key}T12:00:00`);
+          const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+          const existing = months.get(key) || {
+            key,
+            label: new Intl.DateTimeFormat("en-US", { month: "short" }).format(date),
+            outbound: 0,
+            inbound: 0,
+            bookings: 0,
+            escalations: 0
+          };
+          for (const metric of Object.keys(activityMetrics)) existing[metric] += Number(row[metric] || 0);
+          months.set(key, existing);
+        }
+        return Array.from(months.values());
+      }
+
+      function summarizeActivity(rows, metrics) {
+        const summary = {};
+        for (const metric of metrics) summary[metric] = rows.reduce((sum, item) => sum + Number(item[metric] || 0), 0);
+        return summary;
+      }
+
+      function renderActivityDetail(row, rows, metrics) {
+        const selected = row || rows[rows.length - 1] || {};
+        const summary = summarizeActivity(rows, metrics);
+        $("activityDetail").innerHTML = `
+          <div class="activity-summary">
+            <strong>${escapeHtml(selected.key ? `Selected: ${selected.label}` : "Selected period")}</strong>
+            <div class="activity-stat-row">
+              ${metrics.map((metric) => `<span><b>${fmtNumber(selected[metric] || 0)}</b>${activityMetrics[metric].label}</span>`).join("")}
+            </div>
+          </div>
+          <div class="activity-summary total">
+            <strong>${activityRange === 7 ? "Last week total" : activityRange === 30 ? "Last month total" : "Last year total"}</strong>
+            <div class="activity-stat-row">
+              ${metrics.map((metric) => `<span><b>${fmtNumber(summary[metric] || 0)}</b>${activityMetrics[metric].label}</span>`).join("")}
+            </div>
+          </div>
+        `;
+      }
+
+      function renderActivityChart() {
+        if (!state) return;
+        const rows = activityRows();
+        const metrics = activeChartMetrics();
+        const max = Math.max(1, ...rows.map((item) => metrics.reduce((sum, metric) => sum + Number(item[metric] || 0), 0)));
+        const selected = rows.find((item) => item.key === selectedActivityKey) || rows[rows.length - 1];
+        $("activityChart").innerHTML = rows.map((item) => {
+          const active = selected?.key === item.key ? "is-selected" : "";
+          const total = metrics.reduce((sum, metric) => sum + Number(item[metric] || 0), 0);
+          return `
+            <button type="button" class="activity-day ${active}" data-activity-key="${escapeHtml(item.key)}" aria-label="${escapeHtml(item.label)} activity">
+              <div class="activity-bars">
+                ${metrics.map((metric) => {
+                  const value = Number(item[metric] || 0);
+                  return `<span title="${escapeHtml(activityMetrics[metric].label)}: ${fmtNumber(value)}" style="height:${Math.max(value ? 5 : 0, (value / max) * 100)}%; background:${activityMetrics[metric].color}"></span>`;
+                }).join("")}
+              </div>
+              <strong>${escapeHtml(item.label)}</strong>
+              <small>${fmtNumber(total)}</small>
+            </button>
+          `;
+        }).join("");
+        renderActivityDetail(selected, rows, metrics);
+      }
+
+      function renderSla(data) {
+        $("slaList").innerHTML = (data.escalationSla || []).length
+          ? data.escalationSla.map((item) => `
+              <button class="mini-row ${item.bucket === "15+" ? "failed" : "pending"}" type="button" data-contact-id="${escapeHtml(item.id)}">
+                <strong>${escapeHtml(item.name || "Unknown")} · ${escapeHtml(item.bucket)}</strong>
+                <span>${escapeHtml(fmtMinutes(item.waitingMinutes))} · ${escapeHtml(cleanLabel(item.stage))}</span>
+                <small>${escapeHtml(item.reason || "")}</small>
+              </button>
+            `).join("")
+          : '<p class="small">No human escalations currently tracked.</p>';
+      }
+
+      function renderSafety(data) {
+        if (!$("safetyMonitor")) return;
+        const items = [];
+        const totals = data.totals || {};
+        if (totals.failedJobs) items.push(alertItem("urgent", "Failed jobs", `${totals.failedJobs} job(s) failed and need review.`));
+        if (totals.dueJobs) items.push(alertItem("warn", "Due jobs waiting", `${totals.dueJobs} scheduled job(s) are due now.`));
+        if ((data.alerts?.duplicateConflicts || []).length) items.push(alertItem("warn", "Duplicate contacts", "Some contacts were paused because the same phone has multiple active records."));
+        if ((data.alerts?.missingTimezone || []).length) items.push(alertItem("warn", "Missing timezone", "Some contacts will use default texting hours until GHL supplies timezone/state."));
+        if (data.llmUsage?.failures) items.push(alertItem("warn", "LLM fallback issue", `${data.llmUsage.failures} contact(s) show LLM fallback errors.`));
+        $("safetyMonitor").innerHTML = items.length ? items.join("") : '<p class="small">No safety issues currently detected.</p>';
+      }
+
+      function renderAppointmentPipeline(data) {
+        const rows = (data.appointmentPipeline || []).map((item) => `
+          <tr>
+            <td><button class="row-button" type="button" data-contact-id="${escapeHtml(item.id)}"><strong>${escapeHtml(item.name || "Unknown")}</strong><span>${escapeHtml(item.phone || "")}</span></button></td>
+            <td>${escapeHtml(cleanLabel(item.status))}</td>
+            <td>${escapeHtml(item.preferredCallTime || "-")}</td>
+            <td>${item.confirmed ? "yes" : "no"}</td>
+            <td>${fmtNumber(item.reminderJobs)}</td>
+          </tr>
+        `).join("");
+        $("appointmentPipeline").innerHTML = rows
+          ? `<table><thead><tr><th>Contact</th><th>Status</th><th>Call Time</th><th>Confirmed</th><th>Reminders</th></tr></thead><tbody>${rows}</tbody></table>`
+          : '<p class="small">No appointments or ready-call contacts yet.</p>';
+      }
+
+      function renderSourcePerformance(data) {
+        const rows = (data.sourcePerformance || []).map((item) => `
+          <tr>
+            <td>${escapeHtml(item.source)}</td>
+            <td>${fmtNumber(item.contacts)}</td>
+            <td>${Math.round((item.replyRate || 0) * 100)}%</td>
+            <td>${Math.round((item.bookingRate || 0) * 100)}%</td>
+            <td>${fmtNumber(item.escalated)}</td>
+          </tr>
+        `).join("");
+        $("sourcePerformance").innerHTML = rows
+          ? `<table><thead><tr><th>Source</th><th>Contacts</th><th>Reply</th><th>Booking</th><th>Escalated</th></tr></thead><tbody>${rows}</tbody></table>`
+          : '<p class="small">No source data yet.</p>';
+      }
+
+      function renderHeatmap(data) {
+        $("timezoneHeatmap").innerHTML = (data.timezoneHeatmap || []).length
+          ? data.timezoneHeatmap.map((item) => `<div class="heat-cell"><strong>${escapeHtml(item.timezone)}</strong><span>${escapeHtml(item.hour)}:00 · ${fmtNumber(item.count)} replies</span></div>`).join("")
+          : '<p class="small">No inbound reply timing data yet.</p>';
+      }
+
+      function renderContacts(data) {
+        const rows = (data.recentContacts || []).map((contact) => `
+          <tr>
+            <td>
+              <button class="row-button" type="button" data-contact-id="${escapeHtml(contact.id)}">
+                <strong>${escapeHtml(contact.name || "Unknown")}</strong>
+                <span>${escapeHtml(contact.phone || "")}</span>
+              </button>
+            </td>
+            <td>${escapeHtml(cleanLabel(contact.engagementStatus))}</td>
+            <td>${escapeHtml(cleanLabel(contact.qualificationProgress))}</td>
+            <td>${escapeHtml(cleanLabel(contact.currentSequenceName || "none"))}</td>
+            <td>${escapeHtml(fmtNumber(contact.pendingJobs))}</td>
+            <td>${escapeHtml(fmtDate(contact.lastActivityAt))}</td>
+          </tr>
+        `).join("");
+        $("contacts").innerHTML = rows
+          ? `<table><thead><tr><th>Contact</th><th>Engagement</th><th>Qualification</th><th>Sequence</th><th>Jobs</th><th>Last Activity</th></tr></thead><tbody>${rows}</tbody></table>`
+          : '<p class="small">No contacts yet.</p>';
+      }
+
+      function renderMessages(data) {
+        $("messages").innerHTML = (data.recentMessages || []).length
+          ? data.recentMessages.map((message) => `
+              <button class="message ${escapeHtml(message.direction)}" type="button" data-contact-id="${escapeHtml(message.contactId || "")}">
+                <strong>${escapeHtml(message.direction)}</strong>
+                <span>${escapeHtml(message.body || "")}</span>
+                <small>${escapeHtml(fmtDate(message.createdAt))} · ${escapeHtml(message.contactId || "")}</small>
+              </button>
+            `).join("")
+          : '<p class="small">No messages yet.</p>';
+      }
+
+      function detailField(label, value) {
+        return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || "-")}</dd>`;
+      }
+
+      function renderConversation(messages = []) {
+        return messages.length
+          ? messages.map((message) => `
+              <div class="detail-bubble ${escapeHtml(message.direction)}">
+                <span>${escapeHtml(message.body || "")}</span>
+                <small>${escapeHtml(fmtDate(message.createdAt))}</small>
+              </div>
+            `).join("")
+          : '<p class="small">No stored conversation yet.</p>';
+      }
+
+      function renderJobs(jobs = []) {
+        return jobs.length
+          ? jobs.map((job) => `
+              <div class="mini-row ${escapeHtml(job.status)}">
+                <strong>${escapeHtml(job.type || "job")} · ${escapeHtml(job.status || "unknown")}</strong>
+                <span>${escapeHtml(fmtDate(job.runAt || job.createdAt))}</span>
+                <small>${escapeHtml(job.error || job.lastError || job.cancelReason || "")}</small>
+              </div>
+            `).join("")
+          : '<p class="small">No jobs for this contact.</p>';
+      }
+
+      function renderEscalations(escalations = []) {
+        return escalations.length
+          ? escalations.map((item) => `
+              <div class="mini-row">
+                <strong>${escapeHtml(item.reason || "escalation")}</strong>
+                <span>${escapeHtml(fmtDate(item.createdAt))}</span>
+                <small>${escapeHtml(item.lastInboundMessage || "")}</small>
+              </div>
+            `).join("")
+          : '<p class="small">No escalations for this contact.</p>';
+      }
+
+      function renderNotes(notes = []) {
+        return notes.length
+          ? notes.slice().reverse().map((item) => `
+              <div class="mini-row">
+                <strong>Admin note</strong>
+                <span>${escapeHtml(fmtDate(item.createdAt))}</span>
+                <small>${escapeHtml(item.note || "")}</small>
+              </div>
+            `).join("")
+          : '<p class="small">No admin notes yet.</p>';
+      }
+
+      function renderTimeline(events = []) {
+        return events.length
+          ? events.map((item) => `
+              <div class="mini-row">
+                <strong>${escapeHtml(item.title || item.type)}</strong>
+                <span>${escapeHtml(fmtDate(item.at))}${item.template ? ` · ${escapeHtml(item.template)}` : ""}</span>
+                <small>${escapeHtml(item.detail || "")}</small>
+              </div>
+            `).join("")
+          : '<p class="small">No timeline events yet.</p>';
+      }
+
+      function renderTemplateEditor(data) {
+        $("templateStatus").textContent = `${(data.groups || []).length} template groups loaded.`;
+        $("templateEditor").innerHTML = (data.groups || []).map((group) => `
+          <details class="template-group">
+            <summary>${escapeHtml(group.label)} <span>${fmtNumber((group.templates || []).length)} templates</span></summary>
+            <div class="template-list">
+              ${(group.templates || []).map((item) => `
+                <label class="template-field">
+                  <span>${escapeHtml(item.key)}</span>
+                  <textarea data-template-group="${escapeHtml(group.group)}" data-template-key="${escapeHtml(item.key)}">${escapeHtml(item.value)}</textarea>
+                </label>
+              `).join("")}
+            </div>
+          </details>
+        `).join("");
+      }
+
+      async function loadTemplates() {
+        $("templateStatus").textContent = "Loading templates...";
+        try {
+          renderTemplateEditor(await templateApi("/api/admin/templates"));
+        } catch (error) {
+          $("templateStatus").textContent = error.message || String(error);
+        }
+      }
+
+      async function saveTemplates() {
+        const overrides = {};
+        for (const textarea of document.querySelectorAll("[data-template-group][data-template-key]")) {
+          const group = textarea.dataset.templateGroup;
+          const key = textarea.dataset.templateKey;
+          overrides[group] = overrides[group] || {};
+          overrides[group][key] = textarea.value;
+        }
+        $("templateStatus").textContent = "Saving templates...";
+        try {
+          renderTemplateEditor(await templateApi("/api/admin/templates/save", { overrides }));
+          $("templateStatus").textContent = "Template changes saved and active for future messages.";
+        } catch (error) {
+          $("templateStatus").textContent = error.message || String(error);
+        }
+      }
+
+      async function resetTemplates() {
+        if (!window.confirm("Reset all templates back to the code defaults?")) return;
+        $("templateStatus").textContent = "Resetting templates...";
+        try {
+          renderTemplateEditor(await templateApi("/api/admin/templates/reset", {}));
+          $("templateStatus").textContent = "Templates reset to defaults.";
+        } catch (error) {
+          $("templateStatus").textContent = error.message || String(error);
+        }
+      }
+
+      function templateOptions(selectedGroup = "", selectedKey = "") {
+        return (abData.templates || []).flatMap((group) =>
+          (group.templates || []).map((item) => {
+            const value = `${group.group}|${item.key}`;
+            const selected = group.group === selectedGroup && item.key === selectedKey ? "selected" : "";
+            return `<option value="${escapeHtml(value)}" ${selected}>${escapeHtml(group.label)} / ${escapeHtml(item.key)}</option>`;
+          })
+        ).join("");
+      }
+
+      function renderAbTests(data) {
+        abData = data;
+        $("abStatus").textContent = `${(data.experiments || []).length} test(s) loaded.`;
+        $("abEditor").innerHTML = (data.experiments || []).length
+          ? data.experiments.map((experiment, index) => abExperimentEditor(experiment, index)).join("")
+          : '<p class="small">No A/B tests yet. Click New Test to create your first variation.</p>';
+        renderAbPerformance(data.experiments || []);
+        renderCurrentScriptPerformance(data.templatePerformance || []);
+      }
+
+      function abExperimentEditor(experiment, index) {
+        const control = experiment.variants?.[0] || { id: "control", name: "Control", body: "", weight: 50 };
+        const variant = experiment.variants?.[1] || { id: "variant_b", name: "Variant B", body: "", weight: 50 };
+        return `
+          <div class="ab-card" data-ab-index="${index}">
+            <div class="ab-top">
+              <label>Test name<input data-ab-field="name" value="${escapeHtml(experiment.name || "")}" /></label>
+              <label>Status
+                <select data-ab-field="status">
+                  ${["draft", "active", "paused", "winner"].map((status) => `<option value="${status}" ${experiment.status === status ? "selected" : ""}>${status}</option>`).join("")}
+                </select>
+              </label>
+              <label>Template
+                <select data-ab-field="template">${templateOptions(experiment.group, experiment.key)}</select>
+              </label>
+            </div>
+            <div class="ab-variants">
+              <label>Control weight<input data-ab-field="controlWeight" type="number" min="0" max="100" value="${escapeHtml(control.weight ?? 50)}" /></label>
+              <label>Variant weight<input data-ab-field="variantWeight" type="number" min="0" max="100" value="${escapeHtml(variant.weight ?? 50)}" /></label>
+              <label class="wide">Control copy<textarea data-ab-field="controlBody">${escapeHtml(control.body || "")}</textarea></label>
+              <label class="wide">Variant B copy<textarea data-ab-field="variantBody">${escapeHtml(variant.body || "")}</textarea></label>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderAbPerformance(experiments) {
+        $("abPerformance").innerHTML = experiments.length
+          ? experiments.map((experiment) => `
+              <div class="ab-result">
+                <div class="ab-result-head">
+                  <strong>${escapeHtml(experiment.name)}</strong>
+                  <span>${escapeHtml(experiment.status)} · ${escapeHtml(experiment.group)} / ${escapeHtml(experiment.key)}</span>
+                </div>
+                <div class="ab-result-grid">
+                  ${(experiment.variants || []).map((variant) => `
+                    <div class="metric">
+                      <span>${escapeHtml(variant.name)}</span>
+                      <strong>${Math.round((variant.responseRate || 0) * 100)}%</strong>
+                      <small>${fmtNumber(variant.replies)} replies / ${fmtNumber(variant.sends)} sends · ${fmtNumber(variant.weight)}% traffic</small>
+                      <button class="secondary small-action" type="button" data-push-variant="${escapeHtml(experiment.id)}|${escapeHtml(variant.id)}">Push Live</button>
+                    </div>
+                  `).join("")}
+                </div>
+              </div>
+            `).join("")
+          : '<p class="small">No performance data yet. Activate a test and future sends will start logging variant results.</p>';
+      }
+
+      function renderCurrentScriptPerformance(rows = []) {
+        const groupFilter = $("scriptGroupFilter");
+        if (groupFilter && groupFilter.options.length <= 1) {
+          const groups = Array.from(new Map(rows.map((row) => [row.group, row.groupLabel])).entries());
+          groupFilter.innerHTML = '<option value="">All script groups</option>' + groups.map(([group, label]) => `<option value="${escapeHtml(group)}">${escapeHtml(label)}</option>`).join("");
+        }
+        const search = ($("scriptSearch")?.value || "").toLowerCase().trim();
+        const selectedGroup = $("scriptGroupFilter")?.value || "";
+        const filtered = rows
+          .filter((row) => !selectedGroup || row.group === selectedGroup)
+          .filter((row) => {
+            if (!search) return true;
+            return [row.groupLabel, row.key, row.body].join(" ").toLowerCase().includes(search);
+          })
+          .sort((a, b) => (b.sends - a.sends) || (b.responseRate - a.responseRate));
+        const sentRows = filtered.filter((row) => row.sends > 0);
+        const totalSends = filtered.reduce((sum, row) => sum + Number(row.sends || 0), 0);
+        const totalReplies = filtered.reduce((sum, row) => sum + Number(row.replies || 0), 0);
+        const best = sentRows.slice().sort((a, b) => b.responseRate - a.responseRate)[0];
+        if ($("scriptPerformanceSummary")) {
+          $("scriptPerformanceSummary").innerHTML = [
+            metric("Scripts shown", fmtNumber(filtered.length), selectedGroup ? "filtered group" : "all groups"),
+            metric("Total sends", fmtNumber(totalSends), "from these scripts"),
+            metric("Total replies", fmtNumber(totalReplies), `${Math.round((totalReplies / Math.max(1, totalSends)) * 100)}% reply rate`),
+            metric("Best current script", best ? `${Math.round((best.responseRate || 0) * 100)}%` : "No data", best ? `${best.groupLabel} / ${best.key}` : "needs sends first")
+          ].join("");
+        }
+        const visible = filtered.slice(0, 100);
+        $("currentScriptPerformance").innerHTML = visible.length
+          ? `<table><thead><tr><th>Script</th><th>Current copy</th><th>Sends</th><th>Replies</th><th>Rate</th><th></th></tr></thead><tbody>${visible.map((row) => `
+              <tr>
+                <td><strong>${escapeHtml(row.groupLabel)}</strong><span>${escapeHtml(row.key)}</span></td>
+                <td><span class="script-preview">${escapeHtml(row.body)}</span></td>
+                <td>${fmtNumber(row.sends)}</td>
+                <td>${fmtNumber(row.replies)}</td>
+                <td>${Math.round((row.responseRate || 0) * 100)}%</td>
+                <td><button class="secondary small-action" type="button" data-create-ab="${escapeHtml(row.group)}|${escapeHtml(row.key)}">Test</button></td>
+              </tr>
+            `).join("")}</tbody></table>`
+          : '<p class="small">No scripts found.</p>';
+      }
+
+      function readAbTestsFromDom() {
+        return Array.from(document.querySelectorAll("[data-ab-index]")).map((card, index) => {
+          const templateValue = card.querySelector('[data-ab-field="template"]').value;
+          const [group, key] = templateValue.split("|");
+          const existing = abData.experiments?.[Number(card.dataset.abIndex)] || {};
+          return {
+            id: existing.id || `ab_${Date.now()}_${index}`,
+            name: card.querySelector('[data-ab-field="name"]').value || `Template test ${index + 1}`,
+            group,
+            key,
+            status: card.querySelector('[data-ab-field="status"]').value,
+            createdAt: existing.createdAt || new Date().toISOString(),
+            variants: [
+              {
+                id: "control",
+                name: "Control",
+                weight: Number(card.querySelector('[data-ab-field="controlWeight"]').value || 50),
+                body: card.querySelector('[data-ab-field="controlBody"]').value
+              },
+              {
+                id: "variant_b",
+                name: "Variant B",
+                weight: Number(card.querySelector('[data-ab-field="variantWeight"]').value || 50),
+                body: card.querySelector('[data-ab-field="variantBody"]').value
+              }
+            ]
+          };
+        });
+      }
+
+      async function loadAbTests() {
+        $("abStatus").textContent = "Loading A/B tests...";
+        try {
+          renderAbTests(await abApi("/api/admin/ab-tests"));
+        } catch (error) {
+          $("abStatus").textContent = error.message || String(error);
+        }
+      }
+
+      async function addAbTest() {
+        if (!(abData.templates || []).length) await loadAbTests();
+        const firstGroup = abData.templates?.[0];
+        const firstTemplate = firstGroup?.templates?.[0];
+        if (!firstGroup || !firstTemplate) return;
+        abData.experiments = [
+          ...(abData.experiments || []),
+          {
+            id: `ab_${Date.now()}`,
+            name: "New SMS Variant Test",
+            group: firstGroup.group,
+            key: firstTemplate.key,
+            status: "draft",
+            createdAt: new Date().toISOString(),
+            variants: [
+              { id: "control", name: "Control", weight: 50, body: firstTemplate.value },
+              { id: "variant_b", name: "Variant B", weight: 50, body: `${firstTemplate.value}` }
+            ]
+          }
+        ];
+        renderAbTests(abData);
+      }
+
+      async function saveAbTests() {
+        $("abStatus").textContent = "Saving A/B tests...";
+        try {
+          renderAbTests(await abApi("/api/admin/ab-tests/save", { experiments: readAbTestsFromDom() }));
+          $("abStatus").textContent = "A/B tests saved. Active tests apply to future sends.";
+        } catch (error) {
+          $("abStatus").textContent = error.message || String(error);
+        }
+      }
+
+      async function createAbFromScript(group, key) {
+        if (!(abData.templates || []).length) await loadAbTests();
+        const groupData = abData.templates.find((item) => item.group === group);
+        const template = groupData?.templates?.find((item) => item.key === key);
+        if (!template) return;
+        abData.experiments = [
+          ...(abData.experiments || []),
+          {
+            id: `ab_${Date.now()}`,
+            name: `${groupData.label} ${key}`,
+            group,
+            key,
+            status: "draft",
+            createdAt: new Date().toISOString(),
+            variants: [
+              { id: "control", name: "Control", weight: 50, body: template.value },
+              { id: "variant_b", name: "Variant B", weight: 50, body: template.value }
+            ]
+          }
+        ];
+        renderAbTests(abData);
+        $("abStatus").textContent = "Draft test created. Edit Variant B, set status to active, then Save Tests.";
+      }
+
+      async function pushVariantLive(experimentId, variantId) {
+        if (!window.confirm("Push this variant live as the current script?")) return;
+        $("abStatus").textContent = "Pushing winning variant live...";
+        try {
+          renderAbTests(await abApi("/api/admin/ab-tests/push-live", { experimentId, variantId }));
+          $("abStatus").textContent = "Variant pushed live. Future messages will use this script.";
+        } catch (error) {
+          $("abStatus").textContent = error.message || String(error);
+        }
+      }
+
+      function renderDetail(detail) {
+        const contact = detail.contact || {};
+        $("detailName").textContent = contact.name || "Unknown";
+        $("detailPhone").textContent = contact.phone || "";
+        const ghlHref = safeHref(contact.ghlContactLink);
+        const ghlLink = ghlHref
+          ? `<a class="link-button secondary" href="${escapeHtml(ghlHref)}" target="_blank" rel="noreferrer">Open GHL</a>`
+          : "";
+        $("detailBody").innerHTML = `
+          <div class="detail-actions">
+            ${ghlLink}
+            <button type="button" data-action="human_acknowledged">Human Ack</button>
+            <button class="secondary" type="button" data-action="return_to_bot">Return To Bot</button>
+            <button class="secondary" type="button" data-action="pause_bot">Pause Bot</button>
+            <button class="danger" type="button" data-action="do_not_contact">DNC</button>
+          </div>
+          <form id="noteForm" class="note-form">
+            <input id="noteInput" placeholder="Add internal admin note..." />
+            <button class="secondary" type="submit">Add Note</button>
+          </form>
+          <div class="chip-row">${chips(detail.issueFlags || [])}</div>
+          <section class="detail-section">
+            <h3>Status</h3>
+            <dl class="detail-list">
+              ${detailField("Engagement", cleanLabel(contact.engagementStatus))}
+              ${detailField("Qualification", cleanLabel(contact.qualificationProgress))}
+              ${detailField("Sequence", cleanLabel(contact.currentSequenceName))}
+              ${detailField("Timezone", contact.timezone)}
+              ${detailField("Lead source", contact.leadSource)}
+              ${detailField("Paused", contact.automationPaused ? contact.automationPauseReason || "yes" : "no")}
+              ${detailField("Human stage", cleanLabel(contact.humanEscalationStage))}
+              ${detailField("Reason", cleanLabel(contact.escalationReason))}
+            </dl>
+          </section>
+          <section class="detail-section">
+            <h3>Collected Answers</h3>
+            <dl class="detail-list">
+              ${detailField("Accident date", contact.accidentDate)}
+              ${detailField("Fault", cleanLabel(contact.faultAnswer))}
+              ${detailField("Medical", cleanLabel(contact.medicalTreatmentAnswer))}
+              ${detailField("Call time", contact.preferredCallTime)}
+              ${detailField("Backup time", contact.backupCallTime)}
+              ${detailField("Appointment ID", contact.appointmentId)}
+            </dl>
+          </section>
+          <section class="detail-section">
+            <h3>Admin Notes</h3>
+            <div class="mini-list">${renderNotes(contact.adminNotes || [])}</div>
+          </section>
+          <section class="detail-section">
+            <h3>Conversation</h3>
+            <div class="detail-conversation">${renderConversation(detail.messages || [])}</div>
+          </section>
+          <section class="detail-section">
+            <h3>Timeline</h3>
+            <div class="mini-list">${renderTimeline(detail.timeline || [])}</div>
+          </section>
+          <section class="detail-section">
+            <h3>Jobs</h3>
+            <div class="mini-list">${renderJobs(detail.jobs || [])}</div>
+          </section>
+          <section class="detail-section">
+            <h3>Escalations</h3>
+            <div class="mini-list">${renderEscalations(detail.escalations || [])}</div>
+          </section>
+        `;
+      }
+
+      async function openDetail(contactId) {
+        if (!contactId) return;
+        selectedContactId = contactId;
+        $("detailDrawer").classList.add("is-open");
+        $("detailDrawer").setAttribute("aria-hidden", "false");
+        $("detailName").textContent = "Loading...";
+        $("detailPhone").textContent = "";
+        $("detailBody").innerHTML = '<p class="small">Loading contact detail...</p>';
+        try {
+          renderDetail(await fetchContact(contactId));
+        } catch (error) {
+          $("detailBody").innerHTML = alertItem("urgent", "Could not load contact", error.message || String(error));
+        }
+      }
+
+      function closeDetail() {
+        $("detailDrawer").classList.remove("is-open");
+        $("detailDrawer").setAttribute("aria-hidden", "true");
+      }
+
+      async function runDetailAction(action) {
+        if (!selectedContactId) return;
+        const labels = {
+          human_acknowledged: "mark this escalation as acknowledged",
+          return_to_bot: "return this contact to the bot",
+          pause_bot: "pause the bot for this contact",
+          do_not_contact: "mark this contact do not contact"
+        };
+        if (!window.confirm(`Are you sure you want to ${labels[action] || action}?`)) return;
+        $("detailBody").classList.add("is-loading");
+        try {
+          renderDetail(await postContactAction(selectedContactId, action));
+          await refresh();
+        } catch (error) {
+          window.alert(error.message || String(error));
+        } finally {
+          $("detailBody").classList.remove("is-loading");
+        }
+      }
+
+      function render(data) {
+        state = data;
+        $("modeBadge").textContent = data.dryRun ? "Dry run mode" : "Live mode";
+        $("modeBadge").className = `badge ${data.dryRun ? "safe" : "live"}`;
+        $("storageBadge").textContent = `${data.health?.type || "storage"} · ${data.health?.ok ? "healthy" : "issue"}`;
+        $("generatedBadge").textContent = `Updated ${fmtDate(data.generatedAt)}`;
+        renderMetrics(data);
+        if (document.getElementById("activityChart")) renderActivityChart();
+        renderFilteredContacts();
+        renderFunnel(data);
+        renderFriendlyDailySummary(data);
+        renderOverviewLive(data);
+        renderOverviewStatusBoard(data);
+        renderOverviewEscalations(data);
+        renderOverviewCalls(data);
+        renderAlerts(data);
+        renderSpeed(data);
+        renderContactCards("hotLeads", data.hotLeads || []);
+        renderSla(data);
+        renderIssueContacts(data);
+        renderContactCards("botConfusion", data.botConfusion || []);
+        renderSafety(data);
+        renderAppointmentPipeline(data);
+        renderSummaryGrid("llmUsage", data.llmUsage || {});
+        renderBars("engagement", data.breakdowns?.engagement);
+        renderBars("qualification", data.breakdowns?.qualification);
+        renderBars("sequences", data.breakdowns?.sequences);
+        renderBars("reasons", data.breakdowns?.escalationsByReason);
+        renderContacts(data);
+        renderMessages(data);
+        renderSourcePerformance(data);
+        renderHeatmap(data);
+        renderContactCards("qualityQueue", [...(data.botConfusion || []), ...(data.issueContacts || [])].slice(0, 30));
+        if (data.abTesting) renderAbPerformance(data.abTesting);
+        if (data.templatePerformance) renderCurrentScriptPerformance(data.templatePerformance);
+        setPage(currentPage());
+      }
+
+      async function refresh() {
+        $("refreshBtn").disabled = true;
+        try {
+          render(await fetchDashboard());
+        } catch (error) {
+          if (error.message !== "Dashboard password required.") {
+            $("alerts").innerHTML = alertItem("urgent", "Dashboard failed to load", error.message || String(error));
+          }
+        } finally {
+          $("refreshBtn").disabled = false;
+        }
+      }
+
+      document.addEventListener("click", (event) => {
+        const pageLink = event.target.closest("[data-page-link]");
+        if (pageLink) {
+          event.preventDefault();
+          setPage(pageLink.dataset.pageLink, true);
+          return;
+        }
+        const pageJump = event.target.closest("[data-page-jump]");
+        if (pageJump) {
+          setPage(pageJump.dataset.pageJump, true);
+          return;
+        }
+        const createAb = event.target.closest("[data-create-ab]");
+        if (createAb) {
+          const [group, key] = createAb.dataset.createAb.split("|");
+          createAbFromScript(group, key);
+          return;
+        }
+        const pushVariant = event.target.closest("[data-push-variant]");
+        if (pushVariant) {
+          const [experimentId, variantId] = pushVariant.dataset.pushVariant.split("|");
+          pushVariantLive(experimentId, variantId);
+          return;
+        }
+        const rangeButton = event.target.closest("[data-range]");
+        if (rangeButton) {
+          activityRange = Number(rangeButton.dataset.range || 30);
+          selectedActivityKey = "";
+          for (const button of document.querySelectorAll("[data-range]")) {
+            button.classList.toggle("is-active", button === rangeButton);
+          }
+          renderActivityChart();
+          return;
+        }
+        const activityButton = event.target.closest("[data-activity-key]");
+        if (activityButton) {
+          selectedActivityKey = activityButton.dataset.activityKey;
+          renderActivityChart();
+          return;
+        }
+        const contactTrigger = event.target.closest("[data-contact-id]");
+        if (contactTrigger) {
+          openDetail(contactTrigger.dataset.contactId);
+          return;
+        }
+        const actionTrigger = event.target.closest("[data-action]");
+        if (actionTrigger) {
+          runDetailAction(actionTrigger.dataset.action);
+          return;
+        }
+        if (event.target.closest("[data-close-detail]")) {
+          closeDetail();
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeDetail();
+      });
+
+      window.addEventListener("popstate", () => setPage(currentPage()));
+
+      document.addEventListener("submit", async (event) => {
+        if (event.target.id !== "noteForm") return;
+        event.preventDefault();
+        const note = $("noteInput").value.trim();
+        if (!note || !selectedContactId) return;
+        try {
+          renderDetail(await postNote(selectedContactId, note));
+          await refresh();
+        } catch (error) {
+          window.alert(error.message || String(error));
+        }
+      });
+
+      document.addEventListener("input", (event) => {
+        if (event.target.id === "scriptSearch") renderCurrentScriptPerformance(state?.templatePerformance || []);
+      });
+
+      document.addEventListener("change", (event) => {
+        if (event.target.id === "scriptGroupFilter") renderCurrentScriptPerformance(state?.templatePerformance || []);
+      });
+
+      function selectedContactIds() {
+        return Array.from(document.querySelectorAll(".bulk-select:checked")).map((input) => input.value);
+      }
+
+      async function runBulk(action) {
+        const ids = selectedContactIds();
+        if (!ids.length) {
+          window.alert("Select at least one contact first.");
+          return;
+        }
+        if (!window.confirm(`Apply ${action} to ${ids.length} selected contact(s)?`)) return;
+        await postBulkAction(ids, action);
+        await refresh();
+      }
+
+      $("authForm").addEventListener("submit", (event) => {
+        event.preventDefault();
+        sessionStorage.setItem(passwordKey, $("adminPassword").value);
+        refresh();
+      });
+      $("refreshBtn").addEventListener("click", refresh);
+      $("contactSearch").addEventListener("input", renderFilteredContacts);
+      $("statusFilter").addEventListener("change", renderFilteredContacts);
+      $("bulkPauseBtn").addEventListener("click", () => runBulk("pause_bot"));
+      $("bulkReturnBtn").addEventListener("click", () => runBulk("return_to_bot"));
+      for (const input of document.querySelectorAll("[data-chart-metric]")) {
+        input.addEventListener("change", () => {
+          if (!activeChartMetrics().length) input.checked = true;
+          renderActivityChart();
+        });
+      }
+      $("loadTemplatesBtn").addEventListener("click", loadTemplates);
+      $("saveTemplatesBtn").addEventListener("click", saveTemplates);
+      $("resetTemplatesBtn").addEventListener("click", resetTemplates);
+      $("loadAbTestsBtn").addEventListener("click", loadAbTests);
+      $("addAbTestBtn").addEventListener("click", addAbTest);
+      $("saveAbTestsBtn").addEventListener("click", saveAbTests);
+      setPage(currentPage());
+      refresh();
+      setInterval(refresh, 60_000);
+    </script>
+  </body>
+</html>

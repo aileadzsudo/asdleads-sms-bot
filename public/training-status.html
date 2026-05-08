@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ASDleads Training Status</title>
+    <link rel="stylesheet" href="/training-status.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="toolbar" aria-label="Training status controls">
+        <div>
+          <h1>Training Status</h1>
+          <p>Track the GHL import, OpenAI batch labeling, reports, and next action.</p>
+        </div>
+        <div class="toolbar-actions">
+          <a class="link-button secondary" href="/integrations">Integrations</a>
+          <a class="link-button secondary" href="/tester">Tester</a>
+          <a class="link-button secondary" href="/review">Review</a>
+          <button id="refreshBtn" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="status-grid">
+        <article class="panel hero-panel">
+          <div>
+            <h2>OpenAI Batch</h2>
+            <p id="batchSummary" class="status-copy">Checking batch status...</p>
+          </div>
+          <div class="progress-wrap" aria-label="Batch progress">
+            <div id="batchProgress" class="progress-bar"></div>
+          </div>
+          <dl id="batchFacts" class="metric-list"></dl>
+          <div class="button-row">
+            <button id="applyBtn" type="button" disabled>Apply Completed Batch</button>
+            <span id="applyNote" class="small">The button unlocks when OpenAI marks the batch completed.</span>
+          </div>
+        </article>
+
+        <aside class="side">
+          <div class="panel">
+            <h2>Database</h2>
+            <dl id="databaseFacts" class="state-list"></dl>
+          </div>
+
+          <div class="panel">
+            <h2>LLM Labels</h2>
+            <dl id="labelFacts" class="state-list"></dl>
+          </div>
+
+          <div class="panel">
+            <h2>Files</h2>
+            <div id="files" class="jobs"></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header compact-header">
+          <div>
+            <h2>Next Action</h2>
+            <p id="nextAction" class="status-copy">Loading...</p>
+          </div>
+          <div class="toolbar-actions">
+            <a class="link-button secondary" href="/reports/training_report.md" target="_blank" rel="noreferrer">Report</a>
+            <a class="link-button secondary" href="/reports/rule_candidates.json" target="_blank" rel="noreferrer">Rule Candidates</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let currentStatus = null;
+
+      async function api(path, body) {
+        const response = await fetch(path, {
+          method: body ? "POST" : "GET",
+          headers: body ? { "Content-Type": "application/json" } : {},
+          body: body ? JSON.stringify(body) : undefined
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      async function refresh() {
+        currentStatus = await api("/api/training/status");
+        render(currentStatus);
+      }
+
+      function render(data) {
+        const db = data.database.ok ? data.database.value : {};
+        const llm = data.llm.ok ? data.llm.value : {};
+        const batch = data.batch.ok ? data.batch.value.batch : null;
+        renderBatch(batch, data.batch);
+        renderDatabase(db, data.files.database);
+        renderLabels(llm);
+        renderFiles(data.files);
+        renderNextAction(batch, db, llm, data);
+      }
+
+      function renderBatch(batch, batchResult) {
+        if (!batch) {
+          $("batchSummary").textContent = batchResult.error || "No batch job found yet.";
+          $("batchProgress").style.width = "0%";
+          $("batchFacts").innerHTML = "";
+          $("applyBtn").disabled = true;
+          return;
+        }
+
+        const counts = batch.request_counts || {};
+        const total = Number(counts.total || 0);
+        const completed = Number(counts.completed || 0);
+        const failed = Number(counts.failed || 0);
+        const pct = total ? Math.round((completed / total) * 100) : 0;
+
+        $("batchSummary").textContent = `${batch.status} - ${completed.toLocaleString()} of ${total.toLocaleString()} examples completed.`;
+        $("batchProgress").style.width = `${pct}%`;
+        $("batchFacts").innerHTML = facts([
+          ["Batch ID", batch.id],
+          ["Model", batch.model || batch.metadata?.model],
+          ["Status", batch.status],
+          ["Completed", `${completed.toLocaleString()} / ${total.toLocaleString()}`],
+          ["Failed", failed.toLocaleString()],
+          ["Completion window", batch.completion_window || "24h"]
+        ]);
+        $("applyBtn").disabled = batch.status !== "completed";
+      }
+
+      function renderDatabase(db, dbFile) {
+        $("databaseFacts").innerHTML = facts([
+          ["SMS messages", number(db.messages)],
+          ["Reply examples", number(db.examples)],
+          ["Review labels", number(db.labeled)],
+          ["Review unlabeled", number(db.unlabeled)],
+          ["DB size", dbFile.exists ? formatBytes(dbFile.bytes) : "missing"],
+          ["Last import", db.lastImport?.status || "none"]
+        ]);
+      }
+
+      function renderLabels(llm) {
+        const rows = llm.counts || [];
+        const unlabeled = rows.find((row) => row.label === "unlabeled")?.n || 0;
+        const labeled = rows.reduce((sum, row) => row.label === "unlabeled" ? sum : sum + Number(row.n || 0), 0);
+        const top = rows.filter((row) => row.label !== "unlabeled").slice(0, 5);
+        $("labelFacts").innerHTML = facts([
+          ["LLM labeled", number(labeled)],
+          ["LLM unlabeled", number(unlabeled)],
+          ["Top labels", top.length ? top.map((row) => `${row.label}: ${row.n}`).join(", ") : "none yet"]
+        ]);
+      }
+
+      function renderFiles(files) {
+        const items = [
+          ["Training DB", files.database],
+          ["Report", files.report],
+          ["Rule candidates", files.ruleCandidates]
+        ];
+        $("files").innerHTML = items.map(([name, file]) => `
+          <div class="job">
+            <strong>${name}</strong>
+            <span>${file.exists ? `${formatBytes(file.bytes)} - updated ${time(file.updatedAt)}` : "missing"}</span>
+          </div>
+        `).join("");
+      }
+
+      function renderNextAction(batch, db, llm, data) {
+        if (!data.database.ok) {
+          $("nextAction").textContent = `Database status failed: ${data.database.error}`;
+          return;
+        }
+        if (!data.llm.ok) {
+          $("nextAction").textContent = `LLM summary failed: ${data.llm.error}`;
+          return;
+        }
+        if (!batch) {
+          $("nextAction").textContent = "Submit a batch after importing examples.";
+          return;
+        }
+        if (batch.status === "completed") {
+          $("nextAction").textContent = "Apply the completed batch, rebuild the report, then turn the best high-confidence labels into hard-coded rules.";
+          return;
+        }
+        if (["failed", "expired", "cancelled"].includes(batch.status)) {
+          $("nextAction").textContent = "The batch stopped before completion. Check the error file/status, then submit a fresh batch.";
+          return;
+        }
+        $("nextAction").textContent = "Wait for OpenAI to finish the batch. This page can be refreshed any time; completed results will be applied after the batch finishes.";
+      }
+
+      function facts(items) {
+        return items.map(([key, value]) => `<dt>${key}</dt><dd>${escapeHtml(value ?? "-")}</dd>`).join("");
+      }
+
+      function number(value) {
+        return Number(value || 0).toLocaleString();
+      }
+
+      function formatBytes(bytes) {
+        if (!bytes) return "0 B";
+        const units = ["B", "KB", "MB", "GB"];
+        let size = bytes;
+        let unit = 0;
+        while (size >= 1024 && unit < units.length - 1) {
+          size /= 1024;
+          unit += 1;
+        }
+        return `${size.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+      }
+
+      function time(value) {
+        return value ? new Date(value).toLocaleString() : "-";
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      $("refreshBtn").addEventListener("click", () => {
+        refresh().catch((error) => alert(error.message));
+      });
+
+      $("applyBtn").addEventListener("click", async () => {
+        $("applyBtn").disabled = true;
+        $("applyNote").textContent = "Applying labels and rebuilding reports...";
+        const result = await api("/api/training/apply-batch", {});
+        currentStatus = result.status;
+        render(currentStatus);
+        $("applyNote").textContent = result.ok
+          ? `Applied ${number(result.apply.applied)} labels.`
+          : result.apply.message || "Batch was not ready yet.";
+      });
+
+      refresh().catch((error) => {
+        $("batchSummary").textContent = error.message;
+      });
+    </script>
+  </body>
+</html>

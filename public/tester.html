@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ASDleads SMS Bot Tester</title>
+    <link rel="stylesheet" href="/tester.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <strong>ASDleads</strong>
+          <span>SMS Bot Admin</span>
+        </div>
+        <nav class="side-nav" aria-label="Admin navigation">
+          <a href="/dashboard">Dashboard</a>
+          <a href="/dashboard/leads">Leads</a>
+          <a href="/dashboard/issues">Issues</a>
+          <a href="/dashboard/appointments">Appointments</a>
+          <a href="/dashboard/performance">Performance</a>
+          <a href="/dashboard/ab-testing">A/B Testing</a>
+          <a href="/dashboard/templates">Templates</a>
+        </nav>
+        <div class="side-tools">
+          <a class="is-active" href="/tester">Tester</a>
+          <a href="/integrations">Integrations</a>
+          <a href="/backfill">Backfill</a>
+        </div>
+      </aside>
+
+    <main class="app">
+      <section class="toolbar" aria-label="Test controls">
+        <div>
+          <h1>ASDleads SMS Bot Tester</h1>
+          <p>Dry-run sandbox for testing replies, state, scheduled follow-ups, and escalations.</p>
+        </div>
+        <div class="toolbar-actions">
+          <a class="link-button secondary" href="/training-status">Status</a>
+          <a class="link-button secondary" href="/dashboard">Dashboard</a>
+          <a class="link-button secondary" href="/integrations">Integrations</a>
+          <a class="link-button secondary" href="/review">Review</a>
+          <a class="link-button secondary" href="/backfill">Backfill</a>
+          <button id="resetBtn" class="secondary" type="button">Reset & Start</button>
+          <button id="seedBtn" type="button">Start No Response Lead</button>
+          <button id="scheduledBtn" class="secondary" type="button">Seed Scheduled Call</button>
+          <button id="missedCallBtn" class="secondary" type="button">Mark Missed Call</button>
+          <button id="humanAckBtn" class="secondary" type="button">Human Ack</button>
+          <button id="returnBotBtn" class="secondary" type="button">Return To Bot</button>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="panel chat-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Conversation</h2>
+          <p id="dryRunLabel">Checking mode...</p>
+          <p id="testerStatus" class="small">Ready.</p>
+            </div>
+            <div class="contact-form">
+              <label>
+                Contact ID
+                <input id="contactId" value="test-contact" />
+              </label>
+              <label>
+                Name
+                <input id="name" value="Alex" />
+              </label>
+              <label>
+                Timezone
+                <input id="timezone" value="America/Chicago" />
+              </label>
+            </div>
+          </div>
+
+          <div id="messages" class="messages" aria-live="polite"></div>
+
+          <form id="replyForm" class="reply-form">
+            <label for="replyInput">Reply as PC</label>
+            <div class="reply-row">
+              <input id="replyInput" placeholder="Example: No, the other driver was at fault" autocomplete="off" />
+              <button type="submit">Send Reply</button>
+            </div>
+          </form>
+        </div>
+
+        <aside class="side">
+          <div class="panel">
+            <h2>Timeline</h2>
+            <p class="small">Advance the next scheduled job immediately. Warm follow-ups run first, then saved-progress re-engagement starts.</p>
+            <div class="button-row">
+              <button id="advanceOneBtn" type="button">Advance Next Job</button>
+              <button id="advanceFiveBtn" class="secondary" type="button">Advance 5 Jobs</button>
+            </div>
+            <label class="toggle">
+              <input id="autoAdvance" type="checkbox" />
+              Auto-advance every 60 seconds
+            </label>
+          </div>
+
+          <div class="panel">
+            <h2>LLM Fallback</h2>
+            <p id="llmStatusText" class="small">Checking fallback mode...</p>
+            <label class="toggle">
+              <input id="llmToggle" type="checkbox" />
+              Use LLM when hard-coded rules are unsure
+            </label>
+            <dl id="llmList" class="state-list"></dl>
+          </div>
+
+          <div class="panel">
+            <h2>Current State</h2>
+            <dl id="stateList" class="state-list"></dl>
+          </div>
+
+          <div class="panel">
+            <h2>Pending Jobs</h2>
+            <div id="jobs" class="jobs"></div>
+          </div>
+
+          <div class="panel">
+            <h2>Escalations</h2>
+            <div id="escalations" class="jobs"></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let autoTimer = null;
+      let suppressLlmToggleChange = false;
+      let busy = false;
+
+      function payload() {
+        return {
+          contactId: $("contactId").value.trim() || "test-contact",
+          name: $("name").value.trim() || "Alex",
+          phone: "+15550001111",
+          timezone: $("timezone").value.trim() || "America/Chicago",
+          leadSource: "tester"
+        };
+      }
+
+      async function api(path, body) {
+        const response = await fetch(path, {
+          method: body ? "POST" : "GET",
+          headers: body ? { "Content-Type": "application/json" } : {},
+          body: body ? JSON.stringify(body) : undefined
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+
+      function setStatus(message, type = "info") {
+        const el = $("testerStatus");
+        el.textContent = message;
+        el.dataset.type = type;
+      }
+
+      function setBusy(value) {
+        busy = value;
+        for (const id of ["resetBtn", "seedBtn", "scheduledBtn", "missedCallBtn", "humanAckBtn", "returnBotBtn", "advanceOneBtn", "advanceFiveBtn"]) {
+          $(id).disabled = value;
+        }
+        $("replyInput").disabled = value;
+        $("replyForm").querySelector("button").disabled = value;
+      }
+
+      async function runAction(label, action) {
+        if (busy) return;
+        setBusy(true);
+        setStatus(`${label}...`);
+        try {
+          await action();
+          setStatus(`${label} complete.`, "success");
+        } catch (error) {
+          setStatus(error.message || String(error), "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function refresh() {
+        const state = await api(`/api/test/state?contactId=${encodeURIComponent(payload().contactId)}`);
+        $("dryRunLabel").textContent = state.dryRun
+          ? "Dry run is ON. External GHL and Slack sends are skipped."
+          : "Dry run is OFF. This can send real GHL/Slack requests.";
+        suppressLlmToggleChange = true;
+        $("llmToggle").checked = Boolean(state.llmFallbackEnabled);
+        $("llmStatusText").textContent = state.llmFallbackEnabled
+          ? "LLM fallback is ON for this local tester."
+          : "LLM fallback is OFF. Hard-coded rules and normal escalation are used.";
+        suppressLlmToggleChange = false;
+        renderMessages(state.messages || []);
+        renderState(state.contact || {});
+        renderLlm(state.contact || {});
+        renderJobs(state.jobs || []);
+        renderEscalations(state.escalations || []);
+      }
+
+      function renderMessages(messages) {
+        const el = $("messages");
+        el.innerHTML = "";
+        el.classList.remove("is-short");
+        if (!messages.length) {
+          el.innerHTML = '<div class="empty">Start a no-response lead or send a reply to begin.</div>';
+          el.classList.add("is-short");
+          return;
+        }
+        for (const message of messages) {
+          const bubble = document.createElement("div");
+          bubble.className = `bubble ${message.direction}`;
+          bubble.textContent = message.body;
+          el.appendChild(bubble);
+        }
+        el.classList.toggle("is-short", el.scrollHeight <= el.clientHeight + 4);
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function renderState(contact) {
+        const fields = [
+          ["Engagement", contact.engagementStatus],
+          ["Qualification", contact.qualificationProgress],
+          ["Fault", contact.faultAnswer],
+          ["Medical", contact.medicalTreatmentAnswer],
+          ["Accident date", contact.accidentDate],
+          ["Call time", contact.preferredCallTime],
+          ["Opted out", contact.optOutStatus ? "yes" : "no"],
+          ["Human escalation", contact.humanEscalationStatus ? "yes" : "no"],
+          ["Human stage", contact.humanEscalationStage],
+          ["Sequence", contact.currentSequenceName],
+          ["Sequence day", contact.currentSequenceDay]
+        ];
+        $("stateList").innerHTML = fields
+          .map(([key, value]) => `<dt>${key}</dt><dd>${value || "—"}</dd>`)
+          .join("");
+      }
+
+      function renderLlm(contact) {
+        const classification = contact.lastLlmClassification || {};
+        const fields = [
+          ["Last label", classification.label],
+          ["Confidence", classification.confidence],
+          ["Escalate", classification.should_escalate === undefined ? "" : classification.should_escalate ? "yes" : "no"],
+          ["Normalized", classification.normalized_value],
+          ["Reason", classification.reason],
+          ["At", contact.lastLlmClassificationAt]
+        ];
+        $("llmList").innerHTML = fields
+          .map(([key, value]) => `<dt>${key}</dt><dd>${value || "—"}</dd>`)
+          .join("");
+      }
+
+      function renderJobs(jobs) {
+        const pending = jobs.filter((job) => job.status === "pending");
+        $("jobs").innerHTML = pending.length
+          ? pending
+              .map(
+                (job) =>
+                  `<div class="job"><strong>${jobTitle(job)}</strong><span>${jobSubtitle(job)}</span></div>`
+              )
+              .join("")
+          : '<div class="empty small">No pending jobs.</div>';
+      }
+
+      function jobTitle(job) {
+        if (job.type === "warm_followup") return "warm_followup";
+        if (job.type === "enter_reengagement") return "enter_reengagement";
+        if (job.type === "send_reengagement_template") return "reengagement_message";
+        if (job.type === "send_cold_template") return "cold_outreach";
+        return job.type;
+      }
+
+      function jobSubtitle(job) {
+        const payload = job.payload || {};
+        const parts = [new Date(job.runAt).toLocaleString()];
+        if (job.type === "warm_followup") parts.push(`step ${payload.step || "?"} · +${payload.minutes || 15} min`);
+        if (job.type === "enter_reengagement") parts.push("moves into unanswered-question sequence");
+        if (job.type === "send_reengagement_template") parts.push(`${payload.sequence || "reengagement"} · day ${payload.day || "?"} ${payload.slot || ""}`.trim());
+        if (job.type === "send_cold_template") parts.push(payload.templateKey || "");
+        if (job.type === "appointment_reminder") parts.push(payload.kind || "reminder");
+        if (job.type === "missed_call_followup") parts.push(payload.kind || "missed call");
+        return parts.filter(Boolean).join(" · ");
+      }
+
+      function renderEscalations(items) {
+        $("escalations").innerHTML = items.length
+          ? items.map((item) => `<div class="job"><strong>${item.reason}</strong><span>${item.lastInboundMessage || ""}</span></div>`).join("")
+          : '<div class="empty small">No escalations.</div>';
+      }
+
+      $("seedBtn").addEventListener("click", async () => {
+        await runAction("Starting no-response lead", async () => {
+          await api("/api/test/seed-no-response", payload());
+          await refresh();
+        });
+      });
+
+      $("scheduledBtn").addEventListener("click", async () => {
+        await runAction("Seeding scheduled call", async () => {
+          await api("/api/test/seed-scheduled-call", payload());
+          await refresh();
+        });
+      });
+
+      $("missedCallBtn").addEventListener("click", async () => {
+        await runAction("Marking missed call", async () => {
+          await api("/api/test/missed-call", payload());
+          await refresh();
+        });
+      });
+
+      $("humanAckBtn").addEventListener("click", async () => {
+        await runAction("Acknowledging human escalation", async () => {
+          await api("/api/test/bot-control", { ...payload(), action: "human_acknowledged" });
+          await refresh();
+        });
+      });
+
+      $("returnBotBtn").addEventListener("click", async () => {
+        await runAction("Returning to bot", async () => {
+          await api("/api/test/bot-control", { ...payload(), action: "return_to_bot" });
+          await refresh();
+        });
+      });
+
+      $("resetBtn").addEventListener("click", async () => {
+        await runAction("Resetting tester", async () => {
+          await api("/api/test/reset", {});
+          $("replyInput").value = "";
+          await api("/api/test/seed-no-response", payload());
+          await refresh();
+        });
+      });
+
+      $("replyForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const message = $("replyInput").value.trim();
+        if (!message) return;
+        await runAction("Sending reply", async () => {
+          await api("/api/test/reply", { ...payload(), message });
+          $("replyInput").value = "";
+          await refresh();
+        });
+      });
+
+      $("advanceOneBtn").addEventListener("click", async () => {
+        await runAction("Advancing next job", async () => {
+          await api("/api/test/advance", { steps: 1 });
+          await refresh();
+        });
+      });
+
+      $("advanceFiveBtn").addEventListener("click", async () => {
+        await runAction("Advancing jobs", async () => {
+          await api("/api/test/advance", { steps: 5 });
+          await refresh();
+        });
+      });
+
+      $("autoAdvance").addEventListener("change", (event) => {
+        clearInterval(autoTimer);
+        autoTimer = null;
+        if (event.target.checked) {
+          autoTimer = setInterval(async () => {
+            try {
+              await api("/api/test/advance", { steps: 1 });
+              await refresh();
+            } catch (error) {
+              setStatus(error.message || String(error), "error");
+            }
+          }, 60000);
+        }
+      });
+
+      $("llmToggle").addEventListener("change", async (event) => {
+        if (suppressLlmToggleChange) return;
+        await runAction("Updating LLM fallback", async () => {
+          await api("/api/test/llm-fallback", { enabled: event.target.checked });
+          await refresh();
+        });
+      });
+
+      $("contactId").addEventListener("change", refresh);
+      refresh().catch((error) => setStatus(error.message || String(error), "error"));
+    </script>
+  </body>
+</html>
