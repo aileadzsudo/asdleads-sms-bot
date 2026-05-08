@@ -27,6 +27,7 @@ function parseStateWindows(raw) {
 function loadConfig() {
   loadDotEnv();
   const dataDir = process.env.DATA_DIR || path.join(__dirname, "..", "data");
+  const renderBaseUrl = process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : "";
   return {
     port: Number(process.env.PORT || 3000),
     host: process.env.HOST || (process.env.RENDER ? "0.0.0.0" : "127.0.0.1"),
@@ -36,7 +37,7 @@ function loadConfig() {
     webhookSecret: process.env.WEBHOOK_SECRET || "",
     adminPassword: process.env.ADMIN_PASSWORD || "",
     reportDir: process.env.REPORT_DIR || path.join(__dirname, "..", "reports"),
-    publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
+    publicBaseUrl: process.env.PUBLIC_BASE_URL || renderBaseUrl,
     botName: process.env.BOT_NAME || "William",
     dryRun: String(process.env.DRY_RUN || "true").toLowerCase() !== "false",
     llm: {

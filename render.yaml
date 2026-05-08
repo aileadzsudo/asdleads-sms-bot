@@ -1,0 +1,63 @@
+services:
+  - type: web
+    name: asdleads-sms-bot
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DRY_RUN
+        value: "true"
+      - key: LLM_FALLBACK_ENABLED
+        value: "true"
+      - key: OPENAI_CLASSIFIER_MODEL
+        value: gpt-5-mini
+      - key: DEFAULT_TIMEZONE
+        value: America/Chicago
+      - key: DEFAULT_TEXTING_START
+        value: "08:00"
+      - key: DEFAULT_TEXTING_END
+        value: "21:00"
+      - key: BOT_NAME
+        value: William
+      - key: DATABASE_URL
+        fromDatabase:
+          name: asdleads-sms-bot-db
+          property: connectionString
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: GHL_API_TOKEN
+        sync: false
+      - key: GHL_LOCATION_ID
+        sync: false
+      - key: GHL_CALENDAR_ID
+        sync: false
+      - key: GHL_API_BASE
+        value: https://services.leadconnectorhq.com
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_ESCALATION_CHANNEL
+        sync: false
+      - key: SLACK_BOT_ERRORS_CHANNEL
+        sync: false
+      - key: SLACK_BOOKING_CHANNEL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+databases:
+  - name: asdleads-sms-bot-db
+    databaseName: asdleads_sms_bot
+    user: asdleads_sms_bot
+    plan: basic-256mb
+    region: oregon
