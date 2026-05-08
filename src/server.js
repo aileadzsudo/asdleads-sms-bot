@@ -54,7 +54,11 @@ function requireWebhookSecret(req, payload = {}) {
     payload.webhookSecret ||
     payload.webhook_secret ||
     payload["x-webhook-secret"] ||
-    payload["x-asdleads-secret"];
+    payload["x-asdleads-secret"] ||
+    payload.customData?.webhookSecret ||
+    payload.customData?.webhook_secret ||
+    payload.customData?.["x-webhook-secret"] ||
+    payload.customData?.["x-asdleads-secret"];
   if (provided === config.webhookSecret) return { ok: true };
   return { ok: false, reason: "invalid webhook secret" };
 }
@@ -105,6 +109,10 @@ function firstValue(source, keys) {
     if (value !== undefined && value !== null && value !== "") return value;
   }
   return "";
+}
+
+function webhookField(payload, keys) {
+  return firstValue(payload, keys) || firstValue(payload.customData || {}, keys);
 }
 
 function normalizeBackfillContact(raw = {}) {
@@ -1058,8 +1066,8 @@ const server = http.createServer(async (req, res) => {
         dryRun: config.dryRun,
         payloadKeys: Object.keys(payload || {}).sort(),
         hasContactId: Boolean(payload.contactId || payload.contact_id || payload["Contact ID"] || payload.contact?.id),
-        hasDisposition: Boolean(payload.disposition || payload.customDisposition),
-        hasMessage: Boolean(payload.message || payload.body || payload.text || payload.messageBody || payload.message_body)
+        hasDisposition: Boolean(webhookField(payload, ["disposition", "customDisposition"])),
+        hasMessage: Boolean(webhookField(payload, ["message", "body", "text", "messageBody", "message_body", "message.body"]))
       };
       if (store?.setSetting) await store.setSetting("last_webhook_ping", diagnostic);
       if (!auth.ok) {
@@ -1091,7 +1099,7 @@ const server = http.createServer(async (req, res) => {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
         return;
       }
-      const disposition = payload.disposition || payload.customDisposition;
+      const disposition = webhookField(payload, ["disposition", "customDisposition"]);
       if (!isNoResponseDisposition(disposition)) {
         send(res, 202, { ok: true, ignored: true, reason: "disposition was not no response or NR" });
         return;

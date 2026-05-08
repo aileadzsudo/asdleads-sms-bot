@@ -15,6 +15,11 @@ test("webhook secret accepts GHL custom data fallback", () => {
   assert.equal(result.ok, true);
 });
 
+test("webhook secret accepts nested GHL customData fallback", () => {
+  const result = requireWebhookSecret({ headers: {} }, { customData: { webhookSecret: "test-secret" } });
+  assert.equal(result.ok, true);
+});
+
 test("webhook secret rejects missing value", () => {
   const result = requireWebhookSecret({ headers: {} }, {});
   assert.equal(result.ok, false);

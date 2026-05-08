@@ -38,6 +38,10 @@ const REENGAGEMENT_DAYS = [1, 2, 3, 4, 5, 6, 7];
 const REENGAGEMENT_SLOTS = ["am", "pm"];
 const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
 
+function customValue(payload, key) {
+  return payload.customData?.[key] || payload.custom_data?.[key] || "";
+}
+
 function normalizePayload(payload, config) {
   const source = payload.contact || payload.contactData || payload.contact_data || payload;
   const firstName = payload.firstName || payload.first_name || source.firstName || source.first_name;
@@ -80,7 +84,18 @@ function normalizePayload(payload, config) {
     leadSource: payload.leadSource || payload.source || payload.lead_source || payload["contact.source"] || source.leadSource || source.source || source.lead_source,
     ghlContactLink: payload.ghlContactLink || payload.contactLink,
     tags: payload.tags || payload.contactTags || payload.tag || source.tags,
-    lastInboundMessage: payload.message || payload.body || payload.text || payload.messageBody || payload.message_body || payload["message.body"]
+    lastInboundMessage:
+      payload.message ||
+      payload.body ||
+      payload.text ||
+      payload.messageBody ||
+      payload.message_body ||
+      payload["message.body"] ||
+      customValue(payload, "message") ||
+      customValue(payload, "body") ||
+      customValue(payload, "text") ||
+      customValue(payload, "messageBody") ||
+      customValue(payload, "message_body")
   };
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined && value !== null && value !== "") normalized[key] = value;
