@@ -1627,6 +1627,11 @@ class SmsBot {
       return this.refreshTimezoneFromContact(contact, "admin_timezone_refresh");
     }
 
+    if (["ensure_appointment_reminders", "schedule_appointment_reminders"].includes(action)) {
+      await this.scheduleAppointmentReminders(contact);
+      return this.store.getContact(contact.id);
+    }
+
     if (["repair_primary_call_time", "fix_primary_call_time", "correct_primary_call_time"].includes(action)) {
       return this.repairPrimaryCallTimeFromLastInbound(contact);
     }
@@ -1978,18 +1983,20 @@ class SmsBot {
       awaitingSpecificCallTime: false,
       lastAppointmentBookingError: ""
     });
-    await this.sendBotMessage(updated, render(qualificationTemplates.backupAsk, updated, { time: display }), {
+    const afterBackupAsk =
+      (await this.sendBotMessage(updated, render(qualificationTemplates.backupAsk, updated, { time: display }), {
       bypassQuietHours: true
-    });
-    const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
-      "Primary call time": updated.preferredCallTime,
+      })) || updated;
+    const bookingAlertSent = await this.notifyAppointmentBooked(afterBackupAsk, {
+      "Primary call time": afterBackupAsk.preferredCallTime,
       "Backup time": "pending",
-      Timezone: updated.timezone,
-      "GHL appointment": updated.appointmentId || "created"
+      Timezone: afterBackupAsk.timezone,
+      "GHL appointment": afterBackupAsk.appointmentId || "created"
     });
     const afterAlert = bookingAlertSent
-      ? await this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() })
-      : updated;
+      ? await this.store.upsertContact({ ...afterBackupAsk, bookingAlertSentAt: new Date().toISOString() })
+      : afterBackupAsk;
+    await this.scheduleAppointmentReminders(afterAlert);
     await this.store.addJob({
       type: "backup_time_timeout",
       contactId: afterAlert.id,

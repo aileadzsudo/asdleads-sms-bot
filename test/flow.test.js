@@ -404,6 +404,29 @@ test("appointment reminders use cadence based on time until appointment", async 
   );
 });
 
+test("admin action can ensure reminders for an already booked appointment", async () => {
+  const { bot, store } = makeBot();
+  const startsAt = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "ensure-reminders",
+    ghlContactId: "ensure-reminders",
+    name: "Ensure Reminders",
+    phone: "+15550000083",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTimeIso: startsAt,
+    appointmentId: "appt-ensure"
+  });
+
+  await bot.applyBotControl({ contactId: "ensure-reminders", action: "ensure_appointment_reminders" });
+
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "ensure-reminders" && job.type === "appointment_reminder" && job.status === "pending"),
+    true
+  );
+});
+
 test("scheduled call can be rescheduled and old reminders are replaced", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -1698,7 +1721,8 @@ test("medical answer reuses recent call time given before scheduling step", asyn
     timezone: "America/Los_Angeles",
     engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
     qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
-    faultAnswer: "not_at_fault"
+    faultAnswer: "not_at_fault",
+    lastOutboundMessage: "Old scheduling prompt"
   });
   store.addMessage({
     contactId: "reuse-call-time",
@@ -1719,6 +1743,10 @@ test("medical answer reuses recent call time given before scheduling step", asyn
   assert.ok(store.getContact("reuse-call-time").preferredCallTimeIso);
   assert.equal(store.getContact("reuse-call-time").recoveredCallTimeMessage, "2");
   assert.match(store.getContact("reuse-call-time").lastOutboundMessage, /backup time/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "reuse-call-time" && job.type === "appointment_reminder" && job.status === "pending"),
+    true
+  );
 });
 
 test("relative call time asks for exact time options instead of booking", async () => {
