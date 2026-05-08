@@ -5,6 +5,8 @@
   "description": "Production-ready SMS follow-up and call-booking backend for Accident Support Desk.",
   "main": "src/server.js",
   "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1",
     "start": "node src/server.js",
     "test": "node --test test/*.js"
   },
@@ -12,6 +14,17 @@
     "node": ">=20"
   },
   "dependencies": {
-    "pg": "^8.20.0"
+    "@tanstack/react-query": "^5.100.9",
+    "pg": "^8.20.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^3.8.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.11"
   }
 }

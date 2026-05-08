@@ -778,8 +778,50 @@ function send(res, status, body) {
 }
 
 function sendFile(res, filePath, contentType) {
+  if (!fs.existsSync(filePath)) {
+    send(res, 404, { ok: false, error: "file not found" });
+    return;
+  }
   res.writeHead(200, { "Content-Type": contentType });
-  fs.createReadStream(filePath).pipe(res);
+  const stream = fs.createReadStream(filePath);
+  stream.on("error", () => {
+    if (!res.headersSent) send(res, 404, { ok: false, error: "file not found" });
+    else res.end();
+  });
+  stream.pipe(res);
+}
+
+function staticContentType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return (
+    {
+      ".css": "text/css; charset=utf-8",
+      ".html": "text/html; charset=utf-8",
+      ".js": "text/javascript; charset=utf-8",
+      ".json": "application/json; charset=utf-8",
+      ".map": "application/json; charset=utf-8",
+      ".svg": "image/svg+xml",
+      ".woff": "font/woff",
+      ".woff2": "font/woff2"
+    }[ext] || "application/octet-stream"
+  );
+}
+
+function sendDashboardSpa(res) {
+  const builtIndex = path.join(publicDir, "dashboard-app", "index.html");
+  const fallbackIndex = path.join(publicDir, "dashboard.html");
+  sendFile(res, fs.existsSync(builtIndex) ? builtIndex : fallbackIndex, "text/html; charset=utf-8");
+}
+
+function sendDashboardAsset(req, res) {
+  const assetRoot = path.join(publicDir, "dashboard-app");
+  const rawPath = decodeURIComponent(req.url.replace(/^\/dashboard-app\/?/, ""));
+  const filePath = path.normalize(path.join(assetRoot, rawPath));
+  if (!filePath.startsWith(assetRoot)) {
+    send(res, 403, { ok: false, error: "forbidden" });
+    return;
+  }
+  sendFile(res, filePath, staticContentType(filePath));
 }
 
 function runPythonJson(scriptName, args, timeout = 120_000) {
@@ -1066,8 +1108,18 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "GET" && (req.url === "/dashboard" || req.url.startsWith("/dashboard/"))) {
+    if (req.method === "GET" && (req.url === "/dashboard-legacy" || req.url.startsWith("/dashboard-legacy/"))) {
       sendFile(res, path.join(publicDir, "dashboard.html"), "text/html; charset=utf-8");
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/dashboard-app/")) {
+      sendDashboardAsset(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && (req.url === "/dashboard" || req.url.startsWith("/dashboard/"))) {
+      sendDashboardSpa(res);
       return;
     }
 
