@@ -187,7 +187,32 @@ function parseCallTime(text, contact, config, now = new Date()) {
   if (isCallNow(t)) return { type: "now", confidence: 0.95 };
   const timeZone = contact.timezone || config.texting.defaultTimezone;
   const local = getLocalParts(now, timeZone);
-  const dayOffset = /\btomorrow\b/.test(t) ? 1 : 0;
+  const explicitToday = /\btoday\b/.test(t);
+  const weekdayMap = {
+    sunday: 0,
+    sun: 0,
+    monday: 1,
+    mon: 1,
+    tuesday: 2,
+    tue: 2,
+    tues: 2,
+    wednesday: 3,
+    wed: 3,
+    thursday: 4,
+    thu: 4,
+    thurs: 4,
+    friday: 5,
+    fri: 5,
+    saturday: 6,
+    sat: 6
+  };
+  const weekdayMatch = t.match(/\b(sunday|sun|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thurs|friday|fri|saturday|sat)\b/);
+  const currentLocalDow = new Date(Date.UTC(local.year, local.month - 1, local.day)).getUTCDay();
+  let dayOffset = /\btomorrow\b/.test(t) ? 1 : 0;
+  if (weekdayMatch) {
+    const targetDow = weekdayMap[weekdayMatch[1]];
+    dayOffset = (targetDow - currentLocalDow + 7) % 7;
+  }
   if (/\b(later today|later|not now|not right now|can't talk|cant talk|at work|working|busy)\b/.test(t) && !/\d/.test(t)) {
     return { type: "needs_specific_time", confidence: 0.8 };
   }
@@ -220,6 +245,15 @@ function parseCallTime(text, contact, config, now = new Date()) {
     { year: local.year, month: local.month, day: local.day + dayOffset, hour, minute },
     timeZone
   );
+  if (startsAt <= now) {
+    if (explicitToday) return { type: "needs_specific_time", confidence: 0.72 };
+    const futureOffset = weekdayMatch ? dayOffset + 7 : dayOffset + 1;
+    const futureStartsAt = localDateToUtc(
+      { year: local.year, month: local.month, day: local.day + futureOffset, hour, minute },
+      timeZone
+    );
+    return { type: "scheduled", startsAt: futureStartsAt.toISOString(), confidence: meridiem ? 0.88 : 0.68 };
+  }
   return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: meridiem ? 0.9 : 0.7 };
 }
 

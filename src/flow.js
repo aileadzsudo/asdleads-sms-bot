@@ -212,7 +212,11 @@ function currentQuestionTemplate(contact, config) {
 }
 
 function warmFollowUpTemplate(contact, step, config) {
-  const byProgress = warmFollowUpTemplates[contact.qualificationProgress];
+  const key =
+    contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME && contact.awaitingSpecificCallTime
+      ? "needs_call_time_specific"
+      : contact.qualificationProgress;
+  const byProgress = warmFollowUpTemplates[key];
   return byProgress?.[step] || currentQuestionTemplate(contact, config);
 }
 
@@ -1109,12 +1113,14 @@ class SmsBot {
   async handleCallTime(contact, text) {
     const parsed = parseCallTime(text, contact, this.config);
     if (!parsed) {
+      contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true });
       const sent = await this.sendBotMessage(contact, "What time works best for your call today or tomorrow?", { bypassQuietHours: true });
       const latest = sent || (await this.store.getContact(contact.id)) || contact;
       await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
       return latest;
     }
     if (parsed.type === "needs_specific_time") {
+      contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true });
       const sent = await this.sendBotMessage(contact, "What specific time later today works best?", { bypassQuietHours: true });
       const latest = sent || (await this.store.getContact(contact.id)) || contact;
       await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
@@ -1122,9 +1128,10 @@ class SmsBot {
     }
     if (parsed.type === "now") {
       const updated = await this.store.upsertContact({
-        ...contact,
-        engagementStatus: ENGAGEMENT.READY_FOR_CALL,
-        humanEscalationStatus: true
+      ...contact,
+      engagementStatus: ENGAGEMENT.READY_FOR_CALL,
+      humanEscalationStatus: true,
+      awaitingSpecificCallTime: false
       });
       await this.sendBotMessage(updated, qualificationTemplates.callNow, { bypassQuietHours: true });
       try {
@@ -1152,6 +1159,12 @@ class SmsBot {
         "Requested start": startsAt,
         Error: error.message
       });
+      contact = await this.store.upsertContact({
+        ...contact,
+        lastAppointmentBookingError: error.message,
+        lastAppointmentBookingFailedAt: new Date().toISOString(),
+        lastAppointmentRequestedStart: startsAt
+      });
       return this.escalate(contact, "appointment_booking_failed", {
         "Requested start": startsAt,
         Error: error.message
@@ -1165,7 +1178,9 @@ class SmsBot {
       preferredCallTime: display,
       preferredCallTimeIso: startsAt,
       appointmentId: appointment.id || appointment.appointment?.id || "",
-      awaitingBackupTime: true
+      awaitingBackupTime: true,
+      awaitingSpecificCallTime: false,
+      lastAppointmentBookingError: ""
     });
     await this.sendBotMessage(updated, render(qualificationTemplates.backupAsk, updated, { time: display }), {
       bypassQuietHours: true
@@ -1391,7 +1406,7 @@ class SmsBot {
       escalationReason: reason
     });
     await this.store.cancelJobsForContact(updated.id, "escalated to human");
-    await this.store.addEscalation({ contactId: updated.id, reason, lastInboundMessage: updated.lastInboundMessage });
+    await this.store.addEscalation({ contactId: updated.id, reason, lastInboundMessage: updated.lastInboundMessage, extra });
     try {
       await slack.sendEscalation(this.config, updated, reason, extra);
     } catch (error) {
@@ -1511,7 +1526,11 @@ class SmsBot {
         currentSequenceDay: step
       });
       if (template) {
-        const key = `${updated.qualificationProgress}.${step}`;
+        const templateProgressKey =
+          updated.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME && updated.awaitingSpecificCallTime
+            ? "needs_call_time_specific"
+            : updated.qualificationProgress;
+        const key = `${templateProgressKey}.${step}`;
         const rendered = await this.renderManagedTemplate(updated, "warmFollowUpTemplates", key, template);
         await this.sendBotMessage(updated, rendered.message, {
           bypassQuietHours: job.payload.afterHours,

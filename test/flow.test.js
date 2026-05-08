@@ -691,6 +691,7 @@ test("vague call time reply schedules hot lead warm follow-ups", async () => {
   const contact = await bot.handleInboundSms({ contactId: "later-call", message: "Later" });
 
   assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.equal(store.getContact("later-call").awaitingSpecificCallTime, true);
   assert.match(store.getContact("later-call").lastOutboundMessage, /specific time/i);
   const jobs = Object.values(store.data.jobs)
     .filter((job) => job.contactId === "later-call" && job.status === "pending")
@@ -712,6 +713,35 @@ test("vague call time reply schedules hot lead warm follow-ups", async () => {
     120,
     240
   ]);
+});
+
+test("after vague later reply, warm follow-up asks for exact time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "later-specific",
+    ghlContactId: "later-specific",
+    name: "Later Specific",
+    phone: "+15550000055",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    awaitingSpecificCallTime: true,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+  const job = store.addJob({
+    type: "warm_followup",
+    contactId: "later-specific",
+    runAt: new Date().toISOString(),
+    payload: { step: 1, minutes: 5 }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.match(store.getContact("later-specific").lastOutboundMessage, /exact time|specific time/i);
+  assert.doesNotMatch(store.getContact("later-specific").lastOutboundMessage, /now or later/i);
+  const message = store.data.messages.find((item) => item.contactId === "later-specific" && item.direction === "outbound");
+  assert.equal(message.templateKey, "needs_call_time_specific.1");
 });
 
 test("admin can restart hot call-time chase without sending a duplicate question", async () => {

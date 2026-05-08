@@ -48,6 +48,18 @@ test("parses call now and simple scheduled time", () => {
   assert.ok(parsed.startsAt);
 });
 
+test("parses weekday call times into the upcoming weekday", () => {
+  const parsed = parseCallTime("Monday 9am", contact, config, new Date("2026-05-08T16:00:00Z"));
+  assert.equal(parsed.type, "scheduled");
+  assert.equal(parsed.startsAt, "2026-05-11T14:00:00.000Z");
+});
+
+test("moves ambiguous past time-only replies to the next day", () => {
+  const parsed = parseCallTime("3 pm", contact, config, new Date("2026-05-08T23:00:00Z"));
+  assert.equal(parsed.type, "scheduled");
+  assert.equal(parsed.startsAt, "2026-05-09T20:00:00.000Z");
+});
+
 test("detects human context before treating yes as qualification answer", () => {
   const intent = classifyHumanContextIntent("I'm sorry yes I'm currently busy", QUALIFICATION.NEEDS_MEDICAL);
   assert.equal(intent.intent, "busy_now");

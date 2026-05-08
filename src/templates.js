@@ -157,6 +157,14 @@ const warmFollowUpTemplates = {
     4: "Last check for now - should I have a Specialist call you now or later today?",
     5: "[NAME], I can still hold this open. What time works for a quick Specialist call?",
     6: "I am going to pause after this for now. If you want the call, send me a time that works."
+  },
+  needs_call_time_specific: {
+    1: "Got it, later works 👍 What exact time should I put you down for?",
+    2: "No rush, just need the actual time so I can lock it in. What time works best for your Specialist call? 📞",
+    3: "[NAME], I can still get this scheduled. Send me the exact time that works today or tomorrow.",
+    4: "Quick check — what specific time should the Specialist call you?",
+    5: "I do not want this to fall through. What exact call time works for you?",
+    6: "I am going to pause after this for now. When you are ready, send me the exact time you want the call."
   }
 };
 
