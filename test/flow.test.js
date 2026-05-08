@@ -857,6 +857,24 @@ test("normalizes nested GHL contact payloads", () => {
   assert.equal(normalized.leadSource, "GHL workflow");
 });
 
+test("normalizes GHL webhook standard data fields", () => {
+  const normalized = normalizePayload(
+    {
+      "Contact ID": "standard-1",
+      "Contact Name": "Standard Lead",
+      "Contact Phone": "+15550000020",
+      source: "GHL standard webhook",
+      disposition: "NR"
+    },
+    testConfig("")
+  );
+
+  assert.equal(normalized.id, "standard-1");
+  assert.equal(normalized.name, "Standard Lead");
+  assert.equal(normalized.phone, "+15550000020");
+  assert.equal(normalized.leadSource, "GHL standard webhook");
+});
+
 test("no-response disposition accepts NR abbreviation", () => {
   assert.equal(isNoResponseDisposition("no response"), true);
   assert.equal(isNoResponseDisposition("NR"), true);

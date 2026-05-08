@@ -39,34 +39,48 @@ const REENGAGEMENT_SLOTS = ["am", "pm"];
 const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
 
 function normalizePayload(payload, config) {
-  const source = payload.contact || payload;
+  const source = payload.contact || payload.contactData || payload.contact_data || payload;
+  const firstName = payload.firstName || payload.first_name || source.firstName || source.first_name;
+  const lastName = payload.lastName || payload.last_name || source.lastName || source.last_name;
+  const fullName = [firstName, lastName].filter(Boolean).join(" ");
   const contactId =
     payload.contactId ||
     payload.ghlContactId ||
     payload.contact_id ||
+    payload["contact.id"] ||
+    payload["Contact ID"] ||
     payload.id ||
+    source.contactId ||
+    source.contact_id ||
     source.id ||
     source.phone ||
+    source.phoneNumber ||
     payload.phone;
   const normalized = { id: contactId };
   const fields = {
-    ghlContactId: payload.ghlContactId || payload.contactId || payload.contact_id || payload.id || source.id,
+    ghlContactId: payload.ghlContactId || payload.contactId || payload.contact_id || payload["contact.id"] || payload["Contact ID"] || payload.id || source.contactId || source.contact_id || source.id,
     name:
       payload.name ||
       payload.fullName ||
       payload.contactName ||
+      payload.full_name ||
+      payload["contact.name"] ||
+      payload["Contact Name"] ||
+      fullName ||
       payload.firstName ||
       source.name ||
       source.fullName ||
       source.contactName ||
+      source.full_name ||
+      [source.firstName || source.first_name, source.lastName || source.last_name].filter(Boolean).join(" ") ||
       source.firstName,
-    phone: payload.phone || payload.phoneNumber || source.phone || source.phoneNumber,
+    phone: payload.phone || payload.phoneNumber || payload.phone_number || payload["contact.phone"] || payload["Contact Phone"] || source.phone || source.phoneNumber || source.phone_number,
     timezone: payload.timezone || payload.timeZone || source.timezone || source.timeZone,
-    state: payload.state || payload.locationState || source.state || source.locationState,
-    leadSource: payload.leadSource || payload.source || source.leadSource || source.source,
+    state: payload.state || payload.locationState || payload["contact.state"] || source.state || source.locationState || source.address?.state,
+    leadSource: payload.leadSource || payload.source || payload.lead_source || payload["contact.source"] || source.leadSource || source.source || source.lead_source,
     ghlContactLink: payload.ghlContactLink || payload.contactLink,
     tags: payload.tags || payload.contactTags || payload.tag || source.tags,
-    lastInboundMessage: payload.message || payload.body || payload.text
+    lastInboundMessage: payload.message || payload.body || payload.text || payload.messageBody || payload.message_body || payload["message.body"]
   };
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined && value !== null && value !== "") normalized[key] = value;
