@@ -546,11 +546,19 @@ class SmsBot {
 
   async scheduleColdOutreach(contact) {
     const sentKeys = new Set(contact.sentColdTemplateKeys || []);
+    const existingJobs = await this.store.listJobs(contact.id);
+    const pendingKeys = new Set(
+      existingJobs
+        .filter((job) => job.status === "pending" && job.type === "send_cold_template")
+        .map((job) => job.payload?.templateKey)
+        .filter(Boolean)
+    );
     for (let day = 1; day <= 21; day += 1) {
       for (const slot of ["am", "pm"]) {
         const key = `day_${day}_${slot}`;
         if (!coldOutreachTemplates[key]) continue;
         if (sentKeys.has(key)) continue;
+        if (pendingKeys.has(key)) continue;
         const runAt = localSlotDate(contact, this.config, day - 1, slot);
         if (runAt <= new Date()) continue;
         await this.store.addJob({
@@ -640,6 +648,7 @@ class SmsBot {
       currentMessageCountForDay: 1,
       sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || contact.sentColdTemplateKeys || []), "day_1_am"]))
     });
+    await this.scheduleColdOutreach(afterInitial);
     await this.store.addJob({
       type: "cold_entry_check",
       contactId: afterInitial.id,
@@ -1487,6 +1496,7 @@ class SmsBot {
         currentMessageCountForDay: 1,
         sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || fresh.sentColdTemplateKeys || []), "day_1_am"]))
       });
+      await this.scheduleColdOutreach(updated);
       await this.store.addJob({
         type: "cold_entry_check",
         contactId: updated.id,

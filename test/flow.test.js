@@ -6,7 +6,7 @@ const path = require("node:path");
 const { Store } = require("../src/store");
 const { SmsBot, normalizePayload, callAskTemplateForTime } = require("../src/flow");
 const { ENGAGEMENT, QUALIFICATION } = require("../src/constants");
-const { isNoResponseDisposition } = require("../src/disposition");
+const { hasNoResponseTag, isNoResponseDisposition, isNoResponseSignal } = require("../src/disposition");
 const ghl = require("../src/adapters/ghl");
 
 function testConfig(dataFile) {
@@ -970,6 +970,29 @@ test("initial no-response SMS records day 1 AM as already sent", async () => {
   assert.deepEqual(contact.sentColdTemplateKeys, ["day_1_am"]);
 });
 
+test("immediate no-response enrollment queues cold outreach without duplicates", async () => {
+  const { bot, store } = makeBot();
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "cold-immediate-1",
+    name: "Cold Immediate",
+    phone: "+15550000052",
+    timezone: "America/Chicago",
+    tags: ["NR"]
+  });
+  const firstScheduled = Object.values(store.data.jobs).filter(
+    (job) => job.contactId === contact.id && job.type === "send_cold_template" && job.status === "pending"
+  );
+
+  await bot.scheduleColdOutreach(store.getContact(contact.id));
+  const afterReschedule = Object.values(store.data.jobs).filter(
+    (job) => job.contactId === contact.id && job.type === "send_cold_template" && job.status === "pending"
+  );
+
+  assert.equal(firstScheduled.length > 0, true);
+  assert.equal(afterReschedule.length, firstScheduled.length);
+});
+
 test("backfill queues initial SMS instead of sending immediately", async () => {
   const { bot, store } = makeBot();
   const runAt = new Date(Date.now() + 30 * 60 * 1000);
@@ -1149,4 +1172,12 @@ test("no-response disposition accepts NR abbreviation", () => {
   assert.equal(isNoResponseDisposition("no response"), true);
   assert.equal(isNoResponseDisposition("NR"), true);
   assert.equal(isNoResponseDisposition("answered"), false);
+});
+
+test("no-response enrollment accepts NR tags from GHL payloads", () => {
+  assert.equal(hasNoResponseTag({ tags: ["NR"] }), true);
+  assert.equal(hasNoResponseTag({ contact: { tags: ["no answer", "nr"] } }), true);
+  assert.equal(hasNoResponseTag({ customData: { tags: "facebook_lead, NR" } }), true);
+  assert.equal(isNoResponseSignal({ contact: { tags: ["NR"] } }), true);
+  assert.equal(isNoResponseSignal({ disposition: "answered", tags: ["warm"] }), false);
 });

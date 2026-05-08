@@ -5,7 +5,7 @@ const { execFile } = require("node:child_process");
 const { loadConfig } = require("./config");
 const { createStore } = require("./storeFactory");
 const { SmsBot } = require("./flow");
-const { isNoResponseDisposition } = require("./disposition");
+const { isNoResponseSignal } = require("./disposition");
 const { addMinutes, isWithinTextingWindow, localSlotDate, nextTextingWindow } = require("./time");
 const {
   editableTemplates,
@@ -1309,7 +1309,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && req.url === "/webhooks/ghl/disposition") {
+    if (req.method === "POST" && ["/webhooks/ghl/disposition", "/webhooks/ghl/tag", "/webhooks/ghl/nr-tag"].includes(req.url)) {
       const payload = await readJson(req);
       const auth = requireWebhookSecret(req, payload);
       if (!auth.ok) {
@@ -1321,9 +1321,8 @@ const server = http.createServer(async (req, res) => {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
         return;
       }
-      const disposition = webhookField(payload, ["disposition", "customDisposition"]);
-      if (!isNoResponseDisposition(disposition)) {
-        send(res, 202, { ok: true, ignored: true, reason: "disposition was not no response or NR" });
+      if (!isNoResponseSignal(payload)) {
+        send(res, 202, { ok: true, ignored: true, reason: "payload did not include no response disposition or NR tag" });
         return;
       }
       const contact = await bot.startFromNoResponseDisposition(payload);
