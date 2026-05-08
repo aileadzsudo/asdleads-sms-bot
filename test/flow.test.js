@@ -457,6 +457,64 @@ test("state correction after booking keeps the wall-clock appointment time in th
   }
 });
 
+test("timezone correction ignores normal words like call me", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "timezone-call-me",
+    ghlContactId: "timezone-call-me",
+    name: "Timezone Call Me",
+    phone: "+15550000079",
+    tags: ["lhpark_ca"],
+    timezone: "America/Los_Angeles",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "no"
+  });
+
+  await bot.handleInboundSms({
+    contactId: "timezone-call-me",
+    message: "Yes I am at 2 pm u can call me"
+  });
+
+  assert.equal(store.getContact("timezone-call-me").timezone, "America/Los_Angeles");
+  assert.match(store.getContact("timezone-call-me").preferredCallTime, /PST/);
+});
+
+test("admin timezone refresh uses firm tag and preserves booked wall-clock time", async () => {
+  const { bot, store } = makeBot();
+  const originalUpdateAppointment = ghl.updateAppointment;
+  const updates = [];
+  ghl.updateAppointment = async (_config, _contact, appointmentId, startsAt, endsAt, notes) => {
+    updates.push({ appointmentId, startsAt, endsAt, notes });
+    return { id: appointmentId };
+  };
+  store.upsertContact({
+    id: "admin-tz-refresh",
+    ghlContactId: "admin-tz-refresh",
+    name: "Admin Timezone",
+    phone: "+15550000080",
+    tags: ["lhpark_ca", "nr"],
+    timezone: "America/New_York",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Sat, May 9, 2:00 PM EST",
+    preferredCallTimeIso: "2026-05-09T18:00:00.000Z",
+    appointmentId: "appt-admin-tz"
+  });
+
+  try {
+    const contact = await bot.applyBotControl({ contactId: "admin-tz-refresh", action: "refresh_timezone" });
+
+    assert.equal(contact.timezone, "America/Los_Angeles");
+    assert.equal(contact.preferredCallTimeIso, "2026-05-09T21:00:00.000Z");
+    assert.match(contact.preferredCallTime, /2:00 PM PST/);
+    assert.equal(updates.some((update) => update.appointmentId === "appt-admin-tz" && update.startsAt === "2026-05-09T21:00:00.000Z"), true);
+  } finally {
+    ghl.updateAppointment = originalUpdateAppointment;
+  }
+});
+
 test("inbound message does not blank existing contact fields", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

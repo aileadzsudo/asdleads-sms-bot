@@ -569,10 +569,20 @@ function appointmentNotes(contact, extra = {}) {
 
 function timezoneCorrectionFromText(text) {
   const t = normalize(text);
-  if (!/\b(i am|i'm|im|we are|located|live|in|from|california|texas|florida|new york|arizona|nevada|washington|oregon|colorado)\b/.test(t)) {
-    return "";
+  const timezoneAlias = t.match(/\b(pacific|pst|pdt|mountain|mst|mdt|central|cst|cdt|eastern|est|edt)\b/);
+  if (timezoneAlias) return timezoneFromText(timezoneAlias[0]);
+
+  const stateName = t.match(
+    /\b(california|colorado|texas|washington|north dakota|nevada|kentucky|arizona|oregon|florida|new york)\b/
+  );
+  if (stateName && /\b(i am|i'm|im|we are|located|live|staying|based|in|from)\b/.test(t)) {
+    return timezoneFromText(stateName[0]);
   }
-  return timezoneFromText(t);
+
+  const explicitStateCode = t.match(/\b(?:in|from|located in|live in|staying in)\s+(ca|co|tx|wa|nd|nv|ky|az|or|fl|ny)\b/);
+  if (explicitStateCode) return timezoneFromText(explicitStateCode[1]);
+
+  return "";
 }
 
 class SmsBot {
@@ -652,6 +662,59 @@ class SmsBot {
           );
         } catch (error) {
           await this.notifyBotError("GHL appointment timezone correction failed", {
+            Name: contact.name || "unknown",
+            Phone: contact.phone || "unknown",
+            "GHL contact": contact.ghlContactId || contact.id,
+            "Appointment ID": contact.appointmentId || "unknown",
+            Error: error.message
+          });
+        }
+      }
+    }
+    const updated = await this.store.upsertContact(patch);
+    if (updated.preferredCallTimeIso) await this.scheduleAppointmentReminders(updated);
+    return updated;
+  }
+
+  async refreshTimezoneFromContact(contact, source = "timezone_refresh") {
+    const correctedTimezone = resolveContactTimezone(contact, this.config);
+    if (!correctedTimezone || correctedTimezone === contact.timezone) return contact;
+    const oldTimezone = contact.timezone || this.config.texting.defaultTimezone;
+    let patch = {
+      ...contact,
+      timezone: correctedTimezone,
+      timezoneCorrectedAt: new Date().toISOString(),
+      timezoneCorrectionSource: source
+    };
+    if (contact.preferredCallTimeIso) {
+      const oldLocal = getLocalParts(new Date(contact.preferredCallTimeIso), oldTimezone);
+      const correctedStart = localDateToUtc(
+        {
+          year: oldLocal.year,
+          month: oldLocal.month,
+          day: oldLocal.day,
+          hour: oldLocal.hour,
+          minute: oldLocal.minute
+        },
+        correctedTimezone
+      );
+      patch = {
+        ...patch,
+        preferredCallTimeIso: correctedStart.toISOString(),
+        preferredCallTime: formatForContact(correctedStart, { ...contact, timezone: correctedTimezone }, this.config)
+      };
+      if (contact.appointmentId) {
+        try {
+          await ghl.updateAppointment(
+            this.config,
+            patch,
+            contact.appointmentId,
+            patch.preferredCallTimeIso,
+            addMinutes(correctedStart, 15).toISOString(),
+            appointmentNotes(patch, { reason: `Timezone refreshed from ${oldTimezone} to ${correctedTimezone}.` })
+          );
+        } catch (error) {
+          await this.notifyBotError("GHL appointment timezone refresh failed", {
             Name: contact.name || "unknown",
             Phone: contact.phone || "unknown",
             "GHL contact": contact.ghlContactId || contact.id,
@@ -1542,6 +1605,10 @@ class SmsBot {
       return this.store.getContact(contact.id);
     }
 
+    if (["refresh_timezone", "fix_timezone", "timezone_refresh"].includes(action)) {
+      return this.refreshTimezoneFromContact(contact, "admin_timezone_refresh");
+    }
+
     if (["nq", "not_qualified"].includes(action)) {
       return this.stopForNqTag({ ...contact, tags: [...normalizeTags(contact.tags), "NQ"] });
     }
@@ -1795,6 +1862,10 @@ class SmsBot {
   }
 
   async handleCallTime(contact, text) {
+    const resolvedTimezone = resolveContactTimezone(contact, this.config);
+    if (resolvedTimezone && resolvedTimezone !== contact.timezone) {
+      contact = await this.store.upsertContact({ ...contact, timezone: resolvedTimezone });
+    }
     const parsed = parseCallTime(text, contact, this.config);
     if (!parsed) {
       if (looksLikeInjuryContext(text)) {
