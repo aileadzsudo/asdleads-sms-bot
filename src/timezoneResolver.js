@@ -52,16 +52,97 @@ const STATE_TIMEZONES = {
   WY: "America/Denver"
 };
 
+const STATE_NAMES = {
+  ALABAMA: "AL",
+  ALASKA: "AK",
+  ARIZONA: "AZ",
+  ARKANSAS: "AR",
+  CALIFORNIA: "CA",
+  COLORADO: "CO",
+  CONNECTICUT: "CT",
+  DELAWARE: "DE",
+  FLORIDA: "FL",
+  GEORGIA: "GA",
+  HAWAII: "HI",
+  IDAHO: "ID",
+  ILLINOIS: "IL",
+  INDIANA: "IN",
+  IOWA: "IA",
+  KANSAS: "KS",
+  KENTUCKY: "KY",
+  LOUISIANA: "LA",
+  MAINE: "ME",
+  MARYLAND: "MD",
+  MASSACHUSETTS: "MA",
+  MICHIGAN: "MI",
+  MINNESOTA: "MN",
+  MISSISSIPPI: "MS",
+  MISSOURI: "MO",
+  MONTANA: "MT",
+  NEBRASKA: "NE",
+  NEVADA: "NV",
+  "NEW HAMPSHIRE": "NH",
+  "NEW JERSEY": "NJ",
+  "NEW MEXICO": "NM",
+  "NEW YORK": "NY",
+  "NORTH CAROLINA": "NC",
+  "NORTH DAKOTA": "ND",
+  OHIO: "OH",
+  OKLAHOMA: "OK",
+  OREGON: "OR",
+  PENNSYLVANIA: "PA",
+  "RHODE ISLAND": "RI",
+  "SOUTH CAROLINA": "SC",
+  "SOUTH DAKOTA": "SD",
+  TENNESSEE: "TN",
+  TEXAS: "TX",
+  UTAH: "UT",
+  VERMONT: "VT",
+  VIRGINIA: "VA",
+  WASHINGTON: "WA",
+  "WEST VIRGINIA": "WV",
+  WISCONSIN: "WI",
+  WYOMING: "WY"
+};
+
+const TIMEZONE_ALIASES = [
+  ["America/Los_Angeles", /\b(pacific|pst|pdt)\b/i],
+  ["America/Denver", /\b(mountain|mst|mdt)\b/i],
+  ["America/Chicago", /\b(central|cst|cdt)\b/i],
+  ["America/New_York", /\b(eastern|est|edt)\b/i]
+];
+
 function normalizeState(value) {
-  return String(value || "").trim().toUpperCase();
+  const raw = String(value || "").trim();
+  const upper = raw.toUpperCase();
+  if (!upper) return "";
+  if (STATE_TIMEZONES[upper]) return upper;
+  if (STATE_NAMES[upper]) return STATE_NAMES[upper];
+  for (const [name, code] of Object.entries(STATE_NAMES)) {
+    if (new RegExp(`\\b${name.replace(/\s+/g, "\\s+")}\\b`, "i").test(raw)) return code;
+  }
+  const code = upper.match(/\b(AL|AK|AZ|AR|CA|CO|CT|DC|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VA|VT|WA|WI|WV|WY)\b/);
+  return code ? code[1] : "";
 }
 
 function timezoneFromState(value) {
   return STATE_TIMEZONES[normalizeState(value)] || "";
 }
 
-function resolveContactTimezone(contact, config) {
-  return contact.timezone || timezoneFromState(contact.state || contact.locationState) || config.texting.defaultTimezone;
+function timezoneFromText(value) {
+  const raw = String(value || "");
+  const fromState = timezoneFromState(raw);
+  if (fromState) return fromState;
+  const alias = TIMEZONE_ALIASES.find(([, pattern]) => pattern.test(raw));
+  return alias?.[0] || "";
 }
 
-module.exports = { STATE_TIMEZONES, normalizeState, timezoneFromState, resolveContactTimezone };
+function resolveContactTimezone(contact, config) {
+  const locationTimezone =
+    timezoneFromText(contact.state || contact.locationState) ||
+    timezoneFromText(contact.owner || contact.contactOwner || contact.assignedTo || contact.assignedUser || contact.user);
+  if (locationTimezone) return locationTimezone;
+  return timezoneFromText(contact.timezone) || contact.timezone || config.texting.defaultTimezone;
+}
+
+module.exports = { STATE_TIMEZONES, normalizeState, timezoneFromState, timezoneFromText, resolveContactTimezone };

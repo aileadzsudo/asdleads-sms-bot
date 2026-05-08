@@ -1392,7 +1392,7 @@ const server = http.createServer(async (req, res) => {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
         return;
       }
-      const contact = await bot.handleInboundSms(payload);
+      const contact = await bot.queueInboundSms(payload);
       send(res, 200, { ok: true, contact });
       return;
     }
@@ -1444,6 +1444,23 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const contact = await bot.handleHumanOutbound(payload);
+      send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/webhooks/ghl/human-active") {
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const dedupe = await dedupeWebhook(req, payload, "human-active");
+      if (dedupe.duplicate) {
+        send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
+        return;
+      }
+      const contact = await bot.applyBotControl({ ...payload, action: payload.action || "call_started" });
       send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
       return;
     }

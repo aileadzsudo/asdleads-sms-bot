@@ -50,6 +50,7 @@ const qualificationTemplates = {
   clarify: "I want to make sure I understood you correctly 🙏 Can you answer that last question with a quick yes, no, or not sure?",
   optOutConfirm: "No problem, we won't text you again. If you change your mind, please feel free to reach back out.",
   existingRepresentation: "No worries at all 🙏 We're always here to help. If you ever feel unsatisfied or unhappy with your current representation, please feel free to reach back out any time. We'd be happy to give you a second opinion on your case and see if we can help.",
+  injuryContextCallAsk: "Got it, that definitely matters 🤕 Even if you have not treated yet, injuries are important. The next step is getting you with a Specialist. What time works best for a quick call today or tomorrow? 📞",
   callNow: "Perfect! 🔥 I'm connecting you with a Specialist right now, you should be getting a call within the next few minutes. Make sure your phone is on and available. What's the best number to reach you at?",
   delay: "So sorry for the small wait, our Specialist is just finishing up with another client. You're next, should be calling within the next 3-5 minutes! 📞",
   backupAsk: "Perfect, I've got you down for [TIME]! 📅 Just to make sure we don't miss each other, is there a backup time that works too, just in case something comes up on either end?",

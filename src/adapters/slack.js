@@ -14,7 +14,6 @@ function baseEscalationText(config, contact, title, reason, extra = {}) {
     `Reason: ${reason}`,
     `Name: ${contact.name || "unknown"}`,
     `Phone: ${contact.phone || "unknown"}`,
-    answerLines(contact),
     `Last inbound: ${contact.lastInboundMessage || "unknown"}`,
     `GHL: ${contactLink(config, contact) || "unknown"}`
   ];

@@ -40,6 +40,8 @@ const REENGAGEMENT_DAYS = [1, 2, 3, 4, 5, 6, 7];
 const REENGAGEMENT_SLOTS = ["am", "pm"];
 const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
 const HUMAN_REPLY_TIMEOUT_MINUTES = 5;
+const HUMAN_CALL_TIMEOUT_MINUTES = 30;
+const INBOUND_BUFFER_SECONDS = 30;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 60, 120, 240];
 
 function customValue(payload, key) {
@@ -58,7 +60,22 @@ function textValue(value) {
     return "";
   }
   if (typeof value === "object") {
-    for (const key of ["message", "body", "text", "content", "value", "reply", "latestReply", "latest_reply"]) {
+    for (const key of [
+      "message",
+      "body",
+      "text",
+      "content",
+      "value",
+      "reply",
+      "latestReply",
+      "latest_reply",
+      "name",
+      "fullName",
+      "full_name",
+      "firstName",
+      "first_name",
+      "state"
+    ]) {
       const text = textValue(value[key]);
       if (text) return text;
     }
@@ -105,6 +122,24 @@ function normalizePayload(payload, config) {
     phone: payload.phone || payload.phoneNumber || payload.phone_number || payload["contact.phone"] || payload["Contact Phone"] || source.phone || source.phoneNumber || source.phone_number,
     timezone: payload.timezone || payload.timeZone || source.timezone || source.timeZone,
     state: payload.state || payload.locationState || payload["contact.state"] || source.state || source.locationState || source.address?.state,
+    owner: [
+      payload.owner,
+      payload.contactOwner,
+      payload.contact_owner,
+      payload.assignedTo,
+      payload.assigned_to,
+      payload.assignedUser,
+      payload.assigned_user,
+      payload.user,
+      source.owner,
+      source.contactOwner,
+      source.contact_owner,
+      source.assignedTo,
+      source.assigned_to,
+      source.assignedUser,
+      source.assigned_user,
+      source.user
+    ].map(textValue).find(Boolean),
     leadSource: payload.leadSource || payload.source || payload.lead_source || payload["contact.source"] || source.leadSource || source.source || source.lead_source,
     ghlContactLink: payload.ghlContactLink || payload.contactLink,
     tags: payload.tags || payload.contactTags || payload.tag || source.tags,
@@ -127,7 +162,7 @@ function normalizePayload(payload, config) {
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined && value !== null && value !== "") normalized[key] = value;
   }
-  if (normalized.timezone || normalized.state || !contactId) {
+  if (normalized.timezone || normalized.state || normalized.owner || !contactId) {
     normalized.timezone = resolveContactTimezone(normalized, config);
   }
   return normalized;
@@ -321,6 +356,17 @@ function isRescheduleRequest(text) {
   return /\b(reschedule|re-schedule|move it|move the call|change the time|change my time|different time|another time|another day|instead|push it back|push back|can't make it|cant make it|need to move|need a new time)\b/.test(t);
 }
 
+function hasLocationTimezoneSignal(contact = {}) {
+  return Boolean(contact.state || contact.locationState || contact.owner || contact.contactOwner || contact.assignedTo || contact.assignedUser || contact.user);
+}
+
+function chooseContactTimezone(existing = {}, inbound = {}, config) {
+  if (hasLocationTimezoneSignal(inbound)) return resolveContactTimezone(inbound, config);
+  const defaultTimezone = config.texting.defaultTimezone;
+  if (inbound.timezone && inbound.timezone !== defaultTimezone) return inbound.timezone;
+  return existing.timezone || inbound.timezone || defaultTimezone;
+}
+
 function anchorBackupTimeToPrimaryDate(parsed, contact, config) {
   if (!contact.preferredCallTimeIso || parsed?.type !== "scheduled") return parsed;
   const timeZone = contact.timezone || config.texting.defaultTimezone;
@@ -336,6 +382,47 @@ function anchorBackupTimeToPrimaryDate(parsed, contact, config) {
       minute: backupClock.minute
     }, timeZone).toISOString()
   };
+}
+
+function parseBackupWindow(text) {
+  const t = normalize(String(text || "").replace(/[–—]/g, "-"));
+  const match = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|to|through|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+  if (!match) return null;
+  let startHour = Number(match[1]);
+  const startMinute = Number(match[2] || 0);
+  const startMeridiem = match[3];
+  let endHour = Number(match[4]);
+  const endMinute = Number(match[5] || 0);
+  const endMeridiem = match[6];
+  const sharedMeridiem = endMeridiem || startMeridiem;
+  if (sharedMeridiem === "pm") {
+    if (startHour < 12) startHour += 12;
+    if (endHour < 12) endHour += 12;
+  }
+  if (sharedMeridiem === "am") {
+    if (startHour === 12) startHour = 0;
+    if (endHour === 12) endHour = 0;
+  }
+  if (!sharedMeridiem && startHour >= 1 && startHour <= 7 && endHour >= 1 && endHour <= 7) {
+    startHour += 12;
+    endHour += 12;
+  }
+  if (startHour >= endHour && endMeridiem === "pm" && !startMeridiem && startHour < 12) startHour += 12;
+  const meridiem = endHour >= 12 ? "PM" : "AM";
+  const displayHour = (hour) => {
+    const h = hour % 12 || 12;
+    return String(h);
+  };
+  const displayMinute = (minute) => (minute ? `:${String(minute).padStart(2, "0")}` : "");
+  return {
+    value: `${displayHour(startHour)}${displayMinute(startMinute)}-${displayHour(endHour)}${displayMinute(endMinute)} ${meridiem}`,
+    confidence: 0.86
+  };
+}
+
+function looksLikeInjuryContext(text) {
+  const t = normalize(text);
+  return /\b(injury|injuries|injured|hurt|hurting|pain|painful|sore|soreness|neck|back|shoulder|headache|whiplash|hospital|er|urgent care|doctor|medical|treatment)\b/.test(t);
 }
 
 function isPermanentSmsBlockError(error) {
@@ -548,7 +635,14 @@ class SmsBot {
       if (!isBotManagedContact(exact)) {
         return { contact: { ...exact, ...inbound }, inboundNotEnrolled: true };
       }
-      return { contact: await this.store.upsertContact({ ...exact, ...inbound }), routedFromDuplicate: false };
+      return {
+        contact: await this.store.upsertContact({
+          ...exact,
+          ...inbound,
+          timezone: chooseContactTimezone(exact, inbound, this.config)
+        }),
+        routedFromDuplicate: false
+      };
     }
 
     const activeMatches = await this.store.findActiveContactsByPhone(inbound.phone);
@@ -562,7 +656,7 @@ class SmsBot {
         id: canonical.id,
         ghlContactId: canonical.ghlContactId,
         name: canonical.name || inbound.name,
-        timezone: canonical.timezone || inbound.timezone,
+        timezone: chooseContactTimezone(canonical, inbound, this.config),
         leadSource: canonical.leadSource || inbound.leadSource,
         tags: canonical.tags || inbound.tags,
         inboundGhlContactId: inbound.ghlContactId,
@@ -818,7 +912,85 @@ class SmsBot {
     return { contact, status: "queued", runAt: targetRunAt.toISOString() };
   }
 
-  async handleInboundSms(payload) {
+  async queueInboundSms(payload) {
+    const inbound = normalizePayload(payload, this.config);
+    if (isOptOut(inbound.lastInboundMessage)) return this.handleInboundSms(payload);
+    const resolution = await this.resolveInboundContact({
+      ...inbound,
+      lastResponseTimestamp: new Date().toISOString()
+    });
+    let contact = resolution.contact;
+    if (resolution.inboundNotEnrolled) {
+      await this.store.setSetting("last_ignored_inbound_sms", {
+        contactId: contact.ghlContactId || contact.id || "",
+        phone: contact.phone || "",
+        name: contact.name || "",
+        message: contact.lastInboundMessage || "",
+        reason: "contact_not_enrolled_in_bot",
+        receivedAt: new Date().toISOString()
+      });
+      return contact;
+    }
+    await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
+    if (resolution.duplicateConflict) return contact;
+    const pendingInboundMessages = [...(contact.pendingInboundMessages || []), inbound.lastInboundMessage].filter(Boolean).slice(-6);
+    contact = await this.store.upsertContact({
+      ...contact,
+      pendingInboundMessages,
+      pendingInboundLastAt: new Date().toISOString(),
+      pendingInboundPayload: {
+        contactId: contact.id,
+        ghlContactId: contact.ghlContactId,
+        name: contact.name,
+        phone: contact.phone,
+        timezone: contact.timezone,
+        state: contact.state,
+        owner: contact.owner,
+        leadSource: contact.leadSource,
+        tags: contact.tags
+      }
+    });
+    await this.store.cancelJobsForContact(contact.id, "inbound buffer replaced", (job) => job.type === "process_inbound_buffer");
+    await this.store.addJob({
+      type: "process_inbound_buffer",
+      contactId: contact.id,
+      runAt: addMinutes(new Date(), INBOUND_BUFFER_SECONDS / 60).toISOString(),
+      payload: {}
+    });
+    return contact;
+  }
+
+  async handleInboundBuffer(job, contact) {
+    let fresh = contact || (await this.store.getContact(job.contactId));
+    if (!fresh) return null;
+    const messages = (fresh.pendingInboundMessages || []).filter(Boolean);
+    if (!messages.length) return fresh;
+    const combinedMessage = messages.join("\n");
+    const payload = {
+      ...(fresh.pendingInboundPayload || {}),
+      contactId: fresh.id,
+      ghlContactId: fresh.ghlContactId,
+      name: fresh.name,
+      phone: fresh.phone,
+      timezone: fresh.timezone,
+      state: fresh.state,
+      owner: fresh.owner,
+      leadSource: fresh.leadSource,
+      tags: fresh.tags,
+      message: combinedMessage
+    };
+    fresh = await this.store.upsertContact({
+      ...fresh,
+      pendingInboundMessages: [],
+      pendingInboundPayload: null,
+      pendingInboundLastAt: "",
+      lastInboundMessage: combinedMessage,
+      lastResponseTimestamp: fresh.pendingInboundLastAt || new Date().toISOString()
+    });
+    return this.handleInboundSms(payload, { skipMessageRecord: true });
+  }
+
+  async handleInboundSms(payload, options = {}) {
     const inbound = normalizePayload(payload, this.config);
     const resolution = await this.resolveInboundContact({
       ...inbound,
@@ -837,7 +1009,9 @@ class SmsBot {
       });
       return contact;
     }
-    await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
+    if (!options.skipMessageRecord) {
+      await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
+    }
     if (resolution.duplicateConflict) return contact;
     await this.store.cancelJobsForContact(contact.id, "contact replied", (job) =>
       ["fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "cold_entry_check"].includes(job.type)
@@ -1028,6 +1202,10 @@ class SmsBot {
       return this.handleHumanOutbound(payload);
     }
 
+    if (["call_started", "call_answered", "manual_call", "manual_call_started", "human_call"].includes(action)) {
+      return this.handleHumanOutbound({ ...payload, action, message: payload.message || "Manual human call started", timeoutMinutes: HUMAN_CALL_TIMEOUT_MINUTES });
+    }
+
     if (["human_acknowledged", "acknowledged", "human_working", "working"].includes(action)) {
       const updated = await this.store.upsertContact({
         ...contact,
@@ -1124,7 +1302,7 @@ class SmsBot {
     const now = new Date().toISOString();
     const message = textValue(normalized.lastInboundMessage || payload.message || payload.body || payload.text) || "Manual human SMS sent";
     await this.cancelHumanEscalationWatchdog(contact.id, "human sent manual SMS");
-    await this.store.cancelJobsForContact(contact.id, "human reply timeout replaced", (job) => job.type === "human_reply_timeout");
+    await this.store.cancelJobsForContact(contact.id, "human took over");
     await this.store.addMessage({
       contactId: contact.id,
       direction: "human_outbound",
@@ -1141,11 +1319,12 @@ class SmsBot {
       automationPauseReason: "human_working",
       engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN
     });
+    const timeoutMinutes = Math.max(1, Number(payload.timeoutMinutes || HUMAN_REPLY_TIMEOUT_MINUTES));
     await this.store.addJob({
       type: "human_reply_timeout",
       contactId: updated.id,
-      runAt: addMinutes(new Date(), HUMAN_REPLY_TIMEOUT_MINUTES).toISOString(),
-      payload: { lastHumanOutboundAt: now }
+      runAt: addMinutes(new Date(), timeoutMinutes).toISOString(),
+      payload: { lastHumanOutboundAt: now, timeoutMinutes, sourceAction: payload.action || "" }
     });
     return updated;
   }
@@ -1308,6 +1487,12 @@ class SmsBot {
   async handleCallTime(contact, text) {
     const parsed = parseCallTime(text, contact, this.config);
     if (!parsed) {
+      if (looksLikeInjuryContext(text)) {
+        const sent = await this.sendBotMessage(contact, qualificationTemplates.injuryContextCallAsk, { bypassQuietHours: true });
+        const latest = sent || (await this.store.getContact(contact.id)) || contact;
+        await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+        return latest;
+      }
       const llmResult = await this.tryLlmFallback(contact, text);
       if (llmResult) return llmResult;
       await this.escalate(contact, "call_time_unhandled_reply");
@@ -1472,6 +1657,39 @@ class SmsBot {
   }
 
   async handleBackupTime(contact, text) {
+    const backupWindow = parseBackupWindow(text);
+    if (backupWindow) {
+      const updated = await this.store.upsertContact({
+        ...contact,
+        backupCallTime: backupWindow.value,
+        backupCallTimeIso: "",
+        backupCallTimeType: "window",
+        awaitingBackupTime: false,
+        qualificationProgress: QUALIFICATION.COMPLETE
+      });
+      await this.sendBotMessage(
+        updated,
+        render(qualificationTemplates.bookingConfirmedWithBackup, updated, {
+          primaryTime: updated.preferredCallTime,
+          backupTime: backupWindow.value
+        }),
+        { bypassQuietHours: true }
+      );
+      await this.store.cancelJobsForContact(updated.id, "backup time answered", (job) => job.type === "backup_time_timeout");
+      if (!updated.bookingAlertSentAt) {
+        const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
+          "Primary call time": updated.preferredCallTime,
+          "Backup time": updated.backupCallTime || "none",
+          Timezone: updated.timezone,
+          "GHL appointment": updated.appointmentId || "created"
+        });
+        if (bookingAlertSent) {
+          await this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() });
+        }
+      }
+      await this.scheduleAppointmentReminders(updated);
+      return updated;
+    }
     let parsed = parseCallTime(text, contact, this.config);
     if (parsed?.type === "scheduled" && !hasExplicitCallDate(text)) {
       parsed = anchorBackupTimeToPrimaryDate(parsed, contact, this.config);
@@ -1698,6 +1916,11 @@ class SmsBot {
     if (contact && hasSignedTag(contact)) await this.stopForSignedTag(contact);
     if (contact && hasNqTag(contact)) await this.stopForNqTag(contact);
     if (contact && hasManualHumanHoldTag(contact)) await this.stopForManualHoldTag(contact);
+    if (job.type === "process_inbound_buffer") {
+      await this.handleInboundBuffer(job, contact);
+      await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });
+      return;
+    }
     if (job.type === "human_reply_timeout") {
       await this.handleHumanReplyTimeout(job, contact);
       await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });

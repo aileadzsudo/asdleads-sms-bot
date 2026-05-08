@@ -10,6 +10,7 @@ const { hasNoResponseTag, isNoResponseDisposition, isNoResponseSignal } = requir
 const { render } = require("../src/templates");
 const { getLocalParts, localDateToUtc } = require("../src/time");
 const ghl = require("../src/adapters/ghl");
+const slack = require("../src/adapters/slack");
 
 function testConfig(dataFile) {
   return {
@@ -198,6 +199,31 @@ test("backup time reply finalizes scheduled call instead of escalating", async (
   assert.equal(store.getContact("c3b").qualificationProgress, QUALIFICATION.COMPLETE);
   assert.match(store.getContact("c3b").backupCallTime, /Fri, May 8, 4:00 PM/);
   assert.match(store.getContact("c3b").lastOutboundMessage, /backup/i);
+});
+
+test("backup time window is saved as a window instead of duplicating primary time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "backup-window",
+    ghlContactId: "backup-window",
+    name: "Francisco",
+    phone: "+15550000064",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Fri, May 8, 2:00 PM CDT",
+    preferredCallTimeIso: "2026-05-08T19:00:00.000Z",
+    appointmentId: "appt-window",
+    awaitingBackupTime: true
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "backup-window", message: "2-4pm" });
+
+  assert.equal(contact.awaitingBackupTime, false);
+  assert.equal(store.getContact("backup-window").backupCallTime, "2-4 PM");
+  assert.equal(store.getContact("backup-window").backupCallTimeType, "window");
+  assert.match(store.getContact("backup-window").lastOutboundMessage, /2-4 PM as a backup/i);
+  assert.equal(store.getContact("backup-window").backupCallTimeIso, "");
 });
 
 test("backup time reply cancels backup timeout and schedules reminders", async () => {
@@ -512,6 +538,25 @@ test("human escalation schedules SLA watchdog jobs", async () => {
   );
 });
 
+test("SMS escalation Slack copy stays compact without unknown qualification fields", async () => {
+  const result = await slack.sendEscalation(
+    { ...testConfig(""), dryRun: true, slack: { token: "", channel: "#sms", botErrorsChannel: "#bot-errors", bookingChannel: "#booking" } },
+    {
+      id: "slack-copy",
+      ghlContactId: "slack-copy",
+      name: "Slack Copy",
+      phone: "+15550000061",
+      lastInboundMessage: "Can you help?"
+    },
+    "low_confidence_answer"
+  );
+
+  assert.equal(result.skipped, true);
+  assert.doesNotMatch(result.text, /Accident date:/);
+  assert.doesNotMatch(result.text, /Fault:/);
+  assert.doesNotMatch(result.text, /Medical:/);
+});
+
 test("human acknowledgement cancels escalation watchdog jobs", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -577,6 +622,53 @@ test("manual human SMS returns lead to bot after timeout if lead stays quiet", a
     Object.values(store.data.jobs).some((job) => job.contactId === "human-return-timeout" && job.type === "warm_followup" && job.status === "pending"),
     true
   );
+});
+
+test("manual call activity waits 30 minutes before returning to bot", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-call-timeout",
+    ghlContactId: "human-call-timeout",
+    name: "Human Call",
+    phone: "+15550000062",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault"
+  });
+  store.addJob({ type: "warm_followup", contactId: "human-call-timeout", runAt: new Date().toISOString(), payload: { step: 1 } });
+
+  const contact = await bot.applyBotControl({ contactId: "human-call-timeout", action: "call_started" });
+  const timeout = Object.values(store.data.jobs).find(
+    (job) => job.contactId === "human-call-timeout" && job.type === "human_reply_timeout" && job.status === "pending"
+  );
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.humanEscalationStage, "human_replied_waiting");
+  assert.equal(timeout.payload.timeoutMinutes, 30);
+  const minutesAway = Math.round((new Date(timeout.runAt).getTime() - Date.now()) / 60000);
+  assert.ok(minutesAway >= 29 && minutesAway <= 30);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "human-call-timeout" && job.type === "warm_followup" && job.status === "pending"),
+    false
+  );
+});
+
+test("GHL human-active webhook action can pause bot for an active call", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-active-call",
+    ghlContactId: "human-active-call",
+    name: "Human Active",
+    phone: "+15550000063",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  const contact = await bot.applyBotControl({ contactId: "human-active-call", action: "manual_call" });
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "human_working");
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
 });
 
 test("manual human SMS timeout stays paused when a human hold tag is present", async () => {
@@ -1097,6 +1189,61 @@ test("off-flow call-time replies escalate when they do not answer scheduling", a
   assert.equal(store.data.messages.some((message) => /what time works/i.test(message.body)), false);
 });
 
+test("queued inbound SMS buffers quick consecutive messages before responding", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "buffered-inbound",
+    ghlContactId: "buffered-inbound",
+    name: "Buffered",
+    phone: "+15550000066",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault"
+  });
+
+  await bot.queueInboundSms({ contactId: "buffered-inbound", message: "No I did not" });
+  await bot.queueInboundSms({ contactId: "buffered-inbound", message: "But I have injuries" });
+  const pendingJobs = Object.values(store.data.jobs).filter(
+    (job) => job.contactId === "buffered-inbound" && job.type === "process_inbound_buffer" && job.status === "pending"
+  );
+
+  assert.equal(pendingJobs.length, 1);
+  await bot.runDueJob(pendingJobs[0]);
+
+  const contact = store.getContact("buffered-inbound");
+  assert.equal(contact.pendingInboundMessages.length, 0);
+  assert.equal(contact.medicalTreatmentAnswer, "no");
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.match(contact.lastOutboundMessage, /Specialist/i);
+  assert.equal(store.data.messages.filter((message) => message.contactId === "buffered-inbound" && message.direction === "inbound").length, 2);
+});
+
+test("injury context during call scheduling asks for a call time instead of escalating", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "injury-call-time",
+    ghlContactId: "injury-call-time",
+    name: "Yohana",
+    phone: "+15550000065",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "unsure_or_partial",
+    medicalTreatmentAnswer: "no"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "injury-call-time",
+    message: "But I have injuries"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("injury-call-time").humanEscalationStatus, undefined);
+  assert.match(store.getContact("injury-call-time").lastOutboundMessage, /injuries are important/i);
+  assert.match(store.getContact("injury-call-time").lastOutboundMessage, /What time works/i);
+});
+
 test("after vague later reply, warm follow-up asks for exact time", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -1485,6 +1632,45 @@ test("normalizes timezone from GHL state when timezone is empty", () => {
 
   assert.equal(normalized.state, "CA");
   assert.equal(normalized.timezone, "America/Los_Angeles");
+});
+
+test("normalizes timezone from owner/state even when GHL sends account default timezone", () => {
+  const normalized = normalizePayload(
+    {
+      contactId: "tz-owner-ca",
+      name: "Francisco González",
+      phone: "+15550000067",
+      timezone: "America/Chicago",
+      owner: "California Intake"
+    },
+    testConfig("")
+  );
+
+  assert.equal(normalized.owner, "California Intake");
+  assert.equal(normalized.timezone, "America/Los_Angeles");
+});
+
+test("inbound payload with owner state corrects an existing default timezone", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "tz-existing",
+    ghlContactId: "tz-existing",
+    name: "Timezone Existing",
+    phone: "+15550000068",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+
+  await bot.handleInboundSms({
+    contactId: "tz-existing",
+    message: "tomorrow at 2pm",
+    timezone: "America/Chicago",
+    owner: "CA"
+  });
+
+  assert.equal(store.getContact("tz-existing").timezone, "America/Los_Angeles");
+  assert.match(store.getContact("tz-existing").preferredCallTime, /PDT|PST/);
 });
 
 test("normalizes nested GHL contact payloads", () => {
