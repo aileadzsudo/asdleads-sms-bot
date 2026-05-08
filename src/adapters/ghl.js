@@ -159,8 +159,10 @@ async function updateAppointment(config, contact, appointmentId, startsAt, endsA
 
 function contactLink(config, contact) {
   if (contact.ghlContactLink) return contact.ghlContactLink;
-  if (!config.publicBaseUrl) return "";
-  return `${config.publicBaseUrl}/contacts/${contact.ghlContactId || contact.id}`;
+  const contactId = contact.ghlContactId || contact.id;
+  if (!contactId || !config.ghl?.locationId) return "";
+  const baseUrl = config.ghl.appBaseUrl || "https://app.gohighlevel.com";
+  return `${baseUrl}/v2/location/${encodeURIComponent(config.ghl.locationId)}/contacts/detail/${encodeURIComponent(contactId)}`;
 }
 
 module.exports = { sendSms, createAppointment, updateAppointment, getContact, searchContactsByTag, contactLink };

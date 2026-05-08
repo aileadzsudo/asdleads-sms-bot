@@ -58,6 +58,17 @@ test("template name personalization uses first name only", () => {
   assert.equal(render("Hi [NAME]", { firstName: "SARAH", name: "Sarah Johnson" }), "Hi Sarah");
 });
 
+test("GHL contact links point to GoHighLevel instead of the public bot URL", () => {
+  const config = testConfig("");
+  config.publicBaseUrl = "https://asdleads-sms-bot.onrender.com";
+  config.ghl.locationId = "loc123";
+
+  assert.equal(
+    ghl.contactLink(config, { ghlContactId: "contact123" }),
+    "https://app.gohighlevel.com/v2/location/loc123/contacts/detail/contact123"
+  );
+});
+
 test("qualification resumes from saved progress instead of restarting", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -399,6 +410,75 @@ test("human acknowledgement cancels escalation watchdog jobs", async () => {
     Object.values(store.data.jobs).some((job) => job.contactId === "human-ack" && job.status === "pending"),
     false
   );
+});
+
+test("manual human SMS returns lead to bot after timeout if lead stays quiet", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-return-timeout",
+    ghlContactId: "human-return-timeout",
+    name: "Human Return",
+    phone: "+15550000056",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault",
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_working",
+    automationPaused: true,
+    automationPauseReason: "human_working"
+  });
+
+  const acknowledged = await bot.handleHumanOutbound({
+    contactId: "human-return-timeout",
+    message: "This is Sarah from Accident Support Desk, I can help."
+  });
+  const timeout = Object.values(store.data.jobs).find(
+    (job) => job.contactId === "human-return-timeout" && job.type === "human_reply_timeout" && job.status === "pending"
+  );
+
+  assert.equal(acknowledged.humanEscalationStage, "human_replied_waiting");
+  assert.ok(timeout);
+
+  await bot.runDueJob(timeout);
+
+  const contact = store.getContact("human-return-timeout");
+  assert.equal(contact.humanEscalationStatus, false);
+  assert.equal(contact.automationPaused, false);
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.humanEscalationStage, "auto_returned_after_human_timeout");
+  assert.match(contact.lastOutboundMessage, /medical treatment/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "human-return-timeout" && job.type === "warm_followup" && job.status === "pending"),
+    true
+  );
+});
+
+test("manual human SMS timeout stays paused when a human hold tag is present", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-hold-timeout",
+    ghlContactId: "human-hold-timeout",
+    name: "Human Hold",
+    phone: "+15550000057",
+    tags: ["human_hold"],
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_working",
+    automationPaused: true,
+    automationPauseReason: "human_working"
+  });
+
+  await bot.handleHumanOutbound({ contactId: "human-hold-timeout", message: "We are keeping this one manual." });
+  const timeout = Object.values(store.data.jobs).find(
+    (job) => job.contactId === "human-hold-timeout" && job.type === "human_reply_timeout" && job.status === "pending"
+  );
+  await bot.runDueJob(timeout);
+
+  const contact = store.getContact("human-hold-timeout");
+  assert.equal(contact.humanEscalationStatus, true);
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.lastOutboundMessage, undefined);
 });
 
 test("admin pause stops bot automation without marking opt-out", async () => {

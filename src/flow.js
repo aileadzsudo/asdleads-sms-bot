@@ -38,6 +38,7 @@ const WARM_FOLLOW_UP_MINUTES = [5, 15, 30, 60, 120, 240];
 const REENGAGEMENT_DAYS = [1, 2, 3, 4, 5, 6, 7];
 const REENGAGEMENT_SLOTS = ["am", "pm"];
 const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
+const HUMAN_REPLY_TIMEOUT_MINUTES = 5;
 
 function customValue(payload, key) {
   return payload.customData?.[key] || payload.custom_data?.[key] || "";
@@ -164,6 +165,10 @@ function actionFromTags(tags) {
 function hasAnyTag(contact, names) {
   const wanted = new Set(names.map((name) => name.toLowerCase().replace(/^#/, "").replace(/[-\s]+/g, "_")));
   return normalizeTags(contact.tags).some((tag) => wanted.has(tag.replace(/^#/, "").replace(/[-\s]+/g, "_")));
+}
+
+function hasManualHumanHoldTag(contact) {
+  return hasAnyTag(contact, ["human_hold", "keep_human", "manual_hold", "do_not_return_to_bot"]);
 }
 
 function looksPostSignedOrFirmIssue(text) {
@@ -887,6 +892,10 @@ class SmsBot {
     const contact = await this.store.getContact(normalized.id);
     if (!contact) return null;
 
+    if (["human_replied", "human_outbound", "manual_sms_sent", "staff_replied"].includes(action)) {
+      return this.handleHumanOutbound(payload);
+    }
+
     if (["human_acknowledged", "acknowledged", "human_working", "working"].includes(action)) {
       const updated = await this.store.upsertContact({
         ...contact,
@@ -973,6 +982,40 @@ class SmsBot {
       "Raw value": payload.action || payload.botControl || payload.customFieldValue || payload.value || ""
     });
     return contact;
+  }
+
+  async handleHumanOutbound(payload) {
+    const normalized = normalizePayload(payload, this.config);
+    const contact = await this.store.getContact(normalized.id);
+    if (!contact) return null;
+
+    const now = new Date().toISOString();
+    const message = textValue(normalized.lastInboundMessage || payload.message || payload.body || payload.text) || "Manual human SMS sent";
+    await this.cancelHumanEscalationWatchdog(contact.id, "human sent manual SMS");
+    await this.store.cancelJobsForContact(contact.id, "human reply timeout replaced", (job) => job.type === "human_reply_timeout");
+    await this.store.addMessage({
+      contactId: contact.id,
+      direction: "human_outbound",
+      body: message
+    });
+    const updated = await this.store.upsertContact({
+      ...contact,
+      humanEscalationStatus: true,
+      humanEscalationStage: "human_replied_waiting",
+      humanAcknowledgedAt: contact.humanAcknowledgedAt || now,
+      lastHumanOutboundMessage: message,
+      lastHumanOutboundAt: now,
+      automationPaused: true,
+      automationPauseReason: "human_working",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN
+    });
+    await this.store.addJob({
+      type: "human_reply_timeout",
+      contactId: updated.id,
+      runAt: addMinutes(new Date(), HUMAN_REPLY_TIMEOUT_MINUTES).toISOString(),
+      payload: { lastHumanOutboundAt: now }
+    });
+    return updated;
   }
 
   async tryLlmFallback(contact, inboundText) {
@@ -1461,6 +1504,47 @@ class SmsBot {
     return updated;
   }
 
+  async handleHumanReplyTimeout(job, contact) {
+    let fresh = contact || (await this.store.getContact(job.contactId));
+    if (!fresh) return null;
+    fresh = await this.hydrateContactTags(fresh, { force: true });
+    if (
+      fresh.optOutStatus ||
+      hasSignedTag(fresh) ||
+      hasNqTag(fresh) ||
+      hasManualHumanHoldTag(fresh) ||
+      fresh.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
+      fresh.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
+      fresh.qualificationProgress === QUALIFICATION.COMPLETE ||
+      fresh.appointmentId
+    ) {
+      return fresh;
+    }
+
+    const humanAt = new Date(job.payload?.lastHumanOutboundAt || fresh.lastHumanOutboundAt || 0);
+    const lastInboundAt = fresh.lastResponseTimestamp ? new Date(fresh.lastResponseTimestamp) : null;
+    if (lastInboundAt && humanAt && lastInboundAt > humanAt) return fresh;
+    if (!fresh.humanEscalationStatus || !["human_working", "human_replied_waiting"].includes(fresh.humanEscalationStage)) {
+      return fresh;
+    }
+
+    const resumed = await this.store.upsertContact({
+      ...fresh,
+      humanEscalationStatus: false,
+      humanEscalationStage: "auto_returned_after_human_timeout",
+      automationPaused: false,
+      automationPauseReason: "",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: fresh.qualificationProgress || QUALIFICATION.NEEDS_FAULT
+    });
+    const template = currentQuestionTemplate(resumed, this.config);
+    if (!template) return resumed;
+    const sent = await this.sendBotMessage(resumed, render(template, resumed), { bypassQuietHours: true });
+    const latest = sent || (await this.store.getContact(resumed.id)) || resumed;
+    await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+    return latest;
+  }
+
   async runDueJob(job) {
     const outboundJobTypes = [
       "initial_sms",
@@ -1479,6 +1563,11 @@ class SmsBot {
     }
     if (contact && hasSignedTag(contact)) await this.stopForSignedTag(contact);
     if (contact && hasNqTag(contact)) await this.stopForNqTag(contact);
+    if (job.type === "human_reply_timeout") {
+      await this.handleHumanReplyTimeout(job, contact);
+      await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });
+      return;
+    }
     if (
       !contact ||
       contact.optOutStatus ||

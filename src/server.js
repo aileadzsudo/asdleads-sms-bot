@@ -1431,6 +1431,23 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && req.url === "/webhooks/ghl/human-outbound") {
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const dedupe = await dedupeWebhook(req, payload, "human-outbound");
+      if (dedupe.duplicate) {
+        send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
+        return;
+      }
+      const contact = await bot.handleHumanOutbound(payload);
+      send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/jobs/tick") {
       send(res, 200, { ok: true, results: await runDueJobs() });
       return;

@@ -49,6 +49,7 @@ function loadConfig() {
     },
     ghl: {
       apiBase: process.env.GHL_API_BASE || "https://services.leadconnectorhq.com",
+      appBaseUrl: process.env.GHL_APP_BASE_URL || "https://app.gohighlevel.com",
       token: process.env.GHL_API_TOKEN || "",
       locationId: process.env.GHL_LOCATION_ID || "",
       calendarId: process.env.GHL_CALENDAR_ID || ""
