@@ -388,6 +388,35 @@ function isSoftEscalationReason(reason = "") {
   ].includes(String(reason || ""));
 }
 
+function canAutoReturnUnacknowledgedEscalation(contact, job = {}) {
+  if (!contact?.humanEscalationStatus || contact.humanEscalationStage !== "human_review_pending") return false;
+  if (contact.automationPaused) return false;
+  if (
+    contact.optOutStatus ||
+    hasSignedTag(contact) ||
+    hasNqTag(contact) ||
+    hasManualHumanHoldTag(contact) ||
+    contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
+    contact.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
+    contact.qualificationProgress === QUALIFICATION.COMPLETE ||
+    contact.appointmentId
+  ) {
+    return false;
+  }
+  const minutes = Number(job.payload?.minutes || 0);
+  if (minutes < 30) return false;
+  const reason = String(job.payload?.reason || contact.escalationReason || "");
+  return [
+    "detailed_information",
+    "low_confidence_answer",
+    "llm_unknown",
+    "llm_low_confidence_answer",
+    "llm_unhandled_unknown",
+    "llm_call_time_unknown",
+    "message_after_bot_paused"
+  ].includes(reason);
+}
+
 function canAutoResumeFromSoftEscalation(contact, text, config) {
   if (contact.engagementStatus !== ENGAGEMENT.ESCALATED_TO_HUMAN) return false;
   if (contact.automationPaused) return false;
@@ -2489,6 +2518,42 @@ class SmsBot {
     return latest;
   }
 
+  async handleHumanEscalationSla(job) {
+    let fresh = await this.store.getContact(job.contactId);
+    if (!fresh) return null;
+    fresh = await this.hydrateContactTags(fresh, { force: true });
+    if (!canAutoReturnUnacknowledgedEscalation(fresh, job)) {
+      if (fresh?.humanEscalationStage === "human_review_pending" && fresh.humanEscalationStatus) {
+        await this.store.upsertContact({
+          ...fresh,
+          lastHumanEscalationSlaAt: new Date().toISOString(),
+          lastHumanEscalationSlaMinutes: job.payload?.minutes || "",
+          lastHumanEscalationSlaReason: job.payload?.reason || fresh.escalationReason || "unknown"
+        });
+      }
+      return fresh;
+    }
+
+    const resumed = await this.store.upsertContact({
+      ...fresh,
+      humanEscalationStatus: false,
+      humanEscalationStage: "auto_returned_after_unacknowledged_escalation",
+      automationPaused: false,
+      automationPauseReason: "",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: fresh.qualificationProgress || QUALIFICATION.NEEDS_FAULT,
+      lastHumanEscalationSlaAt: new Date().toISOString(),
+      lastHumanEscalationSlaMinutes: job.payload?.minutes || "",
+      lastHumanEscalationSlaReason: job.payload?.reason || fresh.escalationReason || "unknown"
+    });
+    const template = humanReturnTemplate(resumed, this.config);
+    if (!template) return resumed;
+    const sent = await this.sendBotMessage(resumed, render(template, resumed), { bypassQuietHours: true });
+    const latest = sent || (await this.store.getContact(resumed.id)) || resumed;
+    await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+    return latest;
+  }
+
   async runDueJob(job) {
     const outboundJobTypes = [
       "initial_sms",
@@ -2548,15 +2613,7 @@ class SmsBot {
       await this.sendBotMessage(contact, job.payload.message);
     }
     if (job.type === "human_escalation_sla") {
-      const fresh = await this.store.getContact(job.contactId);
-      if (fresh?.humanEscalationStage === "human_review_pending" && fresh.humanEscalationStatus) {
-        await this.store.upsertContact({
-          ...fresh,
-          lastHumanEscalationSlaAt: new Date().toISOString(),
-          lastHumanEscalationSlaMinutes: job.payload.minutes || "",
-          lastHumanEscalationSlaReason: job.payload.reason || fresh.escalationReason || "unknown"
-        });
-      }
+      await this.handleHumanEscalationSla(job);
     }
     if (job.type === "initial_sms") {
       const fresh = await this.store.getContact(job.contactId);

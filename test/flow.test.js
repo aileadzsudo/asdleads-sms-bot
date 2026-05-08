@@ -824,6 +824,71 @@ test("human escalation SLA jobs are tracked silently instead of posting bot-erro
   assert.equal(store.data.jobs[job.id].status, "done");
 });
 
+test("recoverable unacknowledged human escalation returns to bot after 30 minutes", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-sla-return",
+    ghlContactId: "human-sla-return",
+    name: "Human Return",
+    phone: "+15550000076",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "detailed_information",
+    lastInboundMessage: "It is up in the air and there were a lot of details."
+  });
+  const job = store.addJob({
+    type: "human_escalation_sla",
+    contactId: "human-sla-return",
+    runAt: new Date().toISOString(),
+    payload: { minutes: 30, reason: "detailed_information" }
+  });
+
+  await bot.runDueJob(job);
+
+  const contact = store.getContact("human-sla-return");
+  assert.equal(contact.humanEscalationStatus, false);
+  assert.equal(contact.automationPaused, false);
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.humanEscalationStage, "auto_returned_after_unacknowledged_escalation");
+  assert.match(contact.lastOutboundMessage, /still here with me/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((item) => item.contactId === "human-sla-return" && item.type === "warm_followup" && item.status === "pending"),
+    true
+  );
+});
+
+test("hard human escalations do not auto-return from SLA watchdog", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-sla-hard",
+    ghlContactId: "human-sla-hard",
+    name: "Human Hard",
+    phone: "+15550000078",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "attorney_request",
+    lastInboundMessage: "I need an attorney."
+  });
+  const job = store.addJob({
+    type: "human_escalation_sla",
+    contactId: "human-sla-hard",
+    runAt: new Date().toISOString(),
+    payload: { minutes: 30, reason: "attorney_request" }
+  });
+
+  await bot.runDueJob(job);
+
+  const contact = store.getContact("human-sla-hard");
+  assert.equal(contact.humanEscalationStatus, true);
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(contact.humanEscalationStage, "human_review_pending");
+  assert.equal(contact.lastOutboundMessage, undefined);
+});
+
 test("SMS escalation Slack copy stays compact without unknown qualification fields", async () => {
   const baseConfig = testConfig("");
   const result = await slack.sendEscalation(
