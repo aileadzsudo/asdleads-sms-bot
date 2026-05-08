@@ -145,6 +145,38 @@ function parseMedicalAnswer(text) {
   return null;
 }
 
+function hasExpectedAnswerSignal(progress, text) {
+  const t = normalize(text);
+  if (progress === QUALIFICATION.NEEDS_FAULT) {
+    return /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|my fault|i was at fault|at fault|they hit me|hit me|rear ended|rear-ended|not sure|unsure|partially|partial)\b/.test(t);
+  }
+  if (progress === QUALIFICATION.NEEDS_MEDICAL) {
+    return /\b(doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|no doctor|no treatment|not seen|haven't|havent|didn't|didnt)\b/.test(t);
+  }
+  if (progress === QUALIFICATION.NEEDS_CALL_TIME) {
+    return /\b(now|today|tomorrow|morning|afternoon|evening|tonight|noon|\d{1,2}(?::\d{2})?\s*(am|pm)?)\b/.test(t);
+  }
+  return false;
+}
+
+function classifyHumanContextIntent(text, progress) {
+  const t = normalize(text);
+  if (!t) return null;
+
+  const busy =
+    /\b(currently busy|busy right now|i'm busy|im busy|i am busy|busy|at work|working|in a meeting|driving|can't talk|cant talk|cannot talk|not available|occupied)\b/.test(t);
+  const apology = /\b(sorry|my bad|apologize|apologies)\b/.test(t);
+  const prefersText = /\b(text me|text is better|can we text|over text|just text|message me)\b/.test(t);
+
+  if (busy && !hasExpectedAnswerSignal(progress, t)) {
+    return { intent: "busy_now", confidence: apology ? 0.92 : 0.88 };
+  }
+  if (prefersText && !hasExpectedAnswerSignal(progress, t)) {
+    return { intent: "prefers_text", confidence: 0.86 };
+  }
+  return null;
+}
+
 function isCallNow(text) {
   const t = normalize(text);
   return /\b(call me now|call now|right now|now is fine|now is good|available now|i'm available now|im available now|i can talk now|asap|anytime|any time)\b/.test(t);
@@ -204,6 +236,7 @@ module.exports = {
   parseAccidentDate,
   parseFaultAnswer,
   parseMedicalAnswer,
+  classifyHumanContextIntent,
   parseCallTime,
   parseExpectedAnswer,
   isCallNow,

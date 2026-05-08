@@ -70,6 +70,27 @@ test("qualification resumes from saved progress instead of restarting", async ()
   assert.match(store.getContact("c2").lastOutboundMessage, /Specialist/i);
 });
 
+test("busy context does not count yes as a medical answer", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "busy-1",
+    ghlContactId: "busy-1",
+    name: "Busy Lead",
+    phone: "+15550000051",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "busy-1", message: "I'm sorry yes I'm currently busy" });
+
+  assert.equal(contact.medicalTreatmentAnswer, undefined);
+  assert.equal(store.getContact("busy-1").qualificationProgress, QUALIFICATION.NEEDS_MEDICAL);
+  assert.equal(store.getContact("busy-1").lastHumanContextIntent, "busy_now");
+  assert.match(store.getContact("busy-1").lastOutboundMessage, /No worries/i);
+  assert.match(store.getContact("busy-1").lastOutboundMessage, /medical treatment/i);
+});
+
 test("scheduled call confirmation does not restart qualification", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

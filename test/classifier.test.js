@@ -7,6 +7,7 @@ const {
   parseAccidentDate,
   parseCallTime,
   escalationReason,
+  classifyHumanContextIntent,
   isDocumentOrReport
 } = require("../src/classifier");
 
@@ -45,6 +46,19 @@ test("parses call now and simple scheduled time", () => {
   const parsed = parseCallTime("tomorrow at 3pm", contact, config, new Date("2026-05-07T15:00:00Z"));
   assert.equal(parsed.type, "scheduled");
   assert.ok(parsed.startsAt);
+});
+
+test("detects human context before treating yes as qualification answer", () => {
+  const intent = classifyHumanContextIntent("I'm sorry yes I'm currently busy", QUALIFICATION.NEEDS_MEDICAL);
+  assert.equal(intent.intent, "busy_now");
+});
+
+test("does not block real medical answers that include context", () => {
+  assert.equal(classifyHumanContextIntent("I went to the hospital but I am busy right now", QUALIFICATION.NEEDS_MEDICAL), null);
+});
+
+test("does not block real call-time answers that include busy context", () => {
+  assert.equal(classifyHumanContextIntent("I'm busy but tomorrow afternoon works", QUALIFICATION.NEEDS_CALL_TIME), null);
 });
 
 test("flags common escalation messages", () => {

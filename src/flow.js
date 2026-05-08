@@ -13,6 +13,7 @@ const {
   normalize,
   isOptOut,
   escalationReason,
+  classifyHumanContextIntent,
   parseAccidentDate,
   parseCallTime,
   parseExpectedAnswer
@@ -251,6 +252,23 @@ function isBotManagedContact(contact) {
       contact.lastOutboundTimestamp ||
       (Array.isArray(contact.sentColdTemplateKeys) && contact.sentColdTemplateKeys.length)
   );
+}
+
+function humanContextResponse(contact, intent, config) {
+  if (intent.intent === "prefers_text") {
+    const template = currentQuestionTemplate(contact, config);
+    return template ? `Absolutely, we can keep this over text 🙏 ${render(template, contact)}` : "";
+  }
+  if (contact.qualificationProgress === QUALIFICATION.NEEDS_FAULT) {
+    return "No worries at all 🙏 I can keep this quick over text. I just need a couple details about the accident to see if we can help. First, were you at fault for the accident, or was it the other driver?";
+  }
+  if (contact.qualificationProgress === QUALIFICATION.NEEDS_MEDICAL) {
+    return "No worries at all 🙏 I can keep this quick over text. I just need a couple details about the accident to see if we can help. Have you needed to see a doctor or get any medical treatment after the accident? 🤕";
+  }
+  if (contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME) {
+    return "No worries at all 🙏 What time works best tomorrow or the next day for a quick Specialist call? 📞";
+  }
+  return "";
 }
 
 function hasExplicitCallDate(text) {
@@ -784,6 +802,21 @@ class SmsBot {
     }
 
     contact = await this.store.upsertContact({ ...contact, engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION });
+    const humanContext = classifyHumanContextIntent(inbound.lastInboundMessage, contact.qualificationProgress);
+    if (humanContext) {
+      contact = await this.store.upsertContact({
+        ...contact,
+        lastHumanContextIntent: humanContext.intent,
+        lastHumanContextAt: new Date().toISOString()
+      });
+      const response = humanContextResponse(contact, humanContext, this.config);
+      if (response) {
+        const sent = await this.sendBotMessage(contact, response, { bypassQuietHours: true });
+        const latest = sent || (await this.store.getContact(contact.id)) || contact;
+        await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+        return latest;
+      }
+    }
     if (contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME) {
       return this.handleCallTime(contact, inbound.lastInboundMessage);
     }
