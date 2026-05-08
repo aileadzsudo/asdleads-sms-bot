@@ -154,6 +154,26 @@ test("scheduled call confirmation does not restart qualification", async () => {
   assert.equal(store.getContact("c3").appointmentConfirmed, true);
 });
 
+test("scheduled call thank-you is treated as acknowledgement instead of escalation", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "thanks-booked",
+    ghlContactId: "thanks-booked",
+    name: "Leslie",
+    phone: "+15550000064",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Thu, May 7, 3:00 PM CDT"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "thanks-booked", message: "thank you" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.equal(store.getContact("thanks-booked").appointmentConfirmed, true);
+  assert.equal(store.getContact("thanks-booked").humanEscalationStatus, undefined);
+  assert.equal(store.data.escalations.length, 0);
+});
+
 test("backup time reply finalizes scheduled call instead of escalating", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -672,6 +692,52 @@ test("NQ tag prevents no-response outreach from starting", async () => {
   assert.equal(contact.automationPaused, true);
   assert.equal(contact.automationPauseReason, "nq_tag");
   assert.equal(store.data.messages.length, 0);
+});
+
+test("manual hold tags stop no-response outreach from starting", async () => {
+  const { bot, store } = makeBot();
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "hold-start",
+    name: "Hold Start",
+    phone: "+15550000065",
+    tags: ["follow up"],
+    disposition: "no response"
+  });
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "manual_hold_tag");
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(store.data.messages.length, 0);
+  assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "hold-start" && job.status === "pending"), false);
+});
+
+test("manual hold tag cancels queued cadence before sending", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "hold-queued",
+    ghlContactId: "hold-queued",
+    name: "Hold Queued",
+    phone: "+15550000066",
+    tags: ["human_hold"],
+    engagementStatus: ENGAGEMENT.WARM_FOLLOW_UP,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault"
+  });
+  const job = store.addJob({
+    type: "warm_followup",
+    contactId: "hold-queued",
+    runAt: new Date().toISOString(),
+    payload: { step: 1 }
+  });
+
+  await bot.runDueJob(job);
+
+  const contact = store.getContact("hold-queued");
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "manual_hold_tag");
+  assert.equal(contact.lastOutboundMessage, undefined);
+  assert.equal(store.data.jobs[job.id].status, "skipped");
 });
 
 test("queued outbound refreshes GHL tags before sending and skips newly NQ contacts", async () => {

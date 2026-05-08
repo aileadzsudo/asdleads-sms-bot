@@ -133,11 +133,17 @@ function normalizePayload(payload, config) {
 
 function normalizeTags(tags) {
   if (!tags) return [];
-  if (Array.isArray(tags)) return tags.map((tag) => String(tag).toLowerCase().trim());
-  return String(tags)
-    .split(/[,\s]+/)
-    .map((tag) => tag.toLowerCase().trim())
-    .filter(Boolean);
+  if (Array.isArray(tags)) {
+    return tags.flatMap((tag) => normalizeTags(tag));
+  }
+  if (typeof tags === "object") {
+    return [tags.name, tags.label, tags.value, tags.tag, tags.text].flatMap((tag) => normalizeTags(tag)).filter(Boolean);
+  }
+  const raw = String(tags).toLowerCase().trim();
+  if (!raw) return [];
+  if (raw.includes(",")) return raw.split(",").flatMap((tag) => normalizeTags(tag));
+  const parts = raw.split(/\s+/).filter(Boolean);
+  return parts.length > 1 ? [raw, ...parts] : [raw];
 }
 
 function hasSignedTag(contact) {
@@ -168,7 +174,13 @@ function hasAnyTag(contact, names) {
 }
 
 function hasManualHumanHoldTag(contact) {
-  return hasAnyTag(contact, ["human_hold", "keep_human", "manual_hold", "do_not_return_to_bot"]);
+  return hasAnyTag(contact, ["human_hold", "keep_human", "manual_hold", "do_not_return_to_bot", "follow_up", "followup", "manual_follow_up"]);
+}
+
+function isBenignAppointmentAcknowledgement(text) {
+  const t = normalize(text);
+  if (!t || t.includes("?")) return false;
+  return /^(thanks|thank you|thank u|thx|ok thanks|okay thanks|appreciate it|sounds good|great|perfect|got it|ok|okay|k|cool)$/i.test(t);
 }
 
 function looksPostSignedOrFirmIssue(text) {
@@ -390,6 +402,10 @@ class SmsBot {
         await this.stopForNqTag(contact);
         return null;
       }
+      if (hasManualHumanHoldTag(contact)) {
+        await this.stopForManualHoldTag(contact);
+        return null;
+      }
     }
     if (!options.bypassQuietHours && !isWithinTextingWindow(contact, this.config)) {
       await this.store.addJob({
@@ -500,6 +516,20 @@ class SmsBot {
       Tags: normalizeTags(updated.tags).join(", "),
       "Last inbound": updated.lastInboundMessage || "none"
     });
+    return updated;
+  }
+
+  async stopForManualHoldTag(contact) {
+    const updated = await this.store.upsertContact({
+      ...contact,
+      automationPaused: true,
+      automationPauseReason: "manual_hold_tag",
+      humanEscalationStatus: true,
+      humanEscalationStage: "manual_hold_tag",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      currentSequenceName: ""
+    });
+    await this.store.cancelJobsForContact(updated.id, "manual hold tag");
     return updated;
   }
 
@@ -680,6 +710,7 @@ class SmsBot {
     const hydrated = await this.hydrateContactTags(contact);
     if (hasSignedTag(hydrated)) return this.stopForSignedTag(hydrated);
     if (hasNqTag(hydrated)) return this.stopForNqTag(hydrated);
+    if (hasManualHumanHoldTag(hydrated)) return this.stopForManualHoldTag(hydrated);
     const initial = render(coldOutreachTemplates.day_1_am, contact);
     if (!isWithinTextingWindow(contact, this.config)) {
       await this.store.addJob({
@@ -734,6 +765,7 @@ class SmsBot {
     contact = await this.hydrateContactTags(contact);
     if (hasSignedTag(contact)) return { contact: await this.stopForSignedTag(contact), status: "skipped", reason: "signed tag" };
     if (hasNqTag(contact)) return { contact: await this.stopForNqTag(contact), status: "skipped", reason: "NQ tag" };
+    if (hasManualHumanHoldTag(contact)) return { contact: await this.stopForManualHoldTag(contact), status: "skipped", reason: "manual hold tag" };
     if (hasAnyTag(contact, ["DNC", "do_not_contact", "opt_out", "opted_out"])) {
       const opted = await this.store.upsertContact({
         ...contact,
@@ -805,6 +837,9 @@ class SmsBot {
     if (hasSignedTag(contact)) {
       return this.stopForSignedTag(contact);
     }
+    if (hasManualHumanHoldTag(contact)) {
+      return this.stopForManualHoldTag(contact);
+    }
     if (looksPostSignedOrFirmIssue(inbound.lastInboundMessage)) {
       return this.escalate(contact, "post_intake_or_firm_issue");
     }
@@ -825,11 +860,12 @@ class SmsBot {
       if (isRescheduleRequest(inbound.lastInboundMessage)) {
         return this.handleReschedule(contact, inbound.lastInboundMessage);
       }
-      if (isAffirmativeConfirmation(inbound.lastInboundMessage)) {
+      if (isAffirmativeConfirmation(inbound.lastInboundMessage) || isBenignAppointmentAcknowledgement(inbound.lastInboundMessage)) {
         return this.store.upsertContact({
           ...contact,
           appointmentConfirmed: true,
-          appointmentConfirmedAt: new Date().toISOString()
+          appointmentConfirmedAt: new Date().toISOString(),
+          lastAppointmentAcknowledgement: inbound.lastInboundMessage
         });
       }
       const requestedTime = parseCallTime(inbound.lastInboundMessage, contact, this.config);
@@ -1619,6 +1655,7 @@ class SmsBot {
     }
     if (contact && hasSignedTag(contact)) await this.stopForSignedTag(contact);
     if (contact && hasNqTag(contact)) await this.stopForNqTag(contact);
+    if (contact && hasManualHumanHoldTag(contact)) await this.stopForManualHoldTag(contact);
     if (job.type === "human_reply_timeout") {
       await this.handleHumanReplyTimeout(job, contact);
       await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });
@@ -1631,8 +1668,10 @@ class SmsBot {
       contact.engagementStatus === ENGAGEMENT.OPTED_OUT ||
       contact.automationPauseReason === "nq_tag" ||
       contact.automationPauseReason === "signed_tag" ||
+      contact.automationPauseReason === "manual_hold_tag" ||
       hasSignedTag(contact) ||
-      hasNqTag(contact)
+      hasNqTag(contact) ||
+      hasManualHumanHoldTag(contact)
     ) {
       await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString() });
       return;
