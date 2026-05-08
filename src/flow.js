@@ -765,7 +765,11 @@ class SmsBot {
       const data = await ghl.getContact(this.config, contact.ghlContactId || contact.id);
       const fetched = data?.contact || data;
       if (Object.prototype.hasOwnProperty.call(fetched || {}, "tags")) {
-        return this.store.upsertContact({ ...contact, tags: fetched.tags });
+        const withTags = { ...contact, tags: fetched.tags };
+        return this.store.upsertContact({
+          ...withTags,
+          timezone: resolveContactTimezone(withTags, this.config)
+        });
       }
     } catch (error) {
       await this.notifyBotError("GHL contact tag lookup failed", {

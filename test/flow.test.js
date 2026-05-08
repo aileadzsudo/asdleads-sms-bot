@@ -2046,6 +2046,39 @@ test("state-like pipeline tags can resolve timezone before contact address state
   assert.equal(normalized.timezone, "America/Los_Angeles");
 });
 
+test("known firm tags hard-map to the correct timezone", () => {
+  const expected = {
+    LHPARK_CA: "America/Los_Angeles",
+    LEVIN_CO: "America/Denver",
+    GASLMP_CA: "America/Los_Angeles",
+    MOUDGL_TX: "America/Chicago",
+    RODRGZ_TX: "America/Chicago",
+    BERNRD_WA: "America/Los_Angeles",
+    LARLAT_ND: "America/Chicago",
+    EDBERN_NV: "America/Los_Angeles",
+    HOWBNT_KY: "America/New_York",
+    TAKLAW_TX: "America/Chicago",
+    CHALIK_TX: "America/Chicago",
+    OAKWOD_CA: "America/Los_Angeles"
+  };
+
+  for (const [tag, timezone] of Object.entries(expected)) {
+    const normalized = normalizePayload(
+      {
+        contactId: `tz-${tag}`,
+        name: tag,
+        phone: "+15550000073",
+        timezone: "America/Chicago",
+        state: "NJ",
+        tags: [tag, "NR"]
+      },
+      testConfig("")
+    );
+
+    assert.equal(normalized.timezone, timezone, tag);
+  }
+});
+
 test("inbound payload with owner state corrects an existing default timezone", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

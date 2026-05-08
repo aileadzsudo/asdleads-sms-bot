@@ -112,6 +112,21 @@ const TIMEZONE_ALIASES = [
   ["America/New_York", /\b(eastern|est|edt)\b/i]
 ];
 
+const FIRM_STATE_TAGS = {
+  LHPARK_CA: "CA",
+  LEVIN_CO: "CO",
+  GASLMP_CA: "CA",
+  MOUDGL_TX: "TX",
+  RODRGZ_TX: "TX",
+  BERNRD_WA: "WA",
+  LARLAT_ND: "ND",
+  EDBERN_NV: "NV",
+  HOWBNT_KY: "KY",
+  TAKLAW_TX: "TX",
+  CHALIK_TX: "TX",
+  OAKWOD_CA: "CA"
+};
+
 function normalizeState(value) {
   const raw = String(value || "").trim();
   const upper = raw.toUpperCase();
@@ -137,6 +152,27 @@ function timezoneFromText(value) {
   return alias?.[0] || "";
 }
 
+function tagsToList(tags) {
+  if (!tags) return [];
+  if (Array.isArray(tags)) return tags.flatMap((tag) => tagsToList(tag));
+  if (typeof tags === "object") {
+    return [tags.name, tags.label, tags.value, tags.tag, tags.text].flatMap((tag) => tagsToList(tag)).filter(Boolean);
+  }
+  return String(tags)
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function timezoneFromFirmTags(tags) {
+  for (const tag of tagsToList(tags)) {
+    const normalized = String(tag || "").trim().replace(/^#/, "").replace(/[\s-]+/g, "_").toUpperCase();
+    const state = FIRM_STATE_TAGS[normalized];
+    if (state && STATE_TIMEZONES[state]) return STATE_TIMEZONES[state];
+  }
+  return "";
+}
+
 function resolveContactTimezone(contact, config) {
   const ownerSignal = [
     contact.owner,
@@ -147,6 +183,9 @@ function resolveContactTimezone(contact, config) {
   ]
     .filter(Boolean)
     .join(" ");
+  const firmTagTimezone = timezoneFromFirmTags(contact.tags);
+  if (firmTagTimezone) return firmTagTimezone;
+
   const tagSignal = Array.isArray(contact.tags) ? contact.tags.join(" ") : String(contact.tags || "");
   const normalizedTagSignal = tagSignal.replace(/[_-]/g, " ");
   const ownerTimezone = timezoneFromText(ownerSignal) || timezoneFromText(normalizedTagSignal);
@@ -158,4 +197,12 @@ function resolveContactTimezone(contact, config) {
   return timezoneFromText(contact.timezone) || contact.timezone || config.texting.defaultTimezone;
 }
 
-module.exports = { STATE_TIMEZONES, normalizeState, timezoneFromState, timezoneFromText, resolveContactTimezone };
+module.exports = {
+  STATE_TIMEZONES,
+  FIRM_STATE_TAGS,
+  normalizeState,
+  timezoneFromState,
+  timezoneFromText,
+  timezoneFromFirmTags,
+  resolveContactTimezone
+};
