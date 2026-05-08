@@ -458,6 +458,24 @@ test("date reply to initial outreach is accepted and advances to fault question"
   assert.match(store.getContact("c6").lastOutboundMessage, /were you at fault/i);
 });
 
+test("natural accident date sentence is accepted and advances to fault question", async () => {
+  const { bot, store } = makeBot();
+  await bot.startFromNoResponseDisposition({
+    contactId: "c6b",
+    name: "Alex",
+    phone: "+15550000015",
+    timezone: "America/Chicago"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "c6b", message: "I was in an accident yesterday" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("c6b").accidentDate, "yesterday");
+  assert.equal(store.getContact("c6b").qualificationProgress, QUALIFICATION.NEEDS_FAULT);
+  assert.equal(store.getContact("c6b").humanEscalationStatus, false);
+  assert.match(store.getContact("c6b").lastOutboundMessage, /were you at fault/i);
+});
+
 test("repeated date replies do not escalate while fault is still needed", async () => {
   const { bot, store } = makeBot();
   await bot.startFromNoResponseDisposition({

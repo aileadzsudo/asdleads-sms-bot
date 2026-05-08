@@ -30,6 +30,7 @@ test("extracts accident date without needing AI", () => {
   assert.equal(parseAccidentDate("It was 4/12/2026").value, "4/12/2026");
   assert.equal(parseAccidentDate("March 3rd").value, "march 3rd");
   assert.equal(parseAccidentDate("yeserday").value, "yeserday");
+  assert.equal(parseAccidentDate("I was in an accident yesterday").value, "yesterday");
   assert.equal(parseAccidentDate("a week ago").value, "a week ago");
   assert.equal(parseAccidentDate("last Friday").value, "last friday");
 });
@@ -50,6 +51,7 @@ test("flags common escalation messages", () => {
   assert.equal(escalationReason("Can I talk to a human?"), "human_request");
   assert.equal(escalationReason("How much can I get?"), "outside_question");
   assert.equal(escalationReason("Who is this?"), "company_question");
+  assert.equal(escalationReason("I was in an accident yesterday"), "");
   assert.equal(escalationReason("Your verification code for JustCall account login is - 162705"), "off_topic_verification_code");
   assert.equal(escalationReason("I already signed with an attorney"), "attorney_request");
 });
