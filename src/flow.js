@@ -456,11 +456,19 @@ class SmsBot {
       ["warm_followup", "enter_reengagement"].includes(job.type)
     );
     if (afterHours) {
+      const warmRunAt = addMinutes(new Date(), 15);
+      const reengagementRunAt = nextTextingWindow(contact, this.config, addMinutes(new Date(), 16));
       await this.store.addJob({
         type: "warm_followup",
         contactId: contact.id,
-        runAt: addMinutes(new Date(), 15).toISOString(),
-        payload: { step: 1, afterHours: true }
+        runAt: warmRunAt.toISOString(),
+        payload: { step: 1, minutes: 15, afterHours: true }
+      });
+      await this.store.addJob({
+        type: "enter_reengagement",
+        contactId: contact.id,
+        runAt: (reengagementRunAt > warmRunAt ? reengagementRunAt : addMinutes(warmRunAt, 1)).toISOString(),
+        payload: { afterHours: true }
       });
       return;
     }

@@ -582,6 +582,30 @@ test("warm follow-ups aggressively chase before entering re-engagement", async (
   ]);
 });
 
+test("after-hours warm follow-up sends once then waits for texting window", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "warm-after-hours",
+    ghlContactId: "warm-after-hours",
+    name: "Warm After Hours",
+    phone: "+15550000024",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault"
+  });
+
+  await bot.scheduleWarmFollowUps(store.getContact("warm-after-hours"), true);
+
+  const jobs = Object.values(store.data.jobs)
+    .filter((job) => job.contactId === "warm-after-hours" && job.status === "pending")
+    .sort((a, b) => new Date(a.runAt) - new Date(b.runAt));
+  assert.deepEqual(jobs.map((job) => job.type), ["warm_followup", "enter_reengagement"]);
+  assert.equal(jobs[0].payload.afterHours, true);
+  assert.equal(jobs[0].payload.minutes, 15);
+  assert.equal(jobs[1].payload.afterHours, true);
+});
+
 test("warm follow-up job marks contact as warm follow-up", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
