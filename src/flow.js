@@ -1045,6 +1045,17 @@ class SmsBot {
   }
 
   async applyLlmClassification(contact, classification, inboundText) {
+    if (
+      contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME &&
+      !["call_now", "call_later", "prefers_text", "acknowledgement"].includes(classification.label)
+    ) {
+      await this.escalate(contact, `llm_call_time_${classification.label}`, {
+        Confidence: String(classification.confidence || ""),
+        Reason: classification.reason || "Reply did not answer the requested call time."
+      });
+      return this.store.getContact(contact.id);
+    }
+
     if (classification.label === "accident_date") {
       const updated = await this.store.upsertContact({
         ...contact,
@@ -1122,15 +1133,18 @@ class SmsBot {
   async handleCallTime(contact, text) {
     const parsed = parseCallTime(text, contact, this.config);
     if (!parsed) {
-      contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true });
-      const sent = await this.sendBotMessage(contact, "What time works best for your call today or tomorrow?", { bypassQuietHours: true });
-      const latest = sent || (await this.store.getContact(contact.id)) || contact;
-      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
-      return latest;
+      const llmResult = await this.tryLlmFallback(contact, text);
+      if (llmResult) return llmResult;
+      await this.escalate(contact, "call_time_unhandled_reply");
+      return this.store.getContact(contact.id);
     }
     if (parsed.type === "needs_specific_time") {
       contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true });
-      const sent = await this.sendBotMessage(contact, "What specific time later today works best?", { bypassQuietHours: true });
+      const normalizedText = normalize(text);
+      let question = "What specific time works best for your call today or tomorrow?";
+      if (/\btomorrow\b/.test(normalizedText)) question = "What specific time tomorrow works best?";
+      if (/\b(today|later today|tonight)\b/.test(normalizedText)) question = "What specific time later today works best?";
+      const sent = await this.sendBotMessage(contact, question, { bypassQuietHours: true });
       const latest = sent || (await this.store.getContact(contact.id)) || contact;
       await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
       return latest;

@@ -41,7 +41,11 @@ test("parses call now and simple scheduled time", () => {
   assert.equal(parseCallTime("I can talk now", contact, config).type, "now");
   assert.equal(parseCallTime("anytime", contact, config).type, "now");
   assert.equal(parseCallTime("can you call back later?", contact, config).type, "needs_specific_time");
-  assert.equal(parseCallTime("tomorrow morning", contact, config, new Date("2026-05-07T15:00:00Z")).type, "scheduled");
+  assert.equal(parseCallTime("tomorrow morning", contact, config, new Date("2026-05-07T15:00:00Z")).type, "needs_specific_time");
+  assert.equal(
+    parseCallTime("tomorrow is better late afternoon", contact, config, new Date("2026-05-07T15:00:00Z")).type,
+    "needs_specific_time"
+  );
   assert.equal(parseCallTime("in 20 minutes", contact, config, new Date("2026-05-07T15:00:00Z")).type, "scheduled");
   const parsed = parseCallTime("tomorrow at 3pm", contact, config, new Date("2026-05-07T15:00:00Z"));
   assert.equal(parsed.type, "scheduled");

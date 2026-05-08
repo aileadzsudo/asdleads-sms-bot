@@ -715,6 +715,56 @@ test("vague call time reply schedules hot lead warm follow-ups", async () => {
   ]);
 });
 
+test("vague tomorrow daypart asks for exact time instead of booking", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "tomorrow-afternoon",
+    ghlContactId: "tomorrow-afternoon",
+    name: "Tomorrow Afternoon",
+    phone: "+15550000057",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "tomorrow-afternoon",
+    message: "I'm in Texas now staying with my sister but tomorrow is better late afternoon"
+  });
+
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.equal(store.getContact("tomorrow-afternoon").awaitingSpecificCallTime, true);
+  assert.equal(store.getContact("tomorrow-afternoon").appointmentId, undefined);
+  assert.match(store.getContact("tomorrow-afternoon").lastOutboundMessage, /specific time tomorrow/i);
+});
+
+test("off-flow call-time replies escalate when they do not answer scheduling", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "call-time-off-flow",
+    ghlContactId: "call-time-off-flow",
+    name: "Off Flow",
+    phone: "+15550000058",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "call-time-off-flow",
+    message: "This wreck took place in Colorado"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(store.getContact("call-time-off-flow").humanEscalationStatus, true);
+  assert.equal(store.getContact("call-time-off-flow").escalationReason, "call_time_unhandled_reply");
+  assert.equal(store.data.messages.some((message) => /what time works/i.test(message.body)), false);
+});
+
 test("after vague later reply, warm follow-up asks for exact time", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

@@ -216,13 +216,8 @@ function parseCallTime(text, contact, config, now = new Date()) {
   if (/\b(later today|later|not now|not right now|can't talk|cant talk|at work|working|busy)\b/.test(t) && !/\d/.test(t)) {
     return { type: "needs_specific_time", confidence: 0.8 };
   }
-  if (/\btomorrow\b/.test(t) && /\bmorning\b/.test(t) && !/\d/.test(t)) {
-    const startsAt = localDateToUtc({ year: local.year, month: local.month, day: local.day + 1, hour: 9, minute: 0 }, timeZone);
-    return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: 0.75 };
-  }
-  if (/\btomorrow\b/.test(t) && /\bafternoon\b/.test(t) && !/\d/.test(t)) {
-    const startsAt = localDateToUtc({ year: local.year, month: local.month, day: local.day + 1, hour: 13, minute: 0 }, timeZone);
-    return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: 0.75 };
+  if (/\b(today|tomorrow|tonight)?\s*(early\s+)?(late\s+)?(morning|afternoon|evening)\b/.test(t) && !/\d/.test(t)) {
+    return { type: "needs_specific_time", confidence: 0.82 };
   }
   if (/\bnoon\b/.test(t)) {
     const startsAt = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, hour: 12, minute: 0 }, timeZone);
