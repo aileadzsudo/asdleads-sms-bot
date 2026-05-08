@@ -46,9 +46,15 @@ async function readJson(req) {
   return JSON.parse(raw);
 }
 
-function requireWebhookSecret(req) {
+function requireWebhookSecret(req, payload = {}) {
   if (!config.webhookSecret) return { ok: true };
-  const provided = req.headers["x-webhook-secret"] || req.headers["x-asdleads-secret"];
+  const provided =
+    req.headers["x-webhook-secret"] ||
+    req.headers["x-asdleads-secret"] ||
+    payload.webhookSecret ||
+    payload.webhook_secret ||
+    payload["x-webhook-secret"] ||
+    payload["x-asdleads-secret"];
   if (provided === config.webhookSecret) return { ok: true };
   return { ok: false, reason: "invalid webhook secret" };
 }
@@ -1042,13 +1048,32 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && req.url === "/webhooks/ghl/ping") {
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason, received: true });
+        return;
+      }
+      send(res, 200, {
+        ok: true,
+        received: true,
+        dryRun: config.dryRun,
+        payloadKeys: Object.keys(payload || {}).sort(),
+        hasContactId: Boolean(payload.contactId || payload.contact_id || payload["Contact ID"] || payload.contact?.id),
+        hasDisposition: Boolean(payload.disposition || payload.customDisposition),
+        hasMessage: Boolean(payload.message || payload.body || payload.text || payload.messageBody || payload.message_body)
+      });
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/webhooks/ghl/disposition") {
-      const auth = requireWebhookSecret(req);
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
       if (!auth.ok) {
         send(res, 401, { ok: false, error: auth.reason });
         return;
       }
-      const payload = await readJson(req);
       const dedupe = await dedupeWebhook(req, payload, "disposition");
       if (dedupe.duplicate) {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
@@ -1065,12 +1090,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && req.url === "/webhooks/ghl/inbound-sms") {
-      const auth = requireWebhookSecret(req);
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
       if (!auth.ok) {
         send(res, 401, { ok: false, error: auth.reason });
         return;
       }
-      const payload = await readJson(req);
       const dedupe = await dedupeWebhook(req, payload, "inbound");
       if (dedupe.duplicate) {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
@@ -1082,12 +1107,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && req.url === "/webhooks/ghl/missed-call") {
-      const auth = requireWebhookSecret(req);
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
       if (!auth.ok) {
         send(res, 401, { ok: false, error: auth.reason });
         return;
       }
-      const payload = await readJson(req);
       const dedupe = await dedupeWebhook(req, payload, "missed-call");
       if (dedupe.duplicate) {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
@@ -1099,12 +1124,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && req.url === "/webhooks/ghl/bot-control") {
-      const auth = requireWebhookSecret(req);
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
       if (!auth.ok) {
         send(res, 401, { ok: false, error: auth.reason });
         return;
       }
-      const payload = await readJson(req);
       const dedupe = await dedupeWebhook(req, payload, "bot-control");
       if (dedupe.duplicate) {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
@@ -1616,4 +1641,4 @@ process.on("uncaughtException", (error) => {
   });
 });
 
-module.exports = { server, runDueJobs, initApp, notifyBotError };
+module.exports = { server, runDueJobs, initApp, notifyBotError, requireWebhookSecret };
