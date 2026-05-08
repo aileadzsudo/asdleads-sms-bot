@@ -416,7 +416,16 @@ function isRescheduleRequest(text) {
 }
 
 function hasLocationTimezoneSignal(contact = {}) {
-  return Boolean(contact.state || contact.locationState || contact.owner || contact.contactOwner || contact.assignedTo || contact.assignedUser || contact.user);
+  return Boolean(
+    contact.state ||
+    contact.locationState ||
+    contact.owner ||
+    contact.contactOwner ||
+    contact.assignedTo ||
+    contact.assignedUser ||
+    contact.user ||
+    contact.tags
+  );
 }
 
 function chooseContactTimezone(existing = {}, inbound = {}, config) {

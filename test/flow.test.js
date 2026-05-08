@@ -2069,6 +2069,30 @@ test("inbound payload with owner state corrects an existing default timezone", a
   assert.match(store.getContact("tz-existing").preferredCallTime, /PST/);
 });
 
+test("inbound payload with state tag corrects an existing default timezone", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "tz-existing-tag",
+    ghlContactId: "tz-existing-tag",
+    name: "Timezone Existing Tag",
+    phone: "+15550000072",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+
+  await bot.handleInboundSms({
+    contactId: "tz-existing-tag",
+    message: "tomorrow at 2pm",
+    timezone: "America/Chicago",
+    state: "NJ",
+    tags: "lhpark_ca,nr"
+  });
+
+  assert.equal(store.getContact("tz-existing-tag").timezone, "America/Los_Angeles");
+  assert.match(store.getContact("tz-existing-tag").preferredCallTime, /PST/);
+});
+
 test("normalizes nested GHL contact payloads", () => {
   const normalized = normalizePayload(
     {
