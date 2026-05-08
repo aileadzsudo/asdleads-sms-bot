@@ -1051,18 +1051,30 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/webhooks/ghl/ping") {
       const payload = await readJson(req);
       const auth = requireWebhookSecret(req, payload);
-      if (!auth.ok) {
-        send(res, 401, { ok: false, error: auth.reason, received: true });
-        return;
-      }
-      send(res, 200, {
-        ok: true,
-        received: true,
+      const diagnostic = {
+        receivedAt: new Date().toISOString(),
+        authorized: auth.ok,
+        error: auth.ok ? "" : auth.reason,
         dryRun: config.dryRun,
         payloadKeys: Object.keys(payload || {}).sort(),
         hasContactId: Boolean(payload.contactId || payload.contact_id || payload["Contact ID"] || payload.contact?.id),
         hasDisposition: Boolean(payload.disposition || payload.customDisposition),
         hasMessage: Boolean(payload.message || payload.body || payload.text || payload.messageBody || payload.message_body)
+      };
+      if (store?.setSetting) await store.setSetting("last_webhook_ping", diagnostic);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason, received: true });
+        return;
+      }
+      send(res, 200, { ok: true, received: true, ...diagnostic });
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/webhooks/ghl/ping-status") {
+      const setting = store?.getSetting ? await store.getSetting("last_webhook_ping") : null;
+      send(res, 200, {
+        ok: true,
+        lastPing: setting?.value || null
       });
       return;
     }
