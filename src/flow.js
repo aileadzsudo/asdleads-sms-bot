@@ -1688,6 +1688,20 @@ class SmsBot {
       return this.store.getContact(contact.id);
     }
 
+    if (["mark_no_show", "no_show", "appointment_no_show"].includes(action)) {
+      return this.markNoShow({
+        contactId: contact.id,
+        ghlContactId: contact.ghlContactId,
+        name: contact.name,
+        phone: contact.phone,
+        timezone: contact.timezone,
+        leadSource: contact.leadSource,
+        preferredCallTime: contact.preferredCallTime,
+        preferredCallTimeIso: contact.preferredCallTimeIso,
+        appointmentId: contact.appointmentId
+      });
+    }
+
     if (["repair_primary_call_time", "fix_primary_call_time", "correct_primary_call_time"].includes(action)) {
       return this.repairPrimaryCallTimeFromLastInbound(contact);
     }

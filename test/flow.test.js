@@ -1692,6 +1692,37 @@ test("appointment no-show schedules backup time reminders when backup exists", a
   assert.match(store.getContact("no-show-backup").lastOutboundMessage, /4:00 PM/i);
 });
 
+test("admin mark no-show preserves backup time and schedules backup reminders", async () => {
+  const { bot, store } = makeBot();
+  const primary = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const backup = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "admin-no-show-backup",
+    ghlContactId: "admin-no-show-backup",
+    name: "Leslie",
+    phone: "+15550000074",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Fri, May 8, 4:00 PM CST",
+    preferredCallTimeIso: primary,
+    backupCallTime: "Fri, May 8, 5:00 PM CST",
+    backupCallTimeIso: backup,
+    backupCallTimeType: "exact",
+    appointmentId: "appt-no-show"
+  });
+
+  const contact = await bot.applyBotControl({ contactId: "admin-no-show-backup", action: "mark_no_show" });
+  const backupJobs = Object.values(store.data.jobs).filter(
+    (job) => job.contactId === "admin-no-show-backup" && job.type === "backup_no_show_reminder" && job.status === "pending"
+  );
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
+  assert.equal(store.getContact("admin-no-show-backup").preferredCallTime, "Fri, May 8, 4:00 PM CST");
+  assert.equal(store.getContact("admin-no-show-backup").backupCallTime, "Fri, May 8, 5:00 PM CST");
+  assert.equal(backupJobs.some((job) => job.payload.templateKey === "afterPrimaryMissed"), true);
+});
+
 test("warm follow-ups aggressively chase before entering re-engagement", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
