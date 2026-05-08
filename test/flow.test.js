@@ -1227,6 +1227,43 @@ test("vague call time reply schedules hot lead warm follow-ups", async () => {
   ]);
 });
 
+test("soft escalated lead can auto-resume when they send a scheduling reply", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "soft-resume-later",
+    ghlContactId: "soft-resume-later",
+    name: "Behnaz",
+    phone: "+15550000074",
+    timezone: "America/New_York",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "message_after_bot_paused"
+  });
+  store.addJob({
+    type: "human_escalation_sla",
+    contactId: "soft-resume-later",
+    runAt: new Date().toISOString(),
+    payload: { minutes: 5 }
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "soft-resume-later",
+    message: "Later I am sick in bed I had surgery"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.humanEscalationStatus, false);
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.equal(store.getContact("soft-resume-later").awaitingSpecificCallTime, true);
+  assert.match(store.getContact("soft-resume-later").lastOutboundMessage, /hope you feel better/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "soft-resume-later" && job.type === "human_escalation_sla" && job.status === "pending"),
+    false
+  );
+});
+
 test("vague tomorrow daypart asks for exact time instead of booking", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

@@ -366,6 +366,25 @@ function looksLikeCallScheduling(text) {
   );
 }
 
+function isSoftEscalationReason(reason = "") {
+  return [
+    "message_after_bot_paused",
+    "llm_asks_who_this_is",
+    "company_question",
+    "low_confidence_answer",
+    "llm_unknown"
+  ].includes(String(reason || ""));
+}
+
+function canAutoResumeFromSoftEscalation(contact, text, config) {
+  if (contact.engagementStatus !== ENGAGEMENT.ESCALATED_TO_HUMAN) return false;
+  if (contact.automationPaused) return false;
+  if (!isSoftEscalationReason(contact.escalationReason)) return false;
+  if (contact.humanEscalationStage && contact.humanEscalationStage !== "human_review_pending") return false;
+  if (parseAccidentDate(text)) return true;
+  return Boolean(looksLikeCallScheduling(text) && parseCallTime(text, contact, config));
+}
+
 function hasExplicitCallDate(text) {
   const t = normalize(text);
   return /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|next month)\b/.test(t) ||
@@ -1166,6 +1185,18 @@ class SmsBot {
       });
     }
 
+    if (canAutoResumeFromSoftEscalation(contact, inbound.lastInboundMessage, this.config)) {
+      await this.cancelHumanEscalationWatchdog(contact.id, "auto-resumed from soft escalation");
+      contact = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+        humanEscalationStatus: false,
+        humanEscalationStage: "auto_resumed_from_soft_escalation",
+        automationPaused: false,
+        automationPauseReason: ""
+      });
+    }
+
     if (contact.engagementStatus === ENGAGEMENT.READY_FOR_CALL || contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) {
       await this.escalate(contact, "message_after_bot_paused");
       return contact;
@@ -1611,6 +1642,9 @@ class SmsBot {
       let question = relativeTimeClarification(parsed, contact, this.config) || "What specific time works best for your call today or tomorrow?";
       if (/\btomorrow\b/.test(normalizedText)) question = "What specific time tomorrow works best?";
       if (/\b(today|later today|tonight)\b/.test(normalizedText)) question = "What specific time later today works best?";
+      if (/\b(sick|surgery|bed|not feeling well|recovering|hospital|pain)\b/.test(normalizedText)) {
+        question = "No worries, I hope you feel better 🙏 What time tomorrow or the next day would be easiest for a quick Specialist call?";
+      }
       const sent = await this.sendBotMessage(contact, question, { bypassQuietHours: true });
       const latest = sent || (await this.store.getContact(contact.id)) || contact;
       await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
