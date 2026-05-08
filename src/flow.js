@@ -375,6 +375,11 @@ function looksLikeCallScheduling(text) {
   );
 }
 
+function hasCallIntentText(text) {
+  const t = normalize(text);
+  return /\b(open|available|free|call|talk|speak|meeting|appointment|schedule|specialist)\b/.test(t);
+}
+
 function isSoftEscalationReason(reason = "") {
   return [
     "message_after_bot_paused",
@@ -1659,6 +1664,30 @@ class SmsBot {
     return this.applyLlmClassification(updated, classification, inboundText);
   }
 
+  async recentCallTimeCandidate(contact, options = {}) {
+    const messages = await this.store.listMessages(contact.id);
+    const inbound = messages
+      .filter((message) => message.direction === "inbound" && message.body)
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+    const cutoff = Date.now() - Number(options.cutoffMinutes || 30) * 60 * 1000;
+    let lastCallIntentAt = null;
+    let lastCandidate = null;
+    for (const message of inbound) {
+      const createdAt = new Date(message.createdAt || 0);
+      if (createdAt.getTime() < cutoff) continue;
+      if (hasCallIntentText(message.body)) lastCallIntentAt = createdAt;
+      const parsed = parseCallTime(message.body, contact, this.config);
+      if (!parsed || parsed.type !== "scheduled") continue;
+      const hasExplicitIntent = hasCallIntentText(message.body);
+      const hasNearbyIntent =
+        lastCallIntentAt && createdAt.getTime() - lastCallIntentAt.getTime() <= 10 * 60 * 1000;
+      if (hasExplicitIntent || hasNearbyIntent) {
+        lastCandidate = { message: message.body, parsed, createdAt: createdAt.toISOString() };
+      }
+    }
+    return lastCandidate;
+  }
+
   async applyLlmClassification(contact, classification, inboundText) {
     if (
       contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME &&
@@ -1737,6 +1766,15 @@ class SmsBot {
         medicalTreatmentAnswer: answer.value,
         qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
       });
+      const recentCallTime = await this.recentCallTimeCandidate(nextContact);
+      if (recentCallTime) {
+        nextContact = await this.store.upsertContact({
+          ...nextContact,
+          recoveredCallTimeMessage: recentCallTime.message,
+          recoveredCallTimeAt: new Date().toISOString()
+        });
+        return this.handleCallTime(nextContact, recentCallTime.message);
+      }
       nextMessage = callAskTemplateForTime(nextContact, this.config);
     }
     const sent = await this.sendBotMessage(nextContact, render(nextMessage, nextContact), { bypassQuietHours: true });

@@ -1510,6 +1510,39 @@ test("early call time before qualification moves into scheduling without LLM", a
   assert.match(contact.lastOutboundMessage, /specific time tomorrow/i);
 });
 
+test("medical answer reuses recent call time given before scheduling step", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "reuse-call-time",
+    ghlContactId: "reuse-call-time",
+    name: "Pedro",
+    phone: "+15550000076",
+    timezone: "America/Los_Angeles",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault"
+  });
+  store.addMessage({
+    contactId: "reuse-call-time",
+    direction: "inbound",
+    body: "Yes, I am open"
+  });
+  store.addMessage({
+    contactId: "reuse-call-time",
+    direction: "inbound",
+    body: "2"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "reuse-call-time", message: "No" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.equal(store.getContact("reuse-call-time").medicalTreatmentAnswer, "no");
+  assert.equal(store.getContact("reuse-call-time").qualificationProgress, QUALIFICATION.CALL_BOOKED);
+  assert.ok(store.getContact("reuse-call-time").preferredCallTimeIso);
+  assert.equal(store.getContact("reuse-call-time").recoveredCallTimeMessage, "2");
+  assert.match(store.getContact("reuse-call-time").lastOutboundMessage, /backup time/i);
+});
+
 test("relative call time asks for exact time options instead of booking", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
