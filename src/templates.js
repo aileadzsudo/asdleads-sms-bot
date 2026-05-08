@@ -182,9 +182,22 @@ const missedCallTemplates = {
   nextDay: "Hey [NAME] 👋 — I know we missed yesterday but I don't want you to lose your spot. Our Specialists book up fast and I held yours as long as I could. Can I get you back on the calendar today?"
 };
 
+function firstName(contact = {}) {
+  const raw =
+    contact.firstName ||
+    contact.first_name ||
+    String(contact.name || "")
+      .trim()
+      .split(/\s+/)[0] ||
+    "there";
+  const value = String(raw || "there").trim();
+  if (!value) return "there";
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+}
+
 function render(template, contact, extra = {}) {
   const values = {
-    NAME: contact.name || "there",
+    NAME: firstName(contact),
     TIME: extra.time || contact.preferredCallTime || "",
     "PRIMARY TIME": extra.primaryTime || contact.preferredCallTime || "",
     "BACKUP TIME": extra.backupTime || contact.backupCallTime || ""
@@ -200,5 +213,6 @@ module.exports = {
   warmFollowUpTemplates,
   reminderTemplates,
   missedCallTemplates,
-  render
+  render,
+  firstName
 };

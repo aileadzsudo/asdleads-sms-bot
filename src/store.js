@@ -92,6 +92,14 @@ class Store {
     return this.data.jobs[id];
   }
 
+  claimJob(id) {
+    const job = this.data.jobs[id];
+    if (!job || job.status !== "pending") return null;
+    this.data.jobs[id] = { ...job, status: "running", runningAt: new Date().toISOString() };
+    this.save();
+    return this.data.jobs[id];
+  }
+
   cancelJobsForContact(contactId, reason, predicate = () => true) {
     for (const job of Object.values(this.data.jobs)) {
       if (job.contactId === contactId && job.status === "pending" && predicate(job)) {

@@ -7,6 +7,7 @@ const { Store } = require("../src/store");
 const { SmsBot, normalizePayload, callAskTemplateForTime } = require("../src/flow");
 const { ENGAGEMENT, QUALIFICATION } = require("../src/constants");
 const { hasNoResponseTag, isNoResponseDisposition, isNoResponseSignal } = require("../src/disposition");
+const { render } = require("../src/templates");
 const ghl = require("../src/adapters/ghl");
 
 function testConfig(dataFile) {
@@ -50,6 +51,11 @@ test("opt-out marks contact, cancels jobs, and sends one confirmation", async ()
   assert.equal(contact.optOutStatus, true);
   assert.equal(Object.values(store.data.jobs).every((job) => job.status === "cancelled"), true);
   assert.match(store.getContact("c1").lastOutboundMessage, /won't text you again/i);
+});
+
+test("template name personalization uses first name only", () => {
+  assert.equal(render("Hi [NAME]", { name: "eric johnson" }), "Hi Eric");
+  assert.equal(render("Hi [NAME]", { firstName: "SARAH", name: "Sarah Johnson" }), "Hi Sarah");
 });
 
 test("qualification resumes from saved progress instead of restarting", async () => {

@@ -167,6 +167,21 @@ class PostgresStore {
     return next;
   }
 
+  async claimJob(id) {
+    const runningAt = new Date().toISOString();
+    const patch = { status: "running", runningAt };
+    const result = await this.pool.query(
+      `update jobs
+       set status = 'running',
+           data = data || $2::jsonb,
+           updated_at = now()
+       where id = $1 and status = 'pending'
+       returning data`,
+      [id, JSON.stringify(patch)]
+    );
+    return rowData(result.rows[0]);
+  }
+
   async cancelJobsForContact(contactId, reason, predicate = () => true) {
     const jobs = await this.listJobs(contactId);
     for (const job of jobs) {

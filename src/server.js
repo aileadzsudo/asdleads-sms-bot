@@ -1084,31 +1084,36 @@ async function runDueJobs() {
   const jobs = await store.dueJobs();
   const results = [];
   for (const job of jobs) {
+    const claimedJob = store.claimJob ? await store.claimJob(job.id) : job;
+    if (!claimedJob) {
+      results.push({ id: job.id, type: job.type, ok: true, skipped: true, reason: "job already claimed" });
+      continue;
+    }
     try {
-      await bot.runDueJob(job);
-      results.push({ id: job.id, type: job.type, ok: true });
+      await bot.runDueJob(claimedJob);
+      results.push({ id: claimedJob.id, type: claimedJob.type, ok: true });
     } catch (error) {
       if (isPermanentSmsBlock(error)) {
-        await store.updateJob(job.id, {
+        await store.updateJob(claimedJob.id, {
           status: "skipped",
           finishedAt: new Date().toISOString(),
           error: error.message,
           skipReason: "permanent_sms_block"
         });
-        results.push({ id: job.id, type: job.type, ok: false, skipped: true, error: error.message });
+        results.push({ id: claimedJob.id, type: claimedJob.type, ok: false, skipped: true, error: error.message });
         continue;
       }
-      const attempts = Number(job.attempts || 0) + 1;
+      const attempts = Number(claimedJob.attempts || 0) + 1;
       const retryDelay = JOB_RETRY_MINUTES[attempts - 1];
       if (retryDelay) {
-        await store.updateJob(job.id, {
+        await store.updateJob(claimedJob.id, {
           status: "pending",
           attempts,
           runAt: new Date(Date.now() + retryDelay * 60 * 1000).toISOString(),
           lastError: error.message
         });
       } else {
-        await store.updateJob(job.id, {
+        await store.updateJob(claimedJob.id, {
           status: "failed",
           attempts,
           finishedAt: new Date().toISOString(),
@@ -1116,14 +1121,14 @@ async function runDueJobs() {
         });
       }
       await notifyBotError("Scheduled job failed", {
-        "Job ID": job.id,
-        Type: job.type,
-        "Contact ID": job.contactId,
+        "Job ID": claimedJob.id,
+        Type: claimedJob.type,
+        "Contact ID": claimedJob.contactId,
         Attempt: String(attempts),
         Retry: retryDelay ? `${retryDelay} minutes` : "no retries left",
         Error: error.message
       });
-      results.push({ id: job.id, type: job.type, ok: false, retryInMinutes: retryDelay || 0, error: error.message });
+      results.push({ id: claimedJob.id, type: claimedJob.type, ok: false, retryInMinutes: retryDelay || 0, error: error.message });
     }
   }
   return results;

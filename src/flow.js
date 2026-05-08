@@ -1208,13 +1208,22 @@ class SmsBot {
     await this.sendBotMessage(updated, render(qualificationTemplates.backupAsk, updated, { time: display }), {
       bypassQuietHours: true
     });
+    const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
+      "Primary call time": updated.preferredCallTime,
+      "Backup time": "pending",
+      Timezone: updated.timezone,
+      "GHL appointment": updated.appointmentId || "created"
+    });
+    const afterAlert = bookingAlertSent
+      ? await this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() })
+      : updated;
     await this.store.addJob({
       type: "backup_time_timeout",
-      contactId: updated.id,
+      contactId: afterAlert.id,
       runAt: addMinutes(new Date(), 15).toISOString(),
       payload: {}
     });
-    return updated;
+    return afterAlert;
   }
 
   async handleReschedule(contact, text) {
@@ -1323,12 +1332,17 @@ class SmsBot {
       );
     }
     await this.store.cancelJobsForContact(updated.id, "backup time answered", (job) => job.type === "backup_time_timeout");
-    await this.notifyAppointmentBooked(updated, {
-      "Primary call time": updated.preferredCallTime,
-      "Backup time": updated.backupCallTime || "none",
-      Timezone: updated.timezone,
-      "GHL appointment": updated.appointmentId || "created"
-    });
+    if (!updated.bookingAlertSentAt) {
+      const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
+        "Primary call time": updated.preferredCallTime,
+        "Backup time": updated.backupCallTime || "none",
+        Timezone: updated.timezone,
+        "GHL appointment": updated.appointmentId || "created"
+      });
+      if (bookingAlertSent) {
+        updated = await this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() });
+      }
+    }
     await this.scheduleAppointmentReminders(updated);
     return updated;
   }
@@ -1336,6 +1350,7 @@ class SmsBot {
   async notifyAppointmentBooked(contact, extra = {}) {
     try {
       await slack.sendAppointmentBooked(this.config, contact, extra);
+      return true;
     } catch (error) {
       await this.notifyBotError("Slack appointment booking alert failed", {
         Name: contact.name || "unknown",
@@ -1344,6 +1359,7 @@ class SmsBot {
         "Appointment ID": contact.appointmentId || "unknown",
         Error: error.message
       });
+      return false;
     }
   }
 
@@ -1478,7 +1494,10 @@ class SmsBot {
     }
     if (["initial_sms", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "appointment_reminder", "missed_call_followup"].includes(job.type)) {
       if (!isWithinTextingWindow(contact, this.config)) {
-        await this.store.updateJob(job.id, { runAt: nextTextingWindow(contact, this.config).toISOString() });
+        await this.store.updateJob(job.id, {
+          status: "pending",
+          runAt: nextTextingWindow(contact, this.config).toISOString()
+        });
         return;
       }
     }
@@ -1593,12 +1612,17 @@ class SmsBot {
           render(qualificationTemplates.bookingConfirmedNoBackup, updated, { time: updated.preferredCallTime }),
           { bypassQuietHours: true }
         );
-        await this.notifyAppointmentBooked(updated, {
-          "Primary call time": updated.preferredCallTime,
-          "Backup time": "none",
-          Timezone: updated.timezone,
-          "GHL appointment": updated.appointmentId || "created"
-        });
+        if (!updated.bookingAlertSentAt) {
+          const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
+            "Primary call time": updated.preferredCallTime,
+            "Backup time": "none",
+            Timezone: updated.timezone,
+            "GHL appointment": updated.appointmentId || "created"
+          });
+          if (bookingAlertSent) {
+            await this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() });
+          }
+        }
         await this.scheduleAppointmentReminders(updated);
       }
     }
