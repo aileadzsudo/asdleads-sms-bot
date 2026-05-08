@@ -487,6 +487,22 @@ test("signed tag prevents no-response outreach from starting", async () => {
   assert.equal(store.data.messages.length, 0);
 });
 
+test("contract set tag prevents no-response outreach from starting", async () => {
+  const { bot, store } = makeBot();
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "contract-set-1",
+    name: "Contract Set",
+    phone: "+15550000076",
+    tags: ["contract set"],
+    disposition: "no response"
+  });
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "signed_tag");
+  assert.equal(store.data.messages.length, 0);
+});
+
 test("post-intake firm issues are escalated instead of qualified", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -739,6 +755,33 @@ test("lead scheduling reply during human handoff lets bot resume booking help", 
     Object.values(store.data.jobs).some((job) => job.contactId === "human-scheduling-inbound" && job.type === "human_reply_timeout" && job.status === "pending"),
     false
   );
+});
+
+test("QR tag blocks bot from resuming during human handoff", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "qr-human-handoff",
+    ghlContactId: "qr-human-handoff",
+    name: "QR Hold",
+    phone: "+15550000077",
+    tags: ["QR"],
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_replied_waiting",
+    automationPaused: true,
+    automationPauseReason: "human_working"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "qr-human-handoff",
+    message: "later today"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "manual_hold_tag");
+  assert.equal(contact.lastOutboundMessage, undefined);
 });
 
 test("manual call activity waits 30 minutes before returning to bot", async () => {

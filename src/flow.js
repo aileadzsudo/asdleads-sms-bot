@@ -202,7 +202,7 @@ function normalizeTags(tags) {
 }
 
 function hasSignedTag(contact) {
-  return normalizeTags(contact.tags).some((tag) => tag === "signed" || tag === "#signed");
+  return hasAnyTag(contact, ["signed", "contract_set"]);
 }
 
 function hasNqTag(contact) {
@@ -229,7 +229,16 @@ function hasAnyTag(contact, names) {
 }
 
 function hasManualHumanHoldTag(contact) {
-  return hasAnyTag(contact, ["human_hold", "keep_human", "manual_hold", "do_not_return_to_bot", "follow_up", "followup", "manual_follow_up"]);
+  return hasAnyTag(contact, [
+    "human_hold",
+    "keep_human",
+    "manual_hold",
+    "do_not_return_to_bot",
+    "follow_up",
+    "followup",
+    "manual_follow_up",
+    "qr"
+  ]);
 }
 
 function hasExistingRepresentation(text) {
