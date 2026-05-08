@@ -180,7 +180,7 @@ function normalizePayload(payload, config) {
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined && value !== null && value !== "") normalized[key] = value;
   }
-  if (normalized.timezone || normalized.state || normalized.owner || !contactId) {
+  if (normalized.timezone || normalized.state || normalized.owner || normalized.tags || !contactId) {
     normalized.timezone = resolveContactTimezone(normalized, config);
   }
   return normalized;

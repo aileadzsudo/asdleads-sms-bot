@@ -1,13 +1,5 @@
 const { contactLink } = require("./ghl");
 
-function answerLines(contact) {
-  return [
-    `Accident date: ${contact.accidentDate || "unknown"}`,
-    `Fault: ${contact.faultAnswer || "unknown"}`,
-    `Medical: ${contact.medicalTreatmentAnswer || "unknown"}`
-  ].join("\n");
-}
-
 function baseEscalationText(config, contact, title, reason, extra = {}) {
   const hiddenExtraFields = new Set(["Confidence", "Accident date", "Fault", "Medical"]);
   const lines = [
@@ -23,6 +15,14 @@ function baseEscalationText(config, contact, title, reason, extra = {}) {
     if (value) lines.push(`${key}: ${value}`);
   }
   return lines.join("\n");
+}
+
+function smsEscalationText(config, contact) {
+  return [
+    `Name: ${contact.name || "unknown"}`,
+    `Message: ${contact.lastInboundMessage || "unknown"}`,
+    `Link: ${contactLink(config, contact) || "unknown"}`
+  ].join("\n");
 }
 
 async function postSlack(config, text, channel = config.slack.channel) {
@@ -45,7 +45,7 @@ async function postSlack(config, text, channel = config.slack.channel) {
 }
 
 async function sendEscalation(config, contact, reason, extra = {}) {
-  return postSlack(config, baseEscalationText(config, contact, "SMS escalation", reason, extra));
+  return postSlack(config, smsEscalationText(config, contact));
 }
 
 async function sendUrgentCallNow(config, contact, extra = {}) {

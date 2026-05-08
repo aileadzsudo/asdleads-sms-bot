@@ -621,8 +621,14 @@ test("human escalation schedules SLA watchdog jobs", async () => {
 });
 
 test("SMS escalation Slack copy stays compact without unknown qualification fields", async () => {
+  const baseConfig = testConfig("");
   const result = await slack.sendEscalation(
-    { ...testConfig(""), dryRun: true, slack: { token: "", channel: "#sms", botErrorsChannel: "#bot-errors", bookingChannel: "#booking" } },
+    {
+      ...baseConfig,
+      dryRun: true,
+      ghl: { ...baseConfig.ghl, locationId: "loc-1" },
+      slack: { token: "", channel: "#sms", botErrorsChannel: "#bot-errors", bookingChannel: "#booking" }
+    },
     {
       id: "slack-copy",
       ghlContactId: "slack-copy",
@@ -635,6 +641,16 @@ test("SMS escalation Slack copy stays compact without unknown qualification fiel
   );
 
   assert.equal(result.skipped, true);
+  assert.equal(
+    result.text,
+    [
+      "Name: Slack Copy",
+      "Message: Can you help?",
+      "Link: https://app.gohighlevel.com/v2/location/loc-1/contacts/detail/slack-copy"
+    ].join("\n")
+  );
+  assert.doesNotMatch(result.text, /Reason:/);
+  assert.doesNotMatch(result.text, /Phone:/);
   assert.doesNotMatch(result.text, /Confidence:/);
   assert.doesNotMatch(result.text, /Accident date:/);
   assert.doesNotMatch(result.text, /Fault:/);
@@ -1992,6 +2008,41 @@ test("normalizes timezone from owner/state even when GHL sends account default t
   );
 
   assert.equal(normalized.owner, "California Intake");
+  assert.equal(normalized.timezone, "America/Los_Angeles");
+});
+
+test("owner timezone wins over contact address state", () => {
+  const normalized = normalizePayload(
+    {
+      contactId: "tz-owner-wins",
+      name: "Behnaz Alisalehi",
+      phone: "+15550000070",
+      timezone: "America/Chicago",
+      state: "NJ",
+      owner: "California"
+    },
+    testConfig("")
+  );
+
+  assert.equal(normalized.state, "NJ");
+  assert.equal(normalized.owner, "California");
+  assert.equal(normalized.timezone, "America/Los_Angeles");
+});
+
+test("state-like pipeline tags can resolve timezone before contact address state", () => {
+  const normalized = normalizePayload(
+    {
+      contactId: "tz-tag-wins",
+      name: "Tag Timezone",
+      phone: "+15550000071",
+      timezone: "America/Chicago",
+      state: "NJ",
+      tags: "lhpark_ca,nr"
+    },
+    testConfig("")
+  );
+
+  assert.equal(normalized.state, "NJ");
   assert.equal(normalized.timezone, "America/Los_Angeles");
 });
 

@@ -138,10 +138,23 @@ function timezoneFromText(value) {
 }
 
 function resolveContactTimezone(contact, config) {
-  const locationTimezone =
-    timezoneFromText(contact.state || contact.locationState) ||
-    timezoneFromText(contact.owner || contact.contactOwner || contact.assignedTo || contact.assignedUser || contact.user);
-  if (locationTimezone) return locationTimezone;
+  const ownerSignal = [
+    contact.owner,
+    contact.contactOwner,
+    contact.assignedTo,
+    contact.assignedUser,
+    contact.user
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const tagSignal = Array.isArray(contact.tags) ? contact.tags.join(" ") : String(contact.tags || "");
+  const normalizedTagSignal = tagSignal.replace(/[_-]/g, " ");
+  const ownerTimezone = timezoneFromText(ownerSignal) || timezoneFromText(normalizedTagSignal);
+  if (ownerTimezone) return ownerTimezone;
+
+  const stateTimezone = timezoneFromText(contact.state || contact.locationState);
+  if (stateTimezone) return stateTimezone;
+
   return timezoneFromText(contact.timezone) || contact.timezone || config.texting.defaultTimezone;
 }
 
