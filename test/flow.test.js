@@ -703,6 +703,44 @@ test("lead replies while human is working do not trigger another Slack escalatio
   assert.equal(store.getContact("human-managed-inbound").lastHumanManagedInboundMessage, "yes I am here");
 });
 
+test("lead scheduling reply during human handoff lets bot resume booking help", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-scheduling-inbound",
+    ghlContactId: "human-scheduling-inbound",
+    name: "Human Scheduling",
+    phone: "+15550000075",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_replied_waiting",
+    automationPaused: true,
+    automationPauseReason: "human_working"
+  });
+  store.addJob({
+    type: "human_reply_timeout",
+    contactId: "human-scheduling-inbound",
+    runAt: new Date().toISOString(),
+    payload: {}
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "human-scheduling-inbound",
+    message: "Later I am sick in bed I had surgery"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.humanEscalationStatus, false);
+  assert.equal(contact.automationPaused, false);
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.match(contact.lastOutboundMessage, /hope you feel better/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "human-scheduling-inbound" && job.type === "human_reply_timeout" && job.status === "pending"),
+    false
+  );
+});
+
 test("manual call activity waits 30 minutes before returning to bot", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

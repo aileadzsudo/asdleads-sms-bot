@@ -385,6 +385,15 @@ function canAutoResumeFromSoftEscalation(contact, text, config) {
   return Boolean(looksLikeCallScheduling(text) && parseCallTime(text, contact, config));
 }
 
+function canAutoResumeHumanScheduling(contact, text, config) {
+  if (contact.engagementStatus !== ENGAGEMENT.ESCALATED_TO_HUMAN) return false;
+  if (!["human_working", "human_replied_waiting"].includes(contact.humanEscalationStage)) return false;
+  if (contact.automationPauseReason && contact.automationPauseReason !== "human_working") return false;
+  if (contact.appointmentId || contact.qualificationProgress === QUALIFICATION.CALL_BOOKED) return false;
+  const schedulingContact = { ...contact, qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME };
+  return Boolean(looksLikeCallScheduling(text) && parseCallTime(text, schedulingContact, config));
+}
+
 function hasExplicitCallDate(text) {
   const t = normalize(text);
   return /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|next month)\b/.test(t) ||
@@ -1178,11 +1187,25 @@ class SmsBot {
       contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN &&
       (contact.automationPaused || ["human_working", "human_replied_waiting", "manual_hold_tag", "admin_paused"].includes(contact.humanEscalationStage))
     ) {
+      if (canAutoResumeHumanScheduling(contact, inbound.lastInboundMessage, this.config)) {
+        await this.cancelHumanEscalationWatchdog(contact.id, "bot resumed human scheduling reply");
+        await this.store.cancelJobsForContact(contact.id, "bot resumed human scheduling reply", (job) => job.type === "human_reply_timeout");
+        contact = await this.store.upsertContact({
+          ...contact,
+          engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+          qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+          humanEscalationStatus: false,
+          humanEscalationStage: "bot_resumed_scheduling",
+          automationPaused: false,
+          automationPauseReason: ""
+        });
+      } else {
       return this.store.upsertContact({
         ...contact,
         lastHumanManagedInboundAt: new Date().toISOString(),
         lastHumanManagedInboundMessage: inbound.lastInboundMessage
       });
+      }
     }
 
     if (canAutoResumeFromSoftEscalation(contact, inbound.lastInboundMessage, this.config)) {
