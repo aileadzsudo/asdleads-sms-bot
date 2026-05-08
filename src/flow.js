@@ -190,16 +190,29 @@ function looksPostSignedOrFirmIssue(text) {
   ].some((phrase) => t.includes(phrase));
 }
 
-function currentQuestionTemplate(contact) {
+function callAskTemplateForTime(contact, config, now = new Date()) {
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  const local = getLocalParts(now, timeZone);
+  const lateEvening = local.hour >= 20;
+  if (!isWithinTextingWindow(contact, config, now) || lateEvening) {
+    return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with a ASD Specialist who can create a compensation gameplan for you. What time works best tomorrow or the next day? 📞";
+  }
+  if (local.hour >= 18) {
+    return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with a ASD Specialist who can create a compensation gameplan for you. Are you open for a call this evening or tomorrow? 📞";
+  }
+  return qualificationTemplates.callAsk;
+}
+
+function currentQuestionTemplate(contact, config) {
   if (contact.qualificationProgress === QUALIFICATION.NEEDS_FAULT) return qualificationTemplates.fault;
   if (contact.qualificationProgress === QUALIFICATION.NEEDS_MEDICAL) return qualificationTemplates.medical;
-  if (contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME) return qualificationTemplates.callAsk;
+  if (contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME) return callAskTemplateForTime(contact, config);
   return "";
 }
 
-function warmFollowUpTemplate(contact, step) {
+function warmFollowUpTemplate(contact, step, config) {
   const byProgress = warmFollowUpTemplates[contact.qualificationProgress];
-  return byProgress?.[step] || currentQuestionTemplate(contact);
+  return byProgress?.[step] || currentQuestionTemplate(contact, config);
 }
 
 function reengagementTemplateKey(day, slot) {
@@ -225,6 +238,18 @@ function canTreatDateAsColdOutreachAnswer(contact) {
       ENGAGEMENT.COLD_OUTREACH,
       ENGAGEMENT.ACTIVE_CONVERSATION
     ].includes(contact.engagementStatus)
+  );
+}
+
+function isBotManagedContact(contact) {
+  if (!contact) return false;
+  return Boolean(
+    contact.engagementStatus ||
+      contact.currentSequenceName ||
+      contact.qualificationProgress ||
+      contact.backfilledAt ||
+      contact.lastOutboundTimestamp ||
+      (Array.isArray(contact.sentColdTemplateKeys) && contact.sentColdTemplateKeys.length)
   );
 }
 
@@ -403,7 +428,12 @@ class SmsBot {
 
   async resolveInboundContact(inbound) {
     const exact = await this.store.getContact(inbound.id);
-    if (exact) return { contact: await this.store.upsertContact({ ...exact, ...inbound }), routedFromDuplicate: false };
+    if (exact) {
+      if (!isBotManagedContact(exact)) {
+        return { contact: { ...exact, ...inbound }, inboundNotEnrolled: true };
+      }
+      return { contact: await this.store.upsertContact({ ...exact, ...inbound }), routedFromDuplicate: false };
+    }
 
     const activeMatches = await this.store.findActiveContactsByPhone(inbound.phone);
     if (activeMatches.length === 1) {
@@ -448,7 +478,7 @@ class SmsBot {
       return { contact, duplicateConflict: true };
     }
 
-    return { contact: await this.store.upsertContact(inbound), routedFromDuplicate: false };
+    return { contact: inbound, inboundNotEnrolled: true };
   }
 
   async scheduleWarmFollowUps(contact, afterHours = false) {
@@ -558,7 +588,9 @@ class SmsBot {
       engagementStatus: ENGAGEMENT.CALLED_NO_ANSWER,
       qualificationProgress: payload.qualificationProgress || QUALIFICATION.NEEDS_FAULT,
       optOutStatus: false,
-      humanEscalationStatus: false
+      humanEscalationStatus: false,
+      automationPaused: false,
+      automationPauseReason: ""
     });
     const hydrated = await this.hydrateContactTags(contact);
     if (hasSignedTag(hydrated)) return this.stopForSignedTag(hydrated);
@@ -647,6 +679,17 @@ class SmsBot {
       lastResponseTimestamp: new Date().toISOString()
     });
     let contact = resolution.contact;
+    if (resolution.inboundNotEnrolled) {
+      await this.store.setSetting("last_ignored_inbound_sms", {
+        contactId: contact.ghlContactId || contact.id || "",
+        phone: contact.phone || "",
+        name: contact.name || "",
+        message: contact.lastInboundMessage || "",
+        reason: "contact_not_enrolled_in_bot",
+        receivedAt: new Date().toISOString()
+      });
+      return contact;
+    }
     await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
     if (resolution.duplicateConflict) return contact;
     await this.store.cancelJobsForContact(contact.id, "contact replied", (job) =>
@@ -816,7 +859,7 @@ class SmsBot {
         engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
         qualificationProgress: contact.qualificationProgress || QUALIFICATION.NEEDS_FAULT
       });
-      const template = currentQuestionTemplate(updated);
+      const template = currentQuestionTemplate(updated, this.config);
       if (template) {
         const sent = await this.sendBotMessage(updated, render(template, updated), { bypassQuietHours: true });
         const latest = sent || (await this.store.getContact(updated.id)) || updated;
@@ -979,7 +1022,7 @@ class SmsBot {
     }
 
     if (classification.label === "prefers_text" || classification.label === "acknowledgement") {
-      const template = currentQuestionTemplate(contact);
+      const template = currentQuestionTemplate(contact, this.config);
       if (template) {
         const sent = await this.sendBotMessage(contact, render(template, contact), { bypassQuietHours: true });
         return sent || (await this.store.getContact(contact.id));
@@ -1009,7 +1052,7 @@ class SmsBot {
         medicalTreatmentAnswer: answer.value,
         qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
       });
-      nextMessage = qualificationTemplates.callAsk;
+      nextMessage = callAskTemplateForTime(nextContact, this.config);
     }
     const sent = await this.sendBotMessage(nextContact, render(nextMessage, nextContact), { bypassQuietHours: true });
     const latest = sent || (await this.store.getContact(nextContact.id)) || nextContact;
@@ -1393,7 +1436,7 @@ class SmsBot {
     if (job.type === "warm_followup") {
       const fresh = await this.store.getContact(job.contactId);
       const step = Number(job.payload.step || 1);
-      const template = warmFollowUpTemplate(fresh, step);
+      const template = warmFollowUpTemplate(fresh, step, this.config);
       const updated = await this.store.upsertContact({
         ...fresh,
         engagementStatus: ENGAGEMENT.WARM_FOLLOW_UP,
@@ -1467,4 +1510,4 @@ class SmsBot {
   }
 }
 
-module.exports = { SmsBot, normalizePayload };
+module.exports = { SmsBot, normalizePayload, callAskTemplateForTime };

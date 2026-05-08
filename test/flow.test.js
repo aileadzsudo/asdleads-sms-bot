@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { Store } = require("../src/store");
-const { SmsBot, normalizePayload } = require("../src/flow");
+const { SmsBot, normalizePayload, callAskTemplateForTime } = require("../src/flow");
 const { ENGAGEMENT, QUALIFICATION } = require("../src/constants");
 const { isNoResponseDisposition } = require("../src/disposition");
 
@@ -67,7 +67,7 @@ test("qualification resumes from saved progress instead of restarting", async ()
 
   assert.equal(contact.faultAnswer, "not_at_fault");
   assert.equal(store.getContact("c2").qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
-  assert.match(store.getContact("c2").lastOutboundMessage, /open for a call/i);
+  assert.match(store.getContact("c2").lastOutboundMessage, /Specialist/i);
 });
 
 test("scheduled call confirmation does not restart qualification", async () => {
@@ -217,7 +217,7 @@ test("inbound message does not blank existing contact fields", async () => {
   assert.equal(store.getContact("c4").timezone, "America/New_York");
 });
 
-test("new inbound reply starts qualification instead of escalating as complete", async () => {
+test("new inbound reply is ignored until contact is enrolled in bot", async () => {
   const { bot, store } = makeBot();
 
   const contact = await bot.handleInboundSms({
@@ -227,10 +227,25 @@ test("new inbound reply starts qualification instead of escalating as complete",
     message: "No the other driver was at fault"
   });
 
-  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
-  assert.equal(store.getContact("c5").qualificationProgress, QUALIFICATION.NEEDS_MEDICAL);
-  assert.equal(store.getContact("c5").faultAnswer, "not_at_fault");
-  assert.match(store.getContact("c5").lastOutboundMessage, /medical treatment/i);
+  assert.equal(contact.engagementStatus, undefined);
+  assert.equal(store.getContact("c5"), null);
+  assert.equal(store.data.messages.length, 0);
+  assert.equal(store.getSetting("last_ignored_inbound_sms").value.reason, "contact_not_enrolled_in_bot");
+});
+
+test("call ask avoids today language late at night", () => {
+  const contact = { timezone: "America/Chicago" };
+  const message = callAskTemplateForTime(contact, testConfig("unused"), new Date("2026-05-08T04:36:00.000Z"));
+
+  assert.match(message, /tomorrow or the next day/i);
+  assert.doesNotMatch(message, /later today/i);
+});
+
+test("call ask can use today language during business-friendly hours", () => {
+  const contact = { timezone: "America/Chicago" };
+  const message = callAskTemplateForTime(contact, testConfig("unused"), new Date("2026-05-07T19:00:00.000Z"));
+
+  assert.match(message, /now or later today/i);
 });
 
 test("signed contacts are escalated instead of continuing bot automation", async () => {
@@ -400,7 +415,7 @@ test("return to bot can be triggered from a GHL tag", async () => {
 
   assert.equal(store.getContact("return-tag").humanEscalationStatus, false);
   assert.equal(store.getContact("return-tag").humanEscalationStage, "returned_to_bot");
-  assert.match(store.getContact("return-tag").lastOutboundMessage, /open for a call/i);
+  assert.match(store.getContact("return-tag").lastOutboundMessage, /Specialist/i);
 });
 
 test("NQ tag pauses automation without lead escalation", async () => {
