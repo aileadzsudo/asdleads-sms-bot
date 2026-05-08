@@ -42,6 +42,26 @@ function customValue(payload, key) {
   return payload.customData?.[key] || payload.custom_data?.[key] || "";
 }
 
+function textValue(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const text = textValue(item);
+      if (text) return text;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    for (const key of ["message", "body", "text", "content", "value", "reply", "latestReply", "latest_reply"]) {
+      const text = textValue(value[key]);
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
 function normalizePayload(payload, config) {
   const source = payload.contact || payload.contactData || payload.contact_data || payload;
   const firstName = payload.firstName || payload.first_name || source.firstName || source.first_name;
@@ -84,18 +104,21 @@ function normalizePayload(payload, config) {
     leadSource: payload.leadSource || payload.source || payload.lead_source || payload["contact.source"] || source.leadSource || source.source || source.lead_source,
     ghlContactLink: payload.ghlContactLink || payload.contactLink,
     tags: payload.tags || payload.contactTags || payload.tag || source.tags,
-    lastInboundMessage:
-      payload.message ||
-      payload.body ||
-      payload.text ||
-      payload.messageBody ||
-      payload.message_body ||
-      payload["message.body"] ||
-      customValue(payload, "message") ||
-      customValue(payload, "body") ||
-      customValue(payload, "text") ||
-      customValue(payload, "messageBody") ||
-      customValue(payload, "message_body")
+    lastInboundMessage: [
+      payload.message,
+      payload.body,
+      payload.text,
+      payload.messageBody,
+      payload.message_body,
+      payload["message.body"],
+      payload["AI MVP Latest Reply"],
+      customValue(payload, "message"),
+      customValue(payload, "body"),
+      customValue(payload, "text"),
+      customValue(payload, "messageBody"),
+      customValue(payload, "message_body"),
+      customValue(payload, "AI MVP Latest Reply")
+    ].map(textValue).find(Boolean)
   };
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined && value !== null && value !== "") normalized[key] = value;

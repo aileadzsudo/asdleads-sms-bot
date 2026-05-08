@@ -893,6 +893,40 @@ test("normalizes inbound message from nested GHL customData", () => {
   assert.equal(normalized.lastInboundMessage, "No, the other driver hit me");
 });
 
+test("normalizes inbound message object from GHL merge fields", () => {
+  const normalized = normalizePayload(
+    {
+      contact_id: "object-message-1",
+      full_name: "Object Message Lead",
+      phone: "+15550000022",
+      customData: {
+        message: {
+          body: "It was yesterday"
+        }
+      }
+    },
+    testConfig("")
+  );
+
+  assert.equal(normalized.lastInboundMessage, "It was yesterday");
+});
+
+test("normalizes AI MVP latest reply field", () => {
+  const normalized = normalizePayload(
+    {
+      contact_id: "latest-reply-1",
+      full_name: "Latest Reply Lead",
+      phone: "+15550000023",
+      "AI MVP Latest Reply": {
+        value: "No I was not at fault"
+      }
+    },
+    testConfig("")
+  );
+
+  assert.equal(normalized.lastInboundMessage, "No I was not at fault");
+});
+
 test("no-response disposition accepts NR abbreviation", () => {
   assert.equal(isNoResponseDisposition("no response"), true);
   assert.equal(isNoResponseDisposition("NR"), true);
