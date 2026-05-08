@@ -107,7 +107,7 @@ function localSlotDate(contact, config, dayOffset, slot) {
 
 function formatForContact(date, contact, config) {
   const timeZone = contact.timezone || config.texting.defaultTimezone;
-  return new Intl.DateTimeFormat("en-US", {
+  const formatted = new Intl.DateTimeFormat("en-US", {
     timeZone,
     weekday: "short",
     month: "short",
@@ -116,6 +116,11 @@ function formatForContact(date, contact, config) {
     minute: "2-digit",
     timeZoneName: "short"
   }).format(date);
+  return formatted
+    .replace(/\bEDT\b/g, "EST")
+    .replace(/\bCDT\b/g, "CST")
+    .replace(/\bMDT\b/g, "MST")
+    .replace(/\bPDT\b/g, "PST");
 }
 
 function sameLocalDay(a, b, timeZone) {

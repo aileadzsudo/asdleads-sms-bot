@@ -1960,7 +1960,7 @@ test("inbound payload with owner state corrects an existing default timezone", a
   });
 
   assert.equal(store.getContact("tz-existing").timezone, "America/Los_Angeles");
-  assert.match(store.getContact("tz-existing").preferredCallTime, /PDT|PST/);
+  assert.match(store.getContact("tz-existing").preferredCallTime, /PST/);
 });
 
 test("normalizes nested GHL contact payloads", () => {

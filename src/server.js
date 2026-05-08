@@ -6,6 +6,7 @@ const { loadConfig } = require("./config");
 const { createStore } = require("./storeFactory");
 const { SmsBot } = require("./flow");
 const { isNoResponseSignal } = require("./disposition");
+const { formatForContact } = require("./time");
 const { addMinutes, isWithinTextingWindow, localSlotDate, nextTextingWindow } = require("./time");
 const {
   editableTemplates,
@@ -1918,15 +1919,11 @@ const server = http.createServer(async (req, res) => {
         leadSource: payload.leadSource || "tester",
         engagementStatus: "call_scheduled",
         qualificationProgress: "call_booked",
-        preferredCallTime: new Intl.DateTimeFormat("en-US", {
-          timeZone: payload.timezone || config.texting.defaultTimezone,
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-          timeZoneName: "short"
-        }).format(new Date(startsAt)),
+        preferredCallTime: formatForContact(
+          new Date(startsAt),
+          { timezone: payload.timezone || config.texting.defaultTimezone },
+          config
+        ),
         preferredCallTimeIso: startsAt,
         appointmentId: payload.appointmentId || "test-appointment"
       });
