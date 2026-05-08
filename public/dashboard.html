@@ -655,6 +655,7 @@
           metric("Escalations", fmtNumber(totals.escalations), `${fmtNumber(totals.escalations24h)} last 24h`),
           metric("Ready Now", fmtNumber(totals.readyForCall), "urgent call requests"),
           metric("Booked Calls", fmtNumber(totals.callScheduled), "scheduled"),
+          metric("SMS Blocked", fmtNumber(totals.smsBlocked), "GHL DND"),
           metric("Failed Jobs", fmtNumber(totals.failedJobs), "must be reviewed")
         ].join("");
 
@@ -697,6 +698,9 @@
         }
         if (totals.failedJobs) {
           items.push(alertItem("urgent", `${totals.failedJobs} failed scheduled job(s)`, "Click to review failed automation."));
+        }
+        if (totals.smsBlocked) {
+          items.push(alertItem("info", `${totals.smsBlocked} SMS blocked by GHL DND`, "These are tracked here and do not trigger Slack alerts."));
         }
         if (totals.dueJobs) {
           items.push(alertItem("warn", `${totals.dueJobs} due job(s) waiting`, "Click to review scheduled jobs."));
@@ -1002,6 +1006,7 @@
         const items = [];
         const totals = data.totals || {};
         if (totals.failedJobs) items.push(alertItem("urgent", "Failed jobs", `${totals.failedJobs} job(s) failed and need review.`));
+        if (totals.smsBlocked) items.push(alertItem("info", "SMS blocked by GHL DND", `${totals.smsBlocked} skipped send(s). No Slack alert needed.`));
         if (totals.dueJobs) items.push(alertItem("warn", "Due jobs waiting", `${totals.dueJobs} scheduled job(s) are due now.`));
         if ((data.alerts?.duplicateConflicts || []).length) items.push(alertItem("warn", "Duplicate contacts", "Some contacts were paused because the same phone has multiple active records."));
         if ((data.alerts?.missingTimezone || []).length) items.push(alertItem("warn", "Missing timezone", "Some contacts will use default texting hours until GHL supplies timezone/state."));

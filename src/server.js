@@ -235,6 +235,7 @@ function contactIssueFlags(contact, jobs = [], messages = [], escalations = []) 
   const flags = [];
   const pendingJobs = jobs.filter((job) => job.status === "pending");
   const failedJobs = jobs.filter((job) => job.status === "failed");
+  const smsBlockedJobs = jobs.filter((job) => job.status === "skipped" && job.skipReason === "permanent_sms_block");
   const dueJobs = pendingJobs.filter((job) => job.runAt && new Date(job.runAt) <= new Date());
   const needsFutureAutomation = [
     "initial_sms_sent",
@@ -251,6 +252,9 @@ function contactIssueFlags(contact, jobs = [], messages = [], escalations = []) 
   }
   if (failedJobs.length) {
     flags.push({ type: "urgent", code: "failed_jobs", label: `${failedJobs.length} failed job(s)` });
+  }
+  if (smsBlockedJobs.length) {
+    flags.push({ type: "info", code: "sms_dnd_blocked", label: "SMS blocked by GHL DND" });
   }
   if (dueJobs.length) {
     flags.push({ type: "warn", code: "due_jobs", label: `${dueJobs.length} due job(s)` });
@@ -579,6 +583,7 @@ async function dashboardMetrics() {
   const inbound24h = inboundMessages.filter((message) => new Date(message.createdAt).getTime() >= since24h);
   const pendingJobs = jobs.filter((job) => job.status === "pending");
   const failedJobs = jobs.filter((job) => job.status === "failed");
+  const smsBlockedJobs = jobs.filter((job) => job.status === "skipped" && job.skipReason === "permanent_sms_block");
   const dueJobs = pendingJobs.filter((job) => job.runAt && new Date(job.runAt) <= new Date());
   const unacknowledged = contacts.filter(
     (contact) => contact.humanEscalationStatus && contact.humanEscalationStage === "human_review_pending"
@@ -656,6 +661,7 @@ async function dashboardMetrics() {
       pendingJobs: pendingJobs.length,
       dueJobs: dueJobs.length,
       failedJobs: failedJobs.length,
+      smsBlocked: smsBlockedJobs.length,
       unacknowledgedEscalations: unacknowledged.length,
       callScheduled: contacts.filter((contact) => contact.engagementStatus === "call_scheduled").length,
       readyForCall: contacts.filter((contact) => contact.engagementStatus === "ready_for_call").length,
@@ -676,6 +682,7 @@ async function dashboardMetrics() {
       escalations: escalations.filter((item) => new Date(item.createdAt).getTime() >= todayStart.getTime()).length,
       booked: bookedToday.length,
       failedJobs: failedJobs.length,
+      smsBlocked: smsBlockedJobs.length,
       issueContacts: allIssueContacts.length
     },
     breakdowns: {
@@ -702,6 +709,14 @@ async function dashboardMetrics() {
         lastInboundMessage: contact.lastInboundMessage
       })),
       failedJobs: failedJobs.slice(0, 25),
+      smsBlocked: smsBlockedJobs.slice(0, 50).map((job) => ({
+        id: job.id,
+        contactId: job.contactId,
+        type: job.type,
+        runAt: job.runAt,
+        finishedAt: job.finishedAt,
+        error: job.error
+      })),
       dueJobs: dueJobs.slice(0, 25),
       duplicateConflicts: duplicateConflicts.map((contact) => ({
         id: contact.id,
@@ -943,13 +958,6 @@ async function runDueJobs() {
           finishedAt: new Date().toISOString(),
           error: error.message,
           skipReason: "permanent_sms_block"
-        });
-        await notifyBotError("SMS send skipped by GHL", {
-          "Job ID": job.id,
-          Type: job.type,
-          "Contact ID": job.contactId,
-          Reason: "GHL says SMS is blocked for this contact",
-          Error: error.message
         });
         results.push({ id: job.id, type: job.type, ok: false, skipped: true, error: error.message });
         continue;
@@ -1720,4 +1728,12 @@ process.on("uncaughtException", (error) => {
   });
 });
 
-module.exports = { server, runDueJobs, initApp, notifyBotError, requireWebhookSecret };
+module.exports = {
+  server,
+  runDueJobs,
+  initApp,
+  notifyBotError,
+  requireWebhookSecret,
+  isPermanentSmsBlock,
+  contactIssueFlags
+};
