@@ -203,6 +203,12 @@ test("backup time reply finalizes scheduled call instead of escalating", async (
 
 test("backup time window is saved as a window instead of duplicating primary time", async () => {
   const { bot, store } = makeBot();
+  const originalUpdateAppointment = ghl.updateAppointment;
+  const noteUpdates = [];
+  ghl.updateAppointment = async (_config, _contact, appointmentId, startsAt, endsAt, notes) => {
+    noteUpdates.push({ appointmentId, startsAt, endsAt, notes });
+    return { id: appointmentId };
+  };
   store.upsertContact({
     id: "backup-window",
     ghlContactId: "backup-window",
@@ -217,13 +223,18 @@ test("backup time window is saved as a window instead of duplicating primary tim
     awaitingBackupTime: true
   });
 
-  const contact = await bot.handleInboundSms({ contactId: "backup-window", message: "2-4pm" });
+  try {
+    const contact = await bot.handleInboundSms({ contactId: "backup-window", message: "2-4pm" });
 
-  assert.equal(contact.awaitingBackupTime, false);
-  assert.equal(store.getContact("backup-window").backupCallTime, "2-4 PM");
-  assert.equal(store.getContact("backup-window").backupCallTimeType, "window");
-  assert.match(store.getContact("backup-window").lastOutboundMessage, /2-4 PM as a backup/i);
-  assert.equal(store.getContact("backup-window").backupCallTimeIso, "");
+    assert.equal(contact.awaitingBackupTime, false);
+    assert.equal(store.getContact("backup-window").backupCallTime, "2-4 PM");
+    assert.equal(store.getContact("backup-window").backupCallTimeType, "window");
+    assert.match(store.getContact("backup-window").lastOutboundMessage, /2-4 PM as a backup/i);
+    assert.equal(store.getContact("backup-window").backupCallTimeIso, "");
+    assert.match(noteUpdates[0].notes, /Backup time: 2-4 PM/);
+  } finally {
+    ghl.updateAppointment = originalUpdateAppointment;
+  }
 });
 
 test("backup time reply cancels backup timeout and schedules reminders", async () => {
@@ -548,7 +559,28 @@ test("SMS escalation Slack copy stays compact without unknown qualification fiel
       phone: "+15550000061",
       lastInboundMessage: "Can you help?"
     },
-    "low_confidence_answer"
+    "low_confidence_answer",
+    { Confidence: "0.9", "Accident date": "unknown", Fault: "unknown", Medical: "unknown" }
+  );
+
+  assert.equal(result.skipped, true);
+  assert.doesNotMatch(result.text, /Confidence:/);
+  assert.doesNotMatch(result.text, /Accident date:/);
+  assert.doesNotMatch(result.text, /Fault:/);
+  assert.doesNotMatch(result.text, /Medical:/);
+});
+
+test("booking Slack copy does not include qualification answer noise", async () => {
+  const result = await slack.sendAppointmentBooked(
+    { ...testConfig(""), dryRun: true, slack: { token: "", channel: "#sms", botErrorsChannel: "#bot-errors", bookingChannel: "#booking" } },
+    {
+      id: "booking-slack",
+      ghlContactId: "booking-slack",
+      name: "Booking Slack",
+      phone: "+15550000069",
+      preferredCallTime: "Fri, May 8, 2:00 PM CDT",
+      timezone: "America/Chicago"
+    }
   );
 
   assert.equal(result.skipped, true);
@@ -622,6 +654,53 @@ test("manual human SMS returns lead to bot after timeout if lead stays quiet", a
     Object.values(store.data.jobs).some((job) => job.contactId === "human-return-timeout" && job.type === "warm_followup" && job.status === "pending"),
     true
   );
+});
+
+test("human timeout uses a softer re-engagement message", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-soft-return",
+    ghlContactId: "human-soft-return",
+    name: "Soft Return",
+    phone: "+15550000070",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_working",
+    automationPaused: true,
+    automationPauseReason: "human_working"
+  });
+
+  await bot.handleHumanOutbound({ contactId: "human-soft-return", message: "This is Sarah from Accident Support Desk." });
+  const timeout = Object.values(store.data.jobs).find(
+    (job) => job.contactId === "human-soft-return" && job.type === "human_reply_timeout" && job.status === "pending"
+  );
+  await bot.runDueJob(timeout);
+
+  assert.match(store.getContact("human-soft-return").lastOutboundMessage, /still here with me/i);
+  assert.match(store.getContact("human-soft-return").lastOutboundMessage, /do not lose momentum/i);
+});
+
+test("lead replies while human is working do not trigger another Slack escalation", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-managed-inbound",
+    ghlContactId: "human-managed-inbound",
+    name: "Human Managed",
+    phone: "+15550000071",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_replied_waiting",
+    automationPaused: true,
+    automationPauseReason: "human_working"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "human-managed-inbound", message: "yes I am here" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(store.data.escalations.length, 0);
+  assert.equal(store.getContact("human-managed-inbound").lastHumanManagedInboundMessage, "yes I am here");
 });
 
 test("manual call activity waits 30 minutes before returning to bot", async () => {
@@ -1010,6 +1089,32 @@ test("missed call follow-up includes scheduled call time", async () => {
   await bot.runDueJob(store.data.jobs[firstJob.id]);
 
   assert.match(store.getContact("missed-1").lastOutboundMessage, /Fri, May 8, 3:00 PM CDT/);
+});
+
+test("appointment no-show schedules reschedule recovery without restarting qualification", async () => {
+  const { bot, store } = makeBot();
+  const contact = await bot.markNoShow({
+    contactId: "no-show-1",
+    name: "No Show",
+    phone: "+15550000072",
+    timezone: "America/Chicago",
+    preferredCallTime: "Fri, May 8, 1:00 PM CDT",
+    preferredCallTimeIso: "2026-05-08T18:00:00.000Z"
+  });
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === contact.id && job.type === "missed_call_followup");
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
+  assert.equal(contact.qualificationProgress, QUALIFICATION.CALL_BOOKED);
+  assert.equal(contact.currentSequenceName, "appointment_no_show");
+  assert.equal(jobs.some((job) => job.payload.templateGroup === "noShowTemplates"), true);
+  assert.equal(jobs.some((job) => job.payload.templateKey === "day_2_am"), true);
+
+  const firstJob = jobs.find((job) => job.payload.templateKey === "sameDay10") || jobs[0];
+  store.updateJob(firstJob.id, { runAt: new Date().toISOString() });
+  await bot.runDueJob(store.data.jobs[firstJob.id]);
+
+  assert.match(store.getContact("no-show-1").lastOutboundMessage, /missed you|missed the call|rescheduled|calendar/i);
+  assert.doesNotMatch(store.getContact("no-show-1").lastOutboundMessage, /date of the accident/i);
 });
 
 test("warm follow-ups aggressively chase before entering re-engagement", async () => {

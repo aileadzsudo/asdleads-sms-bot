@@ -9,6 +9,7 @@ function answerLines(contact) {
 }
 
 function baseEscalationText(config, contact, title, reason, extra = {}) {
+  const hiddenExtraFields = new Set(["Confidence", "Accident date", "Fault", "Medical"]);
   const lines = [
     `*${title}*`,
     `Reason: ${reason}`,
@@ -18,6 +19,7 @@ function baseEscalationText(config, contact, title, reason, extra = {}) {
     `GHL: ${contactLink(config, contact) || "unknown"}`
   ];
   for (const [key, value] of Object.entries(extra)) {
+    if (hiddenExtraFields.has(key)) continue;
     if (value) lines.push(`${key}: ${value}`);
   }
   return lines.join("\n");
@@ -58,7 +60,6 @@ async function sendAppointmentBooked(config, contact, extra = {}) {
     `Primary: ${extra["Primary call time"] || contact.preferredCallTime || "unknown"}`,
     `Backup: ${extra["Backup time"] || contact.backupCallTime || "none"}`,
     `Timezone: ${extra.Timezone || contact.timezone || "unknown"}`,
-    answerLines(contact),
     `Appointment: ${extra["GHL appointment"] || contact.appointmentId || "unknown"}`,
     `GHL: ${contactLink(config, contact) || "unknown"}`
   ];

@@ -3,11 +3,13 @@ const {
   coldOutreachTemplates,
   freshLeadFollowUpTemplates,
   qualificationTemplates,
+  humanReturnTemplates,
   reengagementTemplates,
   persistentReengagementTemplates,
   warmFollowUpTemplates,
   reminderTemplates,
   missedCallTemplates,
+  noShowTemplates,
   render
 } = require("./templates");
 const {
@@ -43,6 +45,8 @@ const HUMAN_REPLY_TIMEOUT_MINUTES = 5;
 const HUMAN_CALL_TIMEOUT_MINUTES = 30;
 const INBOUND_BUFFER_SECONDS = 30;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 60, 120, 240];
+const NO_SHOW_SAME_DAY_MINUTES = [10, 45, 120, 240, 360];
+const NO_SHOW_DAYS = [2, 3, 4, 5, 6, 7];
 
 function customValue(payload, key) {
   return payload.customData?.[key] || payload.custom_data?.[key] || "";
@@ -272,6 +276,10 @@ function currentQuestionTemplate(contact, config) {
   return "";
 }
 
+function humanReturnTemplate(contact, config) {
+  return humanReturnTemplates[contact.qualificationProgress] || currentQuestionTemplate(contact, config);
+}
+
 function warmFollowUpTemplate(contact, step, config) {
   const key =
     contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME && contact.awaitingSpecificCallTime
@@ -454,6 +462,17 @@ function relativeTimeClarification(parsed, contact, config) {
   return `Just to confirm, do you mean around ${formatTimeOnly(first, contact, config)} or ${formatTimeOnly(second, contact, config)}? Reply with the exact time that works best.`;
 }
 
+function appointmentNotes(contact, extra = {}) {
+  const lines = [
+    "Booked by Accident Support Desk SMS bot",
+    `Primary call time: ${extra.primaryTime || contact.preferredCallTime || "unknown"}`,
+    `Backup time: ${extra.backupTime || contact.backupCallTime || "pending"}`,
+    `Timezone: ${contact.timezone || "unknown"}`
+  ];
+  if (extra.reason) lines.push(`Note: ${extra.reason}`);
+  return lines.join("\n");
+}
+
 class SmsBot {
   constructor(store, config) {
     this.store = store;
@@ -465,6 +484,30 @@ class SmsBot {
       await slack.sendBotError(this.config, title, details);
     } catch (error) {
       console.error("bot error notification failed", title, error.message);
+    }
+  }
+
+  async syncAppointmentNotes(contact, extra = {}) {
+    if (!contact.appointmentId || !contact.preferredCallTimeIso) return false;
+    try {
+      await ghl.updateAppointment(
+        this.config,
+        contact,
+        contact.appointmentId,
+        contact.preferredCallTimeIso,
+        addMinutes(new Date(contact.preferredCallTimeIso), 15).toISOString(),
+        appointmentNotes(contact, extra)
+      );
+      return true;
+    } catch (error) {
+      await this.notifyBotError("GHL appointment notes update failed", {
+        Name: contact.name || "unknown",
+        Phone: contact.phone || "unknown",
+        "GHL contact": contact.ghlContactId || contact.id,
+        "Appointment ID": contact.appointmentId || "unknown",
+        Error: error.message
+      });
+      return false;
     }
   }
 
@@ -1059,6 +1102,17 @@ class SmsBot {
       return this.escalate(contact, "post_intake_or_firm_issue");
     }
 
+    if (
+      contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN &&
+      (contact.automationPaused || ["human_working", "human_replied_waiting", "manual_hold_tag", "admin_paused"].includes(contact.humanEscalationStage))
+    ) {
+      return this.store.upsertContact({
+        ...contact,
+        lastHumanManagedInboundAt: new Date().toISOString(),
+        lastHumanManagedInboundMessage: inbound.lastInboundMessage
+      });
+    }
+
     if (contact.engagementStatus === ENGAGEMENT.READY_FOR_CALL || contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) {
       await this.escalate(contact, "message_after_bot_paused");
       return contact;
@@ -1531,9 +1585,16 @@ class SmsBot {
     }
     const startsAt = parsed.startsAt;
     const endsAt = addMinutes(new Date(startsAt), 15).toISOString();
+    const display = formatForContact(new Date(startsAt), contact, this.config);
     let appointment = null;
     try {
-      appointment = await ghl.createAppointment(this.config, contact, startsAt, endsAt, "Booked by Accident Support Desk SMS bot");
+      appointment = await ghl.createAppointment(
+        this.config,
+        contact,
+        startsAt,
+        endsAt,
+        appointmentNotes({ ...contact, preferredCallTime: display, preferredCallTimeIso: startsAt })
+      );
     } catch (error) {
       await this.notifyBotError("GHL appointment booking failed", {
         Name: contact.name || "unknown",
@@ -1553,7 +1614,6 @@ class SmsBot {
         Error: error.message
       });
     }
-    const display = formatForContact(new Date(startsAt), contact, this.config);
     const updated = await this.store.upsertContact({
       ...contact,
       engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
@@ -1676,6 +1736,7 @@ class SmsBot {
         { bypassQuietHours: true }
       );
       await this.store.cancelJobsForContact(updated.id, "backup time answered", (job) => job.type === "backup_time_timeout");
+      await this.syncAppointmentNotes(updated, { backupTime: backupWindow.value, reason: "Backup window supplied by contact." });
       if (!updated.bookingAlertSentAt) {
         const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
           "Primary call time": updated.preferredCallTime,
@@ -1704,6 +1765,7 @@ class SmsBot {
         awaitingBackupTime: false,
         qualificationProgress: QUALIFICATION.COMPLETE
       });
+      await this.syncAppointmentNotes(updated, { backupTime: backup, reason: "Backup time supplied by contact." });
       await this.sendBotMessage(
         updated,
         render(qualificationTemplates.bookingConfirmedWithBackup, updated, {
@@ -1723,6 +1785,7 @@ class SmsBot {
         render(qualificationTemplates.bookingConfirmedNoBackup, updated, { time: updated.preferredCallTime }),
         { bypassQuietHours: true }
       );
+      await this.syncAppointmentNotes(updated, { backupTime: "none", reason: "No backup time supplied." });
     }
     await this.store.cancelJobsForContact(updated.id, "backup time answered", (job) => job.type === "backup_time_timeout");
     if (!updated.bookingAlertSentAt) {
@@ -1805,6 +1868,37 @@ class SmsBot {
     }
   }
 
+  async scheduleNoShowFollowUps(contact) {
+    await this.store.cancelJobsForContact(contact.id, "no-show follow-ups replaced", (job) => job.type === "missed_call_followup");
+    const now = new Date();
+    const sameDayKeys = ["sameDay10", "sameDay45", "sameDay120", "sameDay240", "sameDayLast"];
+    for (const [index, minutes] of NO_SHOW_SAME_DAY_MINUTES.entries()) {
+      const runAt = addMinutes(now, minutes);
+      if (!sameLocalDay(now, runAt, contact.timezone || this.config.texting.defaultTimezone)) continue;
+      if (!isWithinTextingWindow(contact, this.config, runAt)) continue;
+      await this.store.addJob({
+        type: "missed_call_followup",
+        contactId: contact.id,
+        runAt: runAt.toISOString(),
+        payload: { templateGroup: "noShowTemplates", templateKey: sameDayKeys[index], sequence: "appointment_no_show" }
+      });
+    }
+    for (const day of NO_SHOW_DAYS) {
+      for (const slot of ["am", "pm"]) {
+        const templateKey = `day_${day}_${slot}`;
+        if (!noShowTemplates[templateKey]) continue;
+        const runAt = localSlotDate(contact, this.config, day - 1, slot);
+        if (runAt <= now) continue;
+        await this.store.addJob({
+          type: "missed_call_followup",
+          contactId: contact.id,
+          runAt: runAt.toISOString(),
+          payload: { templateGroup: "noShowTemplates", templateKey, sequence: "appointment_no_show" }
+        });
+      }
+    }
+  }
+
   async markMissedCall(payload) {
     const normalized = normalizePayload(payload, this.config);
     const contact = await this.store.upsertContact({
@@ -1826,6 +1920,29 @@ class SmsBot {
         payload: { templateKey }
       });
     }
+    return contact;
+  }
+
+  async markNoShow(payload) {
+    const normalized = normalizePayload(payload, this.config);
+    let contact = await this.store.upsertContact({
+      ...normalized,
+      engagementStatus: ENGAGEMENT.MISSED_CALL,
+      qualificationProgress: QUALIFICATION.CALL_BOOKED,
+      appointmentNoShowAt: new Date().toISOString(),
+      preferredCallTime: normalized.preferredCallTime || payload.preferredCallTime || payload.callTime || payload.scheduledTime || "",
+      preferredCallTimeIso: normalized.preferredCallTimeIso || payload.preferredCallTimeIso || payload.callTimeIso || "",
+      currentSequenceName: "appointment_no_show"
+    });
+    await this.store.cancelJobsForContact(contact.id, "appointment marked no-show", (job) =>
+      ["appointment_reminder", "backup_time_timeout", "warm_followup", "enter_reengagement", "send_reengagement_template"].includes(job.type)
+    );
+    await this.scheduleNoShowFollowUps(contact);
+    contact = await this.store.upsertContact({
+      ...contact,
+      currentSequenceDay: 1,
+      currentSequenceSlot: "no_show"
+    });
     return contact;
   }
 
@@ -1888,7 +2005,7 @@ class SmsBot {
       engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
       qualificationProgress: fresh.qualificationProgress || QUALIFICATION.NEEDS_FAULT
     });
-    const template = currentQuestionTemplate(resumed, this.config);
+    const template = humanReturnTemplate(resumed, this.config);
     if (!template) return resumed;
     const sent = await this.sendBotMessage(resumed, render(template, resumed), { bypassQuietHours: true });
     const latest = sent || (await this.store.getContact(resumed.id)) || resumed;
@@ -2079,6 +2196,7 @@ class SmsBot {
           render(qualificationTemplates.bookingConfirmedNoBackup, updated, { time: updated.preferredCallTime }),
           { bypassQuietHours: true }
         );
+        await this.syncAppointmentNotes(updated, { backupTime: "none", reason: "No backup time supplied before timeout." });
         if (!updated.bookingAlertSentAt) {
           const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
             "Primary call time": updated.preferredCallTime,
@@ -2098,11 +2216,13 @@ class SmsBot {
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
     if (job.type === "missed_call_followup") {
+      const group = job.payload.templateGroup === "noShowTemplates" ? "noShowTemplates" : "missedCallTemplates";
+      const templates = group === "noShowTemplates" ? noShowTemplates : missedCallTemplates;
       const rendered = await this.renderManagedTemplate(
         contact,
-        "missedCallTemplates",
+        group,
         job.payload.templateKey,
-        missedCallTemplates[job.payload.templateKey],
+        templates[job.payload.templateKey],
         { time: contact.preferredCallTime || "your scheduled time" }
       );
       await this.sendBotMessage(contact, rendered.message, rendered.meta);

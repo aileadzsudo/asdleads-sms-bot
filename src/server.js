@@ -1414,6 +1414,23 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && ["/webhooks/ghl/no-show", "/webhooks/ghl/appointment-no-show"].includes(req.url)) {
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const dedupe = await dedupeWebhook(req, payload, "appointment-no-show");
+      if (dedupe.duplicate) {
+        send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
+        return;
+      }
+      const contact = await bot.markNoShow(payload);
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/webhooks/ghl/bot-control") {
       const payload = await readJson(req);
       const auth = requireWebhookSecret(req, payload);

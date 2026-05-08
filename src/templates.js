@@ -62,6 +62,12 @@ const qualificationTemplates = {
   rescheduleConfirmed: "Done, I moved your Specialist call to [TIME]. 📅 We'll send you a reminder before the call, and they'll call from a local number."
 };
 
+const humanReturnTemplates = {
+  needs_fault_answer: "Hey [NAME], still here with me? 🙏 I want to make sure we do not lose momentum on your case. Quick question so I know how to point you in the right direction: were you at fault, or was it the other driver?",
+  needs_medical_answer: "Hey [NAME], still here with me? 🙏 I want to make sure we can help you the right way. Did you need any medical treatment after the accident, even just urgent care, ER, chiro, or one doctor visit? 🤕",
+  needs_call_time: "Hey [NAME], still here with me? 🙏 I want to help get you connected so you can get answers on your case. What time works best for a quick Specialist call? 📞"
+};
+
 const freshLeadFollowUpTemplates = {
   1: "Hey [NAME], just checking back quickly 🙌 I still have your accident info open and wanted to make sure you do not miss out. Do you remember the date of the accident?",
   2: "[NAME], William here again 👋 I only need a couple quick details to see if we can help. What was the date of the accident?",
@@ -191,6 +197,26 @@ const missedCallTemplates = {
   nextDay: "Hey [NAME] 👋, I know we missed yesterday but I don't want you to lose your spot. Our Specialists book up fast and I held yours as long as I could. Can I get you back on the calendar today?"
 };
 
+const noShowTemplates = {
+  sameDay10: "Hey [NAME], looks like we just missed you for your Specialist call at [TIME] 📞 No worries, I still want to help you get answers. What time can we try again today?",
+  sameDay45: "[NAME], I do not want you to miss out on help you may be entitled to after the accident 💰 Can I get you back on the calendar today?",
+  sameDay120: "Quick check, [NAME] 🙏 our Specialist had time set aside for you and I can still try to reconnect you. What time works later today?",
+  sameDay240: "[NAME], I am still holding this open because your case may be worth a real conversation. Reply with any time today or tomorrow that works for a quick call.",
+  sameDayLast: "Last try for today, [NAME]. I do not want this to fall through if you still need help. What time should we call you back? 📞",
+  day_2_am: "Good morning [NAME] 👋 we missed the call yesterday, but I can still help get you connected. What time works today for your Specialist call?",
+  day_2_pm: "[NAME], checking back so you do not lose your spot. It only takes a few minutes to see what options you may have. Can we reschedule your call today?",
+  day_3_am: "Hey [NAME], William here. I know things get busy, but I do not want you to miss out on compensation you may be entitled to. What time can a Specialist call?",
+  day_3_pm: "Still trying to help, [NAME] 🙏 reply with a time today or tomorrow and I can get you back on the calendar.",
+  day_4_am: "[NAME], quick follow-up from Accident Support Desk. We missed your scheduled call, but we can still help. What time works for a quick call?",
+  day_4_pm: "I can keep this simple, [NAME]: send me a time that works and I’ll try to get a Specialist back on the phone with you 📞",
+  day_5_am: "Morning [NAME], I still have your file open. If you still want help with the accident, what time should we call you?",
+  day_5_pm: "[NAME], I do not want your file to go cold after you already had a call scheduled. Are you available today or tomorrow?",
+  day_6_am: "Hey [NAME] 👋 we can still get you answers. What time works for a quick Specialist call?",
+  day_6_pm: "Checking once more, [NAME]. If you still want help, reply with a time and I can work on getting you rescheduled.",
+  day_7_am: "Hi [NAME], last day I’ll keep pushing on this. Do you still want a Specialist to call you about your accident case?",
+  day_7_pm: "Last message from me for now, [NAME]. If you want help, send me a call time and we’ll try to get you back on the calendar."
+};
+
 function firstName(contact = {}) {
   const raw =
     contact.firstName ||
@@ -217,12 +243,14 @@ function render(template, contact, extra = {}) {
 module.exports = {
   coldOutreachTemplates,
   qualificationTemplates,
+  humanReturnTemplates,
   freshLeadFollowUpTemplates,
   reengagementTemplates,
   persistentReengagementTemplates,
   warmFollowUpTemplates,
   reminderTemplates,
   missedCallTemplates,
+  noShowTemplates,
   render,
   firstName
 };
