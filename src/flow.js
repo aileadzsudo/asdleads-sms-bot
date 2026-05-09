@@ -413,6 +413,7 @@ function humanContextResponse(contact, intent, config) {
 
 function looksLikeCallScheduling(text) {
   const t = normalize(text);
+  if (looksLikeAccidentTiming(text) && !hasCallIntentText(text)) return false;
   return (
     /\b(call|talk|speak|schedule|appointment|specialist|available|free|later|tomorrow|today|tonight|morning|afternoon|evening|noon)\b/.test(t) ||
     /\b\d{1,2}(?::\d{2})?\s*(am|pm)\b/.test(t)
@@ -422,6 +423,17 @@ function looksLikeCallScheduling(text) {
 function hasCallIntentText(text) {
   const t = normalize(text);
   return /\b(open|available|free|call|talk|speak|meeting|appointment|schedule|specialist)\b/.test(t);
+}
+
+function looksLikeAccidentTiming(text) {
+  const t = normalize(text);
+  const hasAccidentSubject = /\b(accident|wreck|crash|collision|incident)\b/.test(t);
+  const hasTimingVerb = /\b(happened|occurred|took place|was|were|happen|took)\b/.test(t);
+  const hasDateOrTime =
+    Boolean(parseAccidentDate(t)) ||
+    /\b\d{1,2}(?::\d{2})?\s*(am|pm)\b/.test(t) ||
+    /\b(morning|afternoon|evening|night|noon)\b/.test(t);
+  return hasAccidentSubject && hasTimingVerb && hasDateOrTime;
 }
 
 function isSoftEscalationReason(reason = "") {
@@ -1889,6 +1901,60 @@ class SmsBot {
       return this.store.getContact(contact.id);
     }
 
+    if (["clear_bad_appointment", "void_bad_appointment", "remove_bad_appointment"].includes(action)) {
+      if (contact.appointmentId) {
+        try {
+          await ghl.deleteAppointment(this.config, contact.appointmentId);
+        } catch (error) {
+          await this.notifyBotError(
+            "GHL bad appointment delete failed",
+            {
+              Name: contact.name || "unknown",
+              Phone: contact.phone || "unknown",
+              "GHL contact": contact.ghlContactId || contact.id,
+              Appointment: contact.appointmentId,
+              Error: error.message
+            },
+            { operationalOnly: true, slack: false, level: "warn" }
+          );
+        }
+      }
+      await this.store.cancelJobsForContact(contact.id, "bad appointment cleared", (job) =>
+        ["appointment_reminder", "backup_time_timeout", "backup_no_show_reminder"].includes(job.type)
+      );
+      const progress = contact.faultAnswer
+        ? contact.medicalTreatmentAnswer
+          ? QUALIFICATION.NEEDS_CALL_TIME
+          : QUALIFICATION.NEEDS_MEDICAL
+        : QUALIFICATION.NEEDS_FAULT;
+      const updated = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+        qualificationProgress: progress,
+        appointmentId: "",
+        preferredCallTime: "",
+        preferredCallTimeIso: "",
+        backupCallTime: "",
+        backupCallTimeIso: "",
+        backupCallTimeType: "",
+        awaitingBackupTime: false,
+        awaitingSpecificCallTime: false,
+        bookingAlertSentAt: "",
+        lastAppointmentBookingError: "",
+        humanEscalationStatus: false,
+        humanEscalationStage: "bad_appointment_cleared",
+        automationPaused: true,
+        automationPauseReason: "bad_appointment_review"
+      });
+      await this.recordDecision(updated, "repaired", "bad_appointment_cleared", {
+        trigger: "admin_action",
+        beforeStatus: contact.engagementStatus || "",
+        afterStatus: updated.engagementStatus || "",
+        meta: { previousAppointmentId: contact.appointmentId || "" }
+      });
+      return updated;
+    }
+
     if (["mark_no_show", "no_show", "appointment_no_show"].includes(action)) {
       return this.markNoShow({
         contactId: contact.id,
@@ -2174,6 +2240,23 @@ class SmsBot {
 
   async handleCallTime(contact, text) {
     contact = await this.hydrateContactTags(contact, { force: true });
+    if (looksLikeAccidentTiming(text) && !hasCallIntentText(text)) {
+      const dateAnswer = parseAccidentDate(text);
+      if (dateAnswer && !contact.accidentDate) {
+        contact = await this.store.upsertContact({ ...contact, accidentDate: dateAnswer.value });
+      }
+      const template =
+        contact.qualificationProgress === QUALIFICATION.NEEDS_FAULT
+          ? qualificationTemplates.fault
+          : currentQuestionTemplate(contact, this.config);
+      if (template) {
+        const sent = await this.sendBotMessage(contact, render(template, contact), { bypassQuietHours: true });
+        const latest = sent || (await this.store.getContact(contact.id)) || contact;
+        await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+        return latest;
+      }
+      return this.store.getContact(contact.id) || contact;
+    }
     const resolvedTimezone = resolveContactTimezone(contact, this.config);
     if (resolvedTimezone && resolvedTimezone !== contact.timezone) {
       contact = await this.store.upsertContact({ ...contact, timezone: resolvedTimezone });

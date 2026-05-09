@@ -157,6 +157,11 @@ async function updateAppointment(config, contact, appointmentId, startsAt, endsA
   );
 }
 
+async function deleteAppointment(config, appointmentId) {
+  if (!appointmentId) return { ok: true, skipped: true, reason: "appointmentId missing" };
+  return ghlRequest(config, `/calendars/events/${encodeURIComponent(appointmentId)}`, {}, "DELETE");
+}
+
 function contactLink(config, contact) {
   if (contact.ghlContactLink) return contact.ghlContactLink;
   const contactId = contact.ghlContactId || contact.id;
@@ -165,4 +170,4 @@ function contactLink(config, contact) {
   return `${baseUrl}/v2/location/${encodeURIComponent(config.ghl.locationId)}/contacts/detail/${encodeURIComponent(contactId)}`;
 }
 
-module.exports = { sendSms, createAppointment, updateAppointment, getContact, searchContactsByTag, contactLink };
+module.exports = { sendSms, createAppointment, updateAppointment, deleteAppointment, getContact, searchContactsByTag, contactLink };

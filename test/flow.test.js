@@ -1938,6 +1938,29 @@ test("natural accident date sentence is accepted and advances to fault question"
   assert.match(store.getContact("c6b").lastOutboundMessage, /were you at fault/i);
 });
 
+test("accident date sentence with time is not booked as a call", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "accident-time-not-call",
+    ghlContactId: "accident-time-not-call",
+    name: "Terrill",
+    phone: "+15550000080",
+    engagementStatus: ENGAGEMENT.INITIAL_SMS_SENT,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "accident-time-not-call",
+    message: "William the accident happened last Saturday around 3pm"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_FAULT);
+  assert.equal(store.getContact("accident-time-not-call").accidentDate, "last saturday");
+  assert.match(store.getContact("accident-time-not-call").lastOutboundMessage, /were you at fault/i);
+  assert.equal(store.getContact("accident-time-not-call").appointmentId, undefined);
+});
+
 test("accident date reply with police report detail still advances instead of escalating", async () => {
   const { bot, store } = makeBot();
   await bot.startFromNoResponseDisposition({
