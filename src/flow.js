@@ -451,6 +451,17 @@ function canAutoResumeHumanScheduling(contact, text, config) {
   return Boolean(looksLikeCallScheduling(text) && parseCallTime(text, schedulingContact, config));
 }
 
+function needsQualificationReply(contact) {
+  return [QUALIFICATION.NEEDS_FAULT, QUALIFICATION.NEEDS_MEDICAL, QUALIFICATION.NEEDS_CALL_TIME].includes(
+    contact?.qualificationProgress
+  );
+}
+
+function hasPendingJob(jobs, types) {
+  const wanted = new Set(types);
+  return jobs.some((job) => job.status === "pending" && wanted.has(job.type));
+}
+
 function hasExplicitCallDate(text) {
   const t = normalize(text);
   return /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|next month)\b/.test(t) ||
@@ -2610,6 +2621,72 @@ class SmsBot {
     const latest = sent || (await this.store.getContact(resumed.id)) || resumed;
     await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
     return latest;
+  }
+
+  async healStuckContacts() {
+    if (!this.store.listContacts) return [];
+    const contacts = await this.store.listContacts();
+    const healed = [];
+    for (const raw of contacts) {
+      let contact = raw;
+      if (
+        !contact ||
+        contact.optOutStatus ||
+        contact.automationPaused ||
+        hasSignedTag(contact) ||
+        hasNqTag(contact) ||
+        hasManualHumanHoldTag(contact) ||
+        contact.engagementStatus === ENGAGEMENT.OPTED_OUT ||
+        contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
+        contact.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
+        contact.qualificationProgress === QUALIFICATION.COMPLETE ||
+        contact.appointmentId
+      ) {
+        continue;
+      }
+
+      const jobs = await this.store.listJobs(contact.id);
+      if (
+        [ENGAGEMENT.ACTIVE_CONVERSATION, ENGAGEMENT.WARM_FOLLOW_UP, ENGAGEMENT.RE_ENGAGEMENT].includes(contact.engagementStatus) &&
+        needsQualificationReply(contact) &&
+        !hasPendingJob(jobs, ["process_inbound_buffer", "warm_followup", "enter_reengagement", "send_reengagement_template"]) &&
+        contact.lastOutboundTimestamp &&
+        (!contact.lastResponseTimestamp || new Date(contact.lastOutboundTimestamp) > new Date(contact.lastResponseTimestamp)) &&
+        Date.now() - new Date(contact.lastOutboundTimestamp).getTime() >= 5 * 60 * 1000 &&
+        isWithinTextingWindow(contact, this.config)
+      ) {
+        await this.scheduleWarmFollowUps(contact, false);
+        healed.push({ contactId: contact.id, action: "scheduled_warm_followups" });
+        continue;
+      }
+
+      if (
+        contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN &&
+        contact.humanEscalationStatus &&
+        contact.humanEscalationStage === "human_review_pending" &&
+        !hasPendingJob(jobs, ["human_escalation_sla"]) &&
+        contact.escalatedAt &&
+        Date.now() - new Date(contact.escalatedAt).getTime() >= 30 * 60 * 1000 &&
+        canAutoReturnUnacknowledgedEscalation(contact, { payload: { minutes: 30, reason: contact.escalationReason } })
+      ) {
+        if (isWithinTextingWindow(contact, this.config)) {
+          contact = await this.handleHumanEscalationSla({
+            contactId: contact.id,
+            payload: { minutes: 30, reason: contact.escalationReason }
+          });
+          healed.push({ contactId: contact.id, action: "auto_returned_soft_escalation" });
+        } else {
+          await this.store.addJob({
+            type: "human_escalation_sla",
+            contactId: contact.id,
+            runAt: nextTextingWindow(contact, this.config).toISOString(),
+            payload: { minutes: 30, reason: contact.escalationReason, healed: true }
+          });
+          healed.push({ contactId: contact.id, action: "queued_soft_escalation_return" });
+        }
+      }
+    }
+    return healed;
   }
 
   async runDueJob(job) {

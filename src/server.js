@@ -1138,6 +1138,10 @@ async function runDueJobs() {
       results.push({ id: claimedJob.id, type: claimedJob.type, ok: false, retryInMinutes: retryDelay || 0, error: error.message });
     }
   }
+  const healed = bot.healStuckContacts ? await bot.healStuckContacts() : [];
+  for (const item of healed) {
+    results.push({ ok: true, type: "stuck_state_heal", ...item });
+  }
   return results;
 }
 

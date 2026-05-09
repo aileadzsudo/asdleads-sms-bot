@@ -435,11 +435,19 @@ test("appointment reminders use cadence based on time until appointment", async 
     preferredCallTimeIso: soon
   });
   await bot.scheduleAppointmentReminders(store.getContact("reminder-soon"));
+  const localNowForSoon = getLocalParts(new Date(), "America/Chicago");
+  const localSoon = getLocalParts(new Date(soon), "America/Chicago");
+  const soonExpected =
+    localSoon.year === localNowForSoon.year &&
+    localSoon.month === localNowForSoon.month &&
+    localSoon.day === localNowForSoon.day
+      ? ["sameDayFiveMinutes"]
+      : ["nextDayFiveMinutes"];
   assert.deepEqual(
     Object.values(store.data.jobs)
       .filter((job) => job.contactId === "reminder-soon" && job.type === "appointment_reminder")
       .map((job) => job.payload.templateKey),
-    ["sameDayFiveMinutes"]
+    soonExpected
   );
 
   const later = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
@@ -996,6 +1004,52 @@ test("LLM needs-escalation without human ack can return to bot after 30 minutes"
   assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
   assert.equal(contact.humanEscalationStage, "auto_returned_after_unacknowledged_escalation");
   assert.match(contact.lastOutboundMessage, /still here with me/i);
+});
+
+test("stuck active qualification contact gets warm follow-ups repaired", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "stuck-active",
+    ghlContactId: "stuck-active",
+    name: "Chiquita",
+    phone: "+15550000093",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    lastResponseTimestamp: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+    lastOutboundTimestamp: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+    lastOutboundMessage: "Were you at fault?"
+  });
+
+  const healed = await bot.healStuckContacts();
+
+  assert.deepEqual(healed, [{ contactId: "stuck-active", action: "scheduled_warm_followups" }]);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "stuck-active" && job.type === "warm_followup" && job.status === "pending"),
+    true
+  );
+});
+
+test("stuck recoverable soft escalation gets queued back to bot", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "stuck-soft",
+    ghlContactId: "stuck-soft",
+    name: "Mukul",
+    phone: "+15550000094",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "llm_needs_escalation",
+    escalatedAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+    lastInboundMessage: "I already answered all the questions before"
+  });
+
+  const healed = await bot.healStuckContacts();
+
+  assert.deepEqual(healed, [{ contactId: "stuck-soft", action: "auto_returned_soft_escalation" }]);
+  assert.equal(store.getContact("stuck-soft").humanEscalationStatus, false);
+  assert.equal(store.getContact("stuck-soft").engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
 });
 
 test("hard human escalations do not auto-return from SLA watchdog", async () => {
