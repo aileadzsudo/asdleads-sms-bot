@@ -18,6 +18,7 @@ const {
 } = require("./templateManager");
 const ghl = require("./adapters/ghl");
 const slack = require("./adapters/slack");
+const { listBotErrors, recordBotError } = require("./opsLog");
 
 const config = loadConfig();
 let store = null;
@@ -37,6 +38,8 @@ function isPermanentSmsBlock(error) {
 
 async function notifyBotError(title, details = {}) {
   try {
+    const recorded = await recordBotError(store, title, details);
+    if (!recorded.shouldNotifySlack) return;
     await slack.sendBotError(config, title, details);
   } catch (error) {
     console.error("bot error notification failed", title, error.message);
@@ -649,13 +652,14 @@ function activityHistory(messages, escalations, contacts) {
 }
 
 async function dashboardMetrics() {
-  const [contacts, messages, jobs, escalations, health, experiments] = await Promise.all([
+  const [contacts, messages, jobs, escalations, health, experiments, botErrors] = await Promise.all([
     store.listContacts ? store.listContacts() : [],
     store.listMessages(),
     store.listJobs(),
     store.listEscalations(),
     store.health(),
-    loadTemplateExperiments(store)
+    loadTemplateExperiments(store),
+    listBotErrors(store, 100)
   ]);
   const since24h = Date.now() - 24 * 60 * 60 * 1000;
   const templates = editableTemplates();
@@ -757,6 +761,7 @@ async function dashboardMetrics() {
       dueJobs: dueJobs.length,
       failedJobs: failedJobs.length,
       smsBlocked: smsBlockedJobs.length,
+      botErrors: botErrors.length,
       unacknowledgedEscalations: unacknowledged.length,
       callScheduled: contacts.filter((contact) => contact.engagementStatus === "call_scheduled").length,
       readyForCall: contacts.filter((contact) => contact.engagementStatus === "ready_for_call").length,
@@ -804,6 +809,7 @@ async function dashboardMetrics() {
         lastInboundMessage: contact.lastInboundMessage
       })),
       failedJobs: failedJobs.slice(0, 25),
+      botErrors: botErrors.slice(0, 50),
       smsBlocked: smsBlockedJobs.slice(0, 50).map((job) => ({
         id: job.id,
         contactId: job.contactId,

@@ -36,6 +36,7 @@ const {
 const { resolveContactTimezone, timezoneFromText } = require("./timezoneResolver");
 const ghl = require("./adapters/ghl");
 const slack = require("./adapters/slack");
+const { recordBotError } = require("./opsLog");
 const { chooseTemplateVariant } = require("./templateManager");
 
 const WARM_FOLLOW_UP_MINUTES = [5, 15, 30, 60, 120, 240];
@@ -395,6 +396,8 @@ function isSoftEscalationReason(reason = "") {
     "llm_asks_who_this_is",
     "company_question",
     "low_confidence_answer",
+    "llm_needs_escalation",
+    "llm_unhandled_needs_escalation",
     "llm_unknown"
   ].includes(String(reason || ""));
 }
@@ -421,6 +424,8 @@ function canAutoReturnUnacknowledgedEscalation(contact, job = {}) {
     "detailed_information",
     "low_confidence_answer",
     "llm_unknown",
+    "llm_needs_escalation",
+    "llm_unhandled_needs_escalation",
     "llm_low_confidence_answer",
     "llm_unhandled_unknown",
     "llm_call_time_unknown",
@@ -644,6 +649,8 @@ class SmsBot {
 
   async notifyBotError(title, details = {}) {
     try {
+      const recorded = await recordBotError(this.store, title, details);
+      if (!recorded.shouldNotifySlack) return;
       await slack.sendBotError(this.config, title, details);
     } catch (error) {
       console.error("bot error notification failed", title, error.message);
@@ -1499,6 +1506,10 @@ class SmsBot {
 
     const reason = escalationReason(inbound.lastInboundMessage);
     if (reason && !(dateAnswer && canTreatDateAsColdOutreachAnswer(contact))) {
+      const expectedAnswer = parseExpectedAnswer(contact.qualificationProgress, inbound.lastInboundMessage);
+      if (reason === "detailed_information" && expectedAnswer) {
+        return this.advanceQualification(contact, expectedAnswer);
+      }
       await this.escalate(contact, reason);
       return contact;
     }
@@ -1914,7 +1925,9 @@ class SmsBot {
       const template = currentQuestionTemplate(contact, this.config);
       if (template) {
         const sent = await this.sendBotMessage(contact, render(template, contact), { bypassQuietHours: true });
-        return sent || (await this.store.getContact(contact.id));
+        const latest = sent || (await this.store.getContact(contact.id)) || contact;
+        await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+        return latest;
       }
     }
 

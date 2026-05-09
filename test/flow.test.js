@@ -136,6 +136,55 @@ test("busy context does not count yes as a medical answer", async () => {
   assert.match(store.getContact("busy-1").lastOutboundMessage, /medical treatment/i);
 });
 
+test("long fault answer is saved instead of escalated as detailed information", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "long-fault",
+    ghlContactId: "long-fault",
+    name: "Thurston",
+    phone: "+15550000090",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "long-fault",
+    message:
+      "No I was crossing the street in the green light while I was in the middle of the road on the crosswalk and the driver in the far right lane floored it and hit me"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("long-fault").faultAnswer, "not_at_fault");
+  assert.equal(store.getContact("long-fault").qualificationProgress, QUALIFICATION.NEEDS_MEDICAL);
+  assert.match(store.getContact("long-fault").lastOutboundMessage, /medical treatment/i);
+});
+
+test("acknowledgement LLM path schedules warm follow-ups after repeating current question", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "ack-warm",
+    ghlContactId: "ack-warm",
+    name: "Chiquita",
+    phone: "+15550000091",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  const contact = await bot.applyLlmClassification(store.getContact("ack-warm"), {
+    label: "acknowledgement",
+    confidence: 0.9,
+    normalized_value: "",
+    reason: "Lead acknowledged but did not answer the fault question."
+  }, "Ok");
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.match(store.getContact("ack-warm").lastOutboundMessage, /fault/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "ack-warm" && job.type === "warm_followup" && job.status === "pending"),
+    true
+  );
+});
+
 test("scheduled call confirmation does not restart qualification", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -403,11 +452,19 @@ test("appointment reminders use cadence based on time until appointment", async 
     preferredCallTimeIso: later
   });
   await bot.scheduleAppointmentReminders(store.getContact("reminder-later"));
+  const localNowForLater = getLocalParts(new Date(), "America/Chicago");
+  const localLater = getLocalParts(new Date(later), "America/Chicago");
+  const laterExpected =
+    localLater.year === localNowForLater.year &&
+    localLater.month === localNowForLater.month &&
+    localLater.day === localNowForLater.day
+      ? ["sameDayOneHour", "sameDayFiveMinutes"]
+      : ["nextDayOneHour", "nextDayFiveMinutes"];
   assert.deepEqual(
     Object.values(store.data.jobs)
       .filter((job) => job.contactId === "reminder-later" && job.type === "appointment_reminder")
       .map((job) => job.payload.templateKey),
-    ["sameDayOneHour", "sameDayFiveMinutes"]
+    laterExpected
   );
 
   const nearOneHour = new Date(Date.now() + 70 * 60 * 1000).toISOString();
@@ -420,11 +477,18 @@ test("appointment reminders use cadence based on time until appointment", async 
     preferredCallTimeIso: nearOneHour
   });
   await bot.scheduleAppointmentReminders(store.getContact("reminder-near-one-hour"));
+  const localNearOneHour = getLocalParts(new Date(nearOneHour), "America/Chicago");
+  const nearOneHourExpected =
+    localNearOneHour.year === localNowForLater.year &&
+    localNearOneHour.month === localNowForLater.month &&
+    localNearOneHour.day === localNowForLater.day
+      ? ["sameDayFiveMinutes"]
+      : ["nextDayFiveMinutes"];
   assert.deepEqual(
     Object.values(store.data.jobs)
       .filter((job) => job.contactId === "reminder-near-one-hour" && job.type === "appointment_reminder")
       .map((job) => job.payload.templateKey),
-    ["sameDayFiveMinutes"]
+    nearOneHourExpected
   );
 
   const localNow = getLocalParts(new Date(), "America/Chicago");
@@ -902,6 +966,36 @@ test("recoverable unacknowledged human escalation returns to bot after 30 minute
     Object.values(store.data.jobs).some((item) => item.contactId === "human-sla-return" && item.type === "warm_followup" && item.status === "pending"),
     true
   );
+});
+
+test("LLM needs-escalation without human ack can return to bot after 30 minutes", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-sla-llm",
+    ghlContactId: "human-sla-llm",
+    name: "Mukul",
+    phone: "+15550000092",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "llm_needs_escalation",
+    lastInboundMessage: "I already answered all the questions before"
+  });
+  const job = store.addJob({
+    type: "human_escalation_sla",
+    contactId: "human-sla-llm",
+    runAt: new Date().toISOString(),
+    payload: { minutes: 30, reason: "llm_needs_escalation" }
+  });
+
+  await bot.runDueJob(job);
+
+  const contact = store.getContact("human-sla-llm");
+  assert.equal(contact.humanEscalationStatus, false);
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.humanEscalationStage, "auto_returned_after_unacknowledged_escalation");
+  assert.match(contact.lastOutboundMessage, /still here with me/i);
 });
 
 test("hard human escalations do not auto-return from SLA watchdog", async () => {
