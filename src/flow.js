@@ -214,7 +214,7 @@ function normalizeTags(tags) {
 }
 
 function hasSignedTag(contact) {
-  return hasAnyTag(contact, ["signed", "contract_set"]);
+  return hasAnyTag(contact, ["signed", "contract", "contract_set", "contract_sent", "contract_signed"]);
 }
 
 function hasNqTag(contact) {
@@ -230,7 +230,9 @@ function actionFromTags(tags) {
     return "human_acknowledged";
   }
   if (normalizedTags.some((tag) => ["nq", "notqualified", "not_qualified"].includes(tag))) return "nq";
-  if (normalizedTags.some((tag) => tag === "signed")) return "signed";
+  if (normalizedTags.some((tag) => ["signed", "contract", "contract_set", "contract_sent", "contract_signed"].includes(tag))) {
+    return "signed";
+  }
   if (normalizedTags.some((tag) => ["do_not_contact", "dnc", "opt_out"].includes(tag))) return "do_not_contact";
   return "";
 }
@@ -247,6 +249,8 @@ function hasManualHumanHoldTag(contact) {
     "manual_hold",
     "do_not_return_to_bot",
     "manual_follow_up",
+    "follow_up",
+    "missed_follow_up",
     "qr"
   ]);
 }
@@ -2028,7 +2032,12 @@ class SmsBot {
       return this.store.getContact(updated.id);
     }
 
-    if (confidence < this.config.llm.minConfidence) {
+    const callStageIntent =
+      contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME &&
+      ["call_now", "call_later"].includes(classification.label) &&
+      confidence >= this.config.llm.clarifyConfidence;
+
+    if (!callStageIntent && confidence < this.config.llm.minConfidence) {
       await this.sendBotMessage(updated, qualificationTemplates.clarify, { bypassQuietHours: true });
       return this.store.getContact(updated.id);
     }

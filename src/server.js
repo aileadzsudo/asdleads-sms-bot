@@ -206,7 +206,18 @@ function backfillEligibility(contact, tag = "NR") {
   if (!contact.phone) return { eligible: false, reason: "missing phone" };
   if (tag && !hasTag(contact.tags, tag)) return { eligible: false, reason: `missing ${tag} tag` };
   if (hasTag(contact.tags, "NQ") || hasTag(contact.tags, "not_qualified")) return { eligible: false, reason: "NQ tag" };
-  if (hasTag(contact.tags, "signed")) return { eligible: false, reason: "signed tag" };
+  if (
+    hasTag(contact.tags, "signed") ||
+    hasTag(contact.tags, "contract") ||
+    hasTag(contact.tags, "contract_set") ||
+    hasTag(contact.tags, "contract_sent") ||
+    hasTag(contact.tags, "contract_signed")
+  ) {
+    return { eligible: false, reason: "signed/contract tag" };
+  }
+  if (hasTag(contact.tags, "follow_up") || hasTag(contact.tags, "missed_follow_up")) {
+    return { eligible: false, reason: "manual follow-up tag" };
+  }
   if (hasTag(contact.tags, "DNC") || hasTag(contact.tags, "do_not_contact") || hasTag(contact.tags, "opt_out")) {
     return { eligible: false, reason: "DNC/opt-out tag" };
   }

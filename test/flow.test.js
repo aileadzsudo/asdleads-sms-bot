@@ -892,6 +892,38 @@ test("contract set tag prevents no-response outreach from starting", async () =>
   assert.equal(store.data.messages.length, 0);
 });
 
+test("plain contract tag prevents no-response outreach from starting", async () => {
+  const { bot, store } = makeBot();
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "contract-plain-1",
+    name: "Contract Plain",
+    phone: "+15550000077",
+    tags: ["contract"],
+    disposition: "no response"
+  });
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "signed_tag");
+  assert.equal(store.data.messages.length, 0);
+});
+
+test("follow up tag prevents no-response outreach from starting", async () => {
+  const { bot, store } = makeBot();
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "follow-up-hold-1",
+    name: "Follow Up Hold",
+    phone: "+15550000078",
+    tags: ["follow up"],
+    disposition: "no response"
+  });
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "manual_hold_tag");
+  assert.equal(store.data.messages.length, 0);
+});
+
 test("post-intake firm issues are escalated instead of qualified", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -1764,7 +1796,7 @@ test("NQ tag prevents no-response outreach from starting", async () => {
   assert.equal(store.data.messages.length, 0);
 });
 
-test("generic follow up tag does not stop no-response outreach from starting", async () => {
+test("generic follow up tag stops no-response outreach from starting", async () => {
   const { bot, store } = makeBot();
 
   const contact = await bot.startFromNoResponseDisposition({
@@ -1775,10 +1807,10 @@ test("generic follow up tag does not stop no-response outreach from starting", a
     disposition: "no response"
   });
 
-  assert.equal(contact.automationPaused, false);
-  assert.equal(contact.engagementStatus, ENGAGEMENT.INITIAL_SMS_SENT);
-  assert.equal(store.data.messages.length, 1);
-  assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "hold-start" && job.status === "pending"), true);
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "manual_hold_tag");
+  assert.equal(store.data.messages.length, 0);
+  assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "hold-start" && job.status === "pending"), false);
 });
 
 test("fresh NR enrollment queues retry if initial SMS could not be safely sent", async () => {
@@ -2139,6 +2171,49 @@ test("warm follow-ups aggressively chase before entering re-engagement", async (
     120,
     240
   ]);
+});
+
+test("LLM call-now intent at call-time stage is accepted without generic yes-no clarification", async () => {
+  const { bot, store } = makeBot();
+  bot.config.llm = {
+    apiKey: "test-key",
+    fallbackEnabled: true,
+    classifierModel: "test-model",
+    minConfidence: 0.85,
+    clarifyConfidence: 0.6
+  };
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      output_text: JSON.stringify({
+        label: "call_now",
+        confidence: 0.75,
+        should_escalate: false,
+        normalized_value: "call_now",
+        reason: "The lead said yes after being asked if they were open for a call now or later today."
+      })
+    })
+  });
+  try {
+    store.upsertContact({
+      id: "llm-call-now-low-confidence",
+      ghlContactId: "llm-call-now-low-confidence",
+      name: "Craig",
+      phone: "+15550000079",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      lastOutboundMessage: "Are you open for a call now or later today?"
+    });
+
+    const contact = await bot.tryLlmFallback(store.getContact("llm-call-now-low-confidence"), "Yes");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.READY_FOR_CALL);
+    assert.match(store.getContact("llm-call-now-low-confidence").lastOutboundMessage, /connecting you with a Specialist/i);
+    assert.doesNotMatch(store.getContact("llm-call-now-low-confidence").lastOutboundMessage, /yes, no, or not sure/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("vague call time reply schedules hot lead warm follow-ups", async () => {
