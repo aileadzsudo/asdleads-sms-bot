@@ -67,9 +67,15 @@ function customValue(payload, key) {
   return payload.customData?.[key] || payload.custom_data?.[key] || "";
 }
 
+function isEmptyTextToken(value) {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  return ["undefined", "null", "[object object]", "nan"].includes(text.toLowerCase());
+}
+
 function textValue(value) {
   if (value === undefined || value === null || value === "") return "";
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return isEmptyTextToken(value) ? "" : value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) {
     for (const item of value) {
@@ -100,6 +106,11 @@ function textValue(value) {
     }
   }
   return "";
+}
+
+function tagLookupFailedAfter(contact, startedAt) {
+  if (!contact?.lastTagLookupFailedAt || !startedAt) return false;
+  return new Date(contact.lastTagLookupFailedAt).getTime() >= new Date(startedAt).getTime();
 }
 
 function normalizePayload(payload, config) {
@@ -658,9 +669,9 @@ class SmsBot {
     this.config = config;
   }
 
-  async notifyBotError(title, details = {}) {
+  async notifyBotError(title, details = {}, options = {}) {
     try {
-      const recorded = await recordBotError(this.store, title, details);
+      const recorded = await recordBotError(this.store, title, details, options);
       if (!recorded.shouldNotifySlack) return;
       await slack.sendBotError(this.config, title, details);
     } catch (error) {
@@ -844,12 +855,24 @@ class SmsBot {
   }
 
   async sendBotMessage(contact, message, options = {}) {
+    if (isEmptyTextToken(message)) {
+      await this.recordDecision(contact, "skipped", "empty_bot_message", { meta: { templateKey: options.templateKey || "" } });
+      return null;
+    }
     if (!options.allowAfterOptOut && (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT)) {
       await this.recordDecision(contact, "skipped", "opted_out_or_terminal", { message, meta: { templateKey: options.templateKey || "" } });
       return null;
     }
     if (!options.skipTerminalTagCheck) {
+      const tagLookupStartedAt = new Date();
       contact = await this.hydrateContactTags(contact, { force: true });
+      if (tagLookupFailedAfter(contact, tagLookupStartedAt)) {
+        await this.recordDecision(contact, "skipped", "tag_lookup_failed_no_send", {
+          message,
+          meta: { error: contact.lastTagLookupError || "GHL contact tag lookup failed" }
+        });
+        return null;
+      }
       if (hasSignedTag(contact)) {
         await this.stopForSignedTag(contact);
         await this.recordDecision(contact, "skipped", "signed_tag", { message });
@@ -947,20 +970,25 @@ class SmsBot {
       const data = await ghl.getContact(this.config, contact.ghlContactId || contact.id);
       const fetched = data?.contact || data;
       if (Object.prototype.hasOwnProperty.call(fetched || {}, "tags")) {
-        const withTags = { ...contact, tags: fetched.tags };
+        const withTags = { ...contact, tags: fetched.tags, lastTagLookupFailedAt: "", lastTagLookupError: "" };
         return this.store.upsertContact({
           ...withTags,
           timezone: resolveContactTimezone(withTags, this.config)
         });
       }
     } catch (error) {
+      const failed = await this.store.upsertContact({
+        ...contact,
+        lastTagLookupFailedAt: new Date().toISOString(),
+        lastTagLookupError: error.message
+      });
       await this.notifyBotError("GHL contact tag lookup failed", {
         Name: contact.name || "unknown",
         Phone: contact.phone || "unknown",
         "GHL contact": contact.ghlContactId || contact.id,
         Error: error.message
-      });
-      return contact;
+      }, { operationalOnly: true, slack: false, level: "warn" });
+      return failed;
     }
     return contact;
   }
@@ -1046,7 +1074,7 @@ class SmsBot {
         "Inbound GHL contact": inbound.ghlContactId || inbound.id,
         "Active bot contact": canonical.ghlContactId || canonical.id,
         "Last inbound": inbound.lastInboundMessage
-      });
+      }, { operationalOnly: true, slack: false, level: "info" });
       return { contact: updated, routedFromDuplicate: true };
     }
 
@@ -1303,6 +1331,17 @@ class SmsBot {
 
   async queueInboundSms(payload) {
     const inbound = normalizePayload(payload, this.config);
+    if (isEmptyTextToken(inbound.lastInboundMessage)) {
+      await this.store.setSetting("last_ignored_inbound_sms", {
+        contactId: inbound.ghlContactId || inbound.id || "",
+        phone: inbound.phone || "",
+        name: inbound.name || "",
+        message: inbound.lastInboundMessage || "",
+        reason: "blank_inbound_message",
+        receivedAt: new Date().toISOString()
+      });
+      return inbound;
+    }
     if (isOptOut(inbound.lastInboundMessage)) return this.handleInboundSms(payload);
     const resolution = await this.resolveInboundContact({
       ...inbound,
@@ -1355,6 +1394,14 @@ class SmsBot {
     const messages = (fresh.pendingInboundMessages || []).filter(Boolean);
     if (!messages.length) return fresh;
     const combinedMessage = messages.join("\n");
+    if (isEmptyTextToken(combinedMessage)) {
+      return this.store.upsertContact({
+        ...fresh,
+        pendingInboundMessages: [],
+        pendingInboundPayload: null,
+        pendingInboundLastAt: ""
+      });
+    }
     const payload = {
       ...(fresh.pendingInboundPayload || {}),
       contactId: fresh.id,
@@ -1381,6 +1428,17 @@ class SmsBot {
 
   async handleInboundSms(payload, options = {}) {
     const inbound = normalizePayload(payload, this.config);
+    if (isEmptyTextToken(inbound.lastInboundMessage)) {
+      await this.store.setSetting("last_ignored_inbound_sms", {
+        contactId: inbound.ghlContactId || inbound.id || "",
+        phone: inbound.phone || "",
+        name: inbound.name || "",
+        message: inbound.lastInboundMessage || "",
+        reason: "blank_inbound_message",
+        receivedAt: new Date().toISOString()
+      });
+      return inbound;
+    }
     const resolution = await this.resolveInboundContact({
       ...inbound,
       lastInboundMessage: inbound.lastInboundMessage,
@@ -1507,6 +1565,14 @@ class SmsBot {
       return this.store.getContact(updated.id);
     }
 
+    if (contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN && contact.humanEscalationStatus) {
+      return this.store.upsertContact({
+        ...contact,
+        lastHumanManagedInboundAt: new Date().toISOString(),
+        lastHumanManagedInboundMessage: inbound.lastInboundMessage
+      });
+    }
+
     if (contact.engagementStatus === ENGAGEMENT.READY_FOR_CALL || contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) {
       await this.escalate(contact, "message_after_bot_paused");
       return contact;
@@ -1559,7 +1625,8 @@ class SmsBot {
     const reason = escalationReason(inbound.lastInboundMessage);
     if (reason && !(dateAnswer && canTreatDateAsColdOutreachAnswer(contact))) {
       const expectedAnswer = parseExpectedAnswer(contact.qualificationProgress, inbound.lastInboundMessage);
-      if (reason === "detailed_information" && expectedAnswer) {
+      const canUseExtractedAnswer = ["detailed_information", "outside_question", "document_or_report"].includes(reason);
+      if (canUseExtractedAnswer && expectedAnswer) {
         return this.advanceQualification(contact, expectedAnswer);
       }
       await this.escalate(contact, reason);
@@ -1867,7 +1934,7 @@ class SmsBot {
         "Qualification progress": contact.qualificationProgress || "unknown",
         "Last inbound": inboundText,
         Error: error.message
-      });
+      }, { operationalOnly: true, slack: false, level: "warn" });
       await this.escalate(contact, "llm_fallback_failed", { Error: error.message });
       return this.store.getContact(contact.id);
     }
@@ -2810,8 +2877,24 @@ class SmsBot {
       "backup_time_timeout"
     ];
     let contact = await this.store.getContact(job.contactId);
+    let tagLookupStartedAt = null;
     if (contact && outboundJobTypes.includes(job.type)) {
+      tagLookupStartedAt = new Date();
       contact = await this.hydrateContactTags(contact, { force: true });
+      if (tagLookupFailedAfter(contact, tagLookupStartedAt)) {
+        await this.store.updateJob(job.id, {
+          status: "pending",
+          runAt: addMinutes(new Date(), 5).toISOString(),
+          lastError: contact.lastTagLookupError || "GHL contact tag lookup failed",
+          retryReason: "tag_lookup_failed"
+        });
+        await this.recordDecision(contact, "queued", "tag_lookup_failed_deferred", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: { error: contact.lastTagLookupError || "" }
+        });
+        return;
+      }
     }
     if (contact && hasSignedTag(contact)) await this.stopForSignedTag(contact);
     if (contact && hasNqTag(contact)) await this.stopForNqTag(contact);
@@ -2834,12 +2917,19 @@ class SmsBot {
       contact.automationPauseReason === "nq_tag" ||
       contact.automationPauseReason === "signed_tag" ||
       contact.automationPauseReason === "manual_hold_tag" ||
+      (outboundJobTypes.includes(job.type) &&
+        contact.humanEscalationStatus &&
+        contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) ||
       hasSignedTag(contact) ||
       hasNqTag(contact) ||
       hasManualHumanHoldTag(contact)
     ) {
-      await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString() });
-      if (contact) await this.recordDecision(contact, "skipped", "job_blocked_by_contact_state", { jobId: job.id, jobType: job.type });
+      const skipReason =
+        contact?.humanEscalationStatus && contact?.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN
+          ? "human_escalation_active"
+          : "blocked_by_contact_state";
+      await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString(), skipReason });
+      if (contact) await this.recordDecision(contact, "skipped", skipReason, { jobId: job.id, jobType: job.type });
       return;
     }
     if (["initial_sms", "fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "appointment_reminder", "missed_call_followup", "backup_no_show_reminder"].includes(job.type)) {
@@ -2987,7 +3077,21 @@ class SmsBot {
       }
     }
     if (job.type === "appointment_reminder") {
-      const rendered = await this.renderManagedTemplate(contact, "reminderTemplates", job.payload.templateKey, reminderTemplates[job.payload.templateKey]);
+      const template = reminderTemplates[job.payload.templateKey];
+      if (!template) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "missing_reminder_template"
+        });
+        await this.recordDecision(contact, "skipped", "missing_reminder_template", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: { templateKey: job.payload.templateKey || "" }
+        });
+        return;
+      }
+      const rendered = await this.renderManagedTemplate(contact, "reminderTemplates", job.payload.templateKey, template);
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
     if (job.type === "missed_call_followup") {

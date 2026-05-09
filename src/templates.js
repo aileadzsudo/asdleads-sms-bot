@@ -236,13 +236,14 @@ function firstName(contact = {}) {
 }
 
 function render(template, contact, extra = {}) {
+  const rawTemplate = typeof template === "string" ? template : "";
   const values = {
     NAME: firstName(contact),
     TIME: extra.time || contact.preferredCallTime || "",
     "PRIMARY TIME": extra.primaryTime || contact.preferredCallTime || "",
     "BACKUP TIME": extra.backupTime || contact.backupCallTime || ""
   };
-  return template.replace(/\[([A-Z ]+)\]/g, (_, key) => values[key] ?? "");
+  return rawTemplate.replace(/\[([A-Z ]+)\]/g, (_, key) => values[key] ?? "");
 }
 
 module.exports = {

@@ -80,6 +80,25 @@ test("GHL unsubscribe block during opt-out confirmation is not treated as a bot 
   }
 });
 
+test("blank literal inbound messages are ignored instead of escalated", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "blank-inbound",
+    ghlContactId: "blank-inbound",
+    name: "Blank Inbound",
+    phone: "+15550000080",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "blank-inbound", message: "undefined" });
+
+  assert.equal(contact.lastInboundMessage, undefined);
+  assert.equal(store.data.messages.length, 0);
+  assert.equal(store.data.escalations.length, 0);
+  assert.equal(store.getSetting("last_ignored_inbound_sms").value.reason, "blank_inbound_message");
+});
+
 test("template name personalization uses first name only", () => {
   assert.equal(render("Hi [NAME]", { name: "eric johnson" }), "Hi Eric");
   assert.equal(render("Hi [NAME]", { firstName: "SARAH", name: "Sarah Johnson" }), "Hi Sarah");
@@ -1302,6 +1321,98 @@ test("lead replies while human is working do not trigger another Slack escalatio
   assert.equal(store.getContact("human-managed-inbound").lastHumanManagedInboundMessage, "yes I am here");
 });
 
+test("warm follow-up jobs are blocked while lead is escalated to human", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-escalated-job",
+    ghlContactId: "human-escalated-job",
+    name: "Human Escalated",
+    phone: "+15550000079",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending"
+  });
+  const job = store.addJob({
+    type: "warm_followup",
+    contactId: "human-escalated-job",
+    runAt: new Date().toISOString(),
+    payload: { step: 1 }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "human_escalation_active");
+  assert.equal(store.getContact("human-escalated-job").lastOutboundMessage, undefined);
+});
+
+test("missing appointment reminder template is skipped instead of crashing scheduler", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "missing-reminder-template",
+    ghlContactId: "missing-reminder-template",
+    name: "Missing Reminder",
+    phone: "+15550000081",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "today at 4 PM",
+    preferredCallTimeIso: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    appointmentId: "appt-missing-template"
+  });
+  const job = store.addJob({
+    type: "appointment_reminder",
+    contactId: "missing-reminder-template",
+    runAt: new Date().toISOString(),
+    payload: { templateKey: "legacy_missing_template" }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "missing_reminder_template");
+  assert.equal(store.getContact("missing-reminder-template").lastOutboundMessage, undefined);
+});
+
+test("tag lookup failure defers outbound jobs instead of sending blindly", async () => {
+  const { bot, store } = makeBot();
+  bot.config.ghl.token = "test-token";
+  const originalGetContact = ghl.getContact;
+  ghl.getContact = async () => {
+    throw new Error("GHL unavailable");
+  };
+  try {
+    store.upsertContact({
+      id: "tag-failure-defer",
+      ghlContactId: "tag-failure-defer",
+      name: "Tag Failure",
+      phone: "+15550000082",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+      faultAnswer: "not_at_fault"
+    });
+    const job = store.addJob({
+      type: "warm_followup",
+      contactId: "tag-failure-defer",
+      runAt: new Date().toISOString(),
+      payload: { step: 1 }
+    });
+
+    await bot.runDueJob(job);
+
+    assert.equal(store.data.jobs[job.id].status, "pending");
+    assert.equal(store.data.jobs[job.id].retryReason, "tag_lookup_failed");
+    assert.equal(store.getContact("tag-failure-defer").lastOutboundMessage, undefined);
+    const errorLog = store.getSetting("bot_error_log").value;
+    assert.equal(errorLog[0].title, "GHL contact tag lookup failed");
+    assert.equal(errorLog[0].operationalOnly, true);
+  } finally {
+    ghl.getContact = originalGetContact;
+  }
+});
+
 test("lead scheduling reply during human handoff lets bot resume booking help", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -2033,6 +2144,30 @@ test("soft escalated lead can auto-resume when they send a scheduling reply", as
     Object.values(store.data.jobs).some((job) => job.contactId === "soft-resume-later" && job.type === "human_escalation_sla" && job.status === "pending"),
     false
   );
+});
+
+test("detailed reply with police report still advances when it answers current question", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "detailed-fault-answer",
+    ghlContactId: "detailed-fault-answer",
+    name: "Detailed Fault",
+    phone: "+15550000083",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    accidentDate: "May 7 2026"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "detailed-fault-answer",
+    message: "Yes it was yesterday May 7 2026, the driver hit my front fender and kept going. I filed a police report as well."
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_MEDICAL);
+  assert.equal(contact.faultAnswer, "not_at_fault");
+  assert.equal(store.data.escalations.length, 0);
 });
 
 test("vague tomorrow daypart asks for exact time instead of booking", async () => {
