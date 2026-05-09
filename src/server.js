@@ -1043,6 +1043,150 @@ async function dashboardContactDetail(contactId) {
   };
 }
 
+function parseAuditDate(value, fallback) {
+  if (!value) return fallback;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? fallback : date;
+}
+
+function betweenDates(value, since, until) {
+  if (!value) return false;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) && time >= since.getTime() && time <= until.getTime();
+}
+
+function countBy(items, getKey) {
+  const map = new Map();
+  for (const item of items) {
+    const key = safeText(getKey(item), "unknown");
+    map.set(key, (map.get(key) || 0) + 1);
+  }
+  return Array.from(map.entries())
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+}
+
+function sampleRows(items, limit = 25) {
+  return items.slice(0, limit);
+}
+
+async function dashboardAudit(url) {
+  const now = new Date();
+  const defaultSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const since = parseAuditDate(url.searchParams.get("since"), defaultSince);
+  const until = parseAuditDate(url.searchParams.get("until"), now);
+  const [contacts, messages, jobs, escalations, decisionLogs, botErrors] = await Promise.all([
+    store.listContacts ? store.listContacts() : [],
+    store.listMessages(),
+    store.listJobs(),
+    store.listEscalations(),
+    store.listDecisionLogs ? store.listDecisionLogs() : [],
+    listBotErrors(store, 250)
+  ]);
+  const contactsById = new Map(contacts.map((contact) => [contact.id, contact]));
+  const messagesInWindow = messages.filter((message) => betweenDates(message.createdAt, since, until));
+  const inbound = messagesInWindow.filter((message) => message.direction === "inbound");
+  const outbound = messagesInWindow.filter((message) => message.direction === "outbound");
+  const jobsTouched = jobs.filter((job) => betweenDates(job.finishedAt || job.updatedAt || job.runningAt || job.runAt || job.createdAt, since, until));
+  const failedJobs = jobsTouched.filter((job) => job.status === "failed");
+  const skippedJobs = jobsTouched.filter((job) => job.status === "skipped");
+  const cancelledJobs = jobsTouched.filter((job) => job.status === "cancelled");
+  const pendingDue = jobs.filter((job) => job.status === "pending" && job.runAt && new Date(job.runAt) <= until);
+  const escalationsInWindow = escalations.filter((item) => betweenDates(item.createdAt, since, until));
+  const decisionsInWindow = decisionLogs.filter((item) => betweenDates(item.createdAt, since, until));
+  const errorsInWindow = botErrors.filter((item) => betweenDates(item.at, since, until));
+
+  const contactIds = new Set(messagesInWindow.map((item) => item.contactId).filter(Boolean));
+  const contactSummaries = Array.from(contactIds).map((id) => {
+    const contact = contactsById.get(id) || { id };
+    return {
+      id,
+      name: contact.name || "",
+      phone: contact.phone || "",
+      status: contact.engagementStatus || "",
+      progress: contact.qualificationProgress || "",
+      leadSourceLabel: leadSourceInfo(contact).leadSourceLabel,
+      timezone: contact.timezone || "",
+      timezoneSource: timezoneSource(contact)
+    };
+  });
+
+  const enrichMessage = (message) => {
+    const contact = contactsById.get(message.contactId) || {};
+    return {
+      at: message.createdAt,
+      contactId: message.contactId,
+      name: contact.name || "",
+      phone: contact.phone || "",
+      direction: message.direction,
+      body: message.body || "",
+      templateGroup: message.templateGroup || "",
+      templateKey: message.templateKey || "",
+      status: contact.engagementStatus || "",
+      progress: contact.qualificationProgress || ""
+    };
+  };
+
+  const enrichJob = (job) => {
+    const contact = contactsById.get(job.contactId) || {};
+    return {
+      id: job.id,
+      contactId: job.contactId,
+      name: contact.name || "",
+      phone: contact.phone || "",
+      type: job.type,
+      status: job.status,
+      runAt: job.runAt,
+      finishedAt: job.finishedAt || "",
+      error: job.error || job.lastError || "",
+      skipReason: job.skipReason || "",
+      cancelReason: job.cancelReason || "",
+      payload: job.payload || {}
+    };
+  };
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    window: { since: since.toISOString(), until: until.toISOString() },
+    totals: {
+      contactsTouched: contactIds.size,
+      messages: messagesInWindow.length,
+      inbound: inbound.length,
+      outbound: outbound.length,
+      escalations: escalationsInWindow.length,
+      decisionLogs: decisionsInWindow.length,
+      errors: errorsInWindow.length,
+      jobsTouched: jobsTouched.length,
+      failedJobs: failedJobs.length,
+      skippedJobs: skippedJobs.length,
+      cancelledJobs: cancelledJobs.length,
+      pendingDue: pendingDue.length
+    },
+    breakdowns: {
+      outboundTemplates: countBy(outbound, (message) => [message.templateGroup || "unknown", message.templateKey || "unknown"].join(":")),
+      inboundByStatus: countBy(inbound, (message) => contactsById.get(message.contactId)?.engagementStatus || "unknown"),
+      escalationReasons: countBy(escalationsInWindow, (item) => item.reason || "unknown"),
+      failedJobTypes: countBy(failedJobs, (job) => job.type || "unknown"),
+      skippedReasons: countBy(skippedJobs, (job) => job.skipReason || job.cancelReason || "unknown"),
+      errorTitles: countBy(errorsInWindow, (item) => item.title || "unknown"),
+      errorSignatures: countBy(errorsInWindow, (item) => item.signature || item.title || "unknown"),
+      decisions: countBy(decisionsInWindow, (item) => [item.action || "unknown", item.reason || "unknown"].join(":"))
+    },
+    samples: {
+      outbound: sampleRows(outbound.slice().reverse().map(enrichMessage), 200),
+      inbound: sampleRows(inbound.slice().reverse().map(enrichMessage), 200),
+      escalations: sampleRows(escalationsInWindow.slice().reverse(), 200),
+      failedJobs: sampleRows(failedJobs.slice().reverse().map(enrichJob), 200),
+      skippedJobs: sampleRows(skippedJobs.slice().reverse().map(enrichJob), 200),
+      pendingDue: sampleRows(pendingDue.map(enrichJob), 200),
+      errors: sampleRows(errorsInWindow, 200),
+      decisions: sampleRows(decisionsInWindow.slice().reverse(), 200),
+      contactsTouched: sampleRows(contactSummaries, 500)
+    }
+  };
+}
+
 function send(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body, null, 2));
@@ -1902,6 +2046,17 @@ const server = http.createServer(async (req, res) => {
         summarizeContact(contact, data.jobsByContact, data.messagesByContact, data.escalationsByContact, data.decisionLogsByContact)
       );
       send(res, 200, { ok: true, scanner: scannerOutput(summaries, data.jobs), contacts: summaries.filter((item) => item.issueFlags?.length) });
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/admin/audit")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      send(res, 200, await dashboardAudit(url));
       return;
     }
 
