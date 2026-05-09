@@ -186,7 +186,8 @@ test("acknowledgement LLM path schedules warm follow-ups after repeating current
     name: "Chiquita",
     phone: "+15550000091",
     engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
-    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    accidentDate: "May 8"
   });
 
   const contact = await bot.applyLlmClassification(store.getContact("ack-warm"), {
@@ -953,6 +954,26 @@ test("human escalation schedules SLA watchdog jobs", async () => {
   );
 });
 
+test("duplicate escalations for same human-managed contact are suppressed", async () => {
+  const { bot, store } = makeBot();
+  const contact = store.upsertContact({
+    id: "dedupe-escalation",
+    ghlContactId: "dedupe-escalation",
+    name: "Dedupe Escalation",
+    phone: "+15550000084",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    lastInboundMessage: "Please call to discuss next step"
+  });
+
+  const first = await bot.escalate(contact, "llm_call_now");
+  const second = await bot.escalate({ ...first, lastInboundMessage: "Please call to discuss next step" }, "llm_call_now");
+
+  assert.equal(second.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(store.data.escalations.length, 1);
+  assert.equal(store.getContact("dedupe-escalation").lastSuppressedEscalationReason, "llm_call_now");
+});
+
 test("human escalation SLA jobs are tracked silently instead of posting bot-error Slack alerts", async () => {
   const { bot, store } = makeBot();
   let botErrorCount = 0;
@@ -1119,6 +1140,31 @@ test("stuck recoverable soft escalation gets queued back to bot", async () => {
   assert.deepEqual(healed, [{ contactId: "stuck-soft", action: "auto_returned_soft_escalation" }]);
   assert.equal(store.getContact("stuck-soft").humanEscalationStatus, false);
   assert.equal(store.getContact("stuck-soft").engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+});
+
+test("stuck-state healer does not reprocess already escalated human leads every minute", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "stuck-escalated-no-loop",
+    ghlContactId: "stuck-escalated-no-loop",
+    name: "No Loop",
+    phone: "+15550000087",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "llm_call_now",
+    escalatedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    lastInboundMessage: "Please call to discuss next step",
+    lastResponseTimestamp: new Date().toISOString(),
+    lastOutboundTimestamp: new Date(Date.now() - 20 * 60 * 1000).toISOString()
+  });
+
+  const healed = await bot.healStuckContacts();
+
+  assert.deepEqual(healed, []);
+  assert.equal(store.data.escalations.length, 0);
 });
 
 test("hard human escalations do not auto-return from SLA watchdog", async () => {
@@ -1735,6 +1781,33 @@ test("generic follow up tag does not stop no-response outreach from starting", a
   assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "hold-start" && job.status === "pending"), true);
 });
 
+test("fresh NR enrollment queues retry if initial SMS could not be safely sent", async () => {
+  const { bot, store } = makeBot();
+  bot.config.ghl.token = "test-token";
+  const originalGetContact = ghl.getContact;
+  ghl.getContact = async () => {
+    throw new Error("GHL unavailable");
+  };
+  try {
+    const contact = await bot.startFromNoResponseDisposition({
+      contactId: "nr-retry",
+      name: "NR Retry",
+      phone: "+15550000085",
+      timezone: "America/Chicago",
+      disposition: "NR"
+    });
+
+    assert.equal(contact.currentSequenceName, "initial_sms_pending");
+    assert.equal(store.data.messages.length, 0);
+    assert.equal(
+      Object.values(store.data.jobs).some((job) => job.contactId === "nr-retry" && job.type === "initial_sms" && job.status === "pending"),
+      true
+    );
+  } finally {
+    ghl.getContact = originalGetContact;
+  }
+});
+
 test("manual hold tag cancels queued cadence before sending", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -2107,6 +2180,59 @@ test("vague call time reply schedules hot lead warm follow-ups", async () => {
     120,
     240
   ]);
+});
+
+test("cold acknowledgement asks for accident date instead of starting fault warm chase", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "cold-ack-date",
+    ghlContactId: "cold-ack-date",
+    name: "Cold Ack",
+    phone: "+15550000086",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  const contact = await bot.applyLlmClassification(
+    store.getContact("cold-ack-date"),
+    { label: "acknowledgement", confidence: 0.92, should_escalate: false },
+    "Ok"
+  );
+
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_FAULT);
+  assert.match(store.getContact("cold-ack-date").lastOutboundMessage, /date of the accident/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "cold-ack-date" && job.type === "warm_followup" && job.status === "pending"),
+    false
+  );
+});
+
+test("warm follow-up job skips cold acknowledgements that still need accident date", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "cold-ack-existing-warm",
+    ghlContactId: "cold-ack-existing-warm",
+    name: "Cold Ack Existing",
+    phone: "+15550000088",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.WARM_FOLLOW_UP,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    lastInboundMessage: "Ok",
+    lastResponseTimestamp: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString()
+  });
+  const job = store.addJob({
+    type: "warm_followup",
+    contactId: "cold-ack-existing-warm",
+    runAt: new Date().toISOString(),
+    payload: { step: 3, minutes: 30 }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "cold_ack_needs_accident_date");
+  assert.equal(store.getContact("cold-ack-existing-warm").lastOutboundMessage, undefined);
 });
 
 test("soft escalated lead can auto-resume when they send a scheduling reply", async () => {

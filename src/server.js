@@ -134,20 +134,24 @@ function timezoneSource(contact = {}) {
   return "missing";
 }
 
-function webhookEventId(req, payload) {
-  return (
+function webhookEventId(req, payload, fallbackPrefix = "") {
+  const explicitId =
     req.headers["x-ghl-event-id"] ||
     req.headers["x-event-id"] ||
     payload.eventId ||
     payload.messageId ||
     payload.idempotencyKey ||
+    "";
+  if (explicitId) return `${fallbackPrefix}:${explicitId}`;
+  if (fallbackPrefix === "disposition") return "";
+  return (
     payload.id ||
     ""
   );
 }
 
 async function dedupeWebhook(req, payload, fallbackPrefix) {
-  const id = webhookEventId(req, payload);
+  const id = webhookEventId(req, payload, fallbackPrefix);
   if (!id) return { id: "", duplicate: false, skipped: true };
   const result = await store.recordWebhookEvent(id, payload);
   return { id, duplicate: !result.inserted };

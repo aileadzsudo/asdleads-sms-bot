@@ -346,6 +346,10 @@ function isAffirmativeConfirmation(text) {
   return /^(yes|y|yeah|yep|confirmed|confirm|still good|good)$/i.test(normalize(text));
 }
 
+function isBriefAcknowledgement(text) {
+  return /^(ok|okay|k|sure|yes|yeah|yep|thanks|thank you|thank u|sounds good)$/i.test(normalize(text));
+}
+
 function canTreatDateAsColdOutreachAnswer(contact) {
   return (
     contact.qualificationProgress === QUALIFICATION.NEEDS_FAULT &&
@@ -355,6 +359,21 @@ function canTreatDateAsColdOutreachAnswer(contact) {
       ENGAGEMENT.INITIAL_SMS_SENT,
       ENGAGEMENT.COLD_OUTREACH,
       ENGAGEMENT.ACTIVE_CONVERSATION
+    ].includes(contact.engagementStatus)
+  );
+}
+
+function needsColdAccidentDate(contact) {
+  return (
+    contact.qualificationProgress === QUALIFICATION.NEEDS_FAULT &&
+    !contact.accidentDate &&
+    !contact.faultAnswer &&
+    [
+      ENGAGEMENT.CALLED_NO_ANSWER,
+      ENGAGEMENT.INITIAL_SMS_SENT,
+      ENGAGEMENT.COLD_OUTREACH,
+      ENGAGEMENT.ACTIVE_CONVERSATION,
+      ENGAGEMENT.WARM_FOLLOW_UP
     ].includes(contact.engagementStatus)
   );
 }
@@ -1261,8 +1280,35 @@ class SmsBot {
       return contact;
     }
     const sent = await this.sendBotMessage(contact, initial);
+    if (!sent) {
+      const latest = (await this.store.getContact(contact.id)) || contact;
+      if (
+        latest.optOutStatus ||
+        latest.automationPaused ||
+        latest.engagementStatus === ENGAGEMENT.OPTED_OUT ||
+        hasSignedTag(latest) ||
+        hasNqTag(latest) ||
+        hasManualHumanHoldTag(latest)
+      ) {
+        return latest;
+      }
+      await this.store.addJob({
+        type: "initial_sms",
+        contactId: latest.id,
+        runAt: addMinutes(new Date(), latest.lastTagLookupFailedAt ? 5 : 1).toISOString(),
+        payload: { templateKey: "day_1_am", source: "fresh_retry" }
+      });
+      return this.store.upsertContact({
+        ...latest,
+        engagementStatus: ENGAGEMENT.CALLED_NO_ANSWER,
+        currentSequenceName: "initial_sms_pending",
+        currentSequenceDay: 1,
+        currentMessageCountForDay: 0,
+        sentColdTemplateKeys: Array.from(new Set([...(latest.sentColdTemplateKeys || [])].filter((key) => key !== "day_1_am")))
+      });
+    }
     const afterInitial = await this.store.upsertContact({
-      ...(sent || contact),
+      ...sent,
       engagementStatus: ENGAGEMENT.INITIAL_SMS_SENT,
       currentSequenceName: "initial_sms",
       currentSequenceDay: 1,
@@ -2062,6 +2108,12 @@ class SmsBot {
     }
 
     if (classification.label === "prefers_text" || classification.label === "acknowledgement") {
+      if (needsColdAccidentDate(contact)) {
+        const message =
+          "Got it 🙌 I can keep this quick over text. What was the date of the accident?";
+        const sent = await this.sendBotMessage(contact, message, { bypassQuietHours: true });
+        return sent || (await this.store.getContact(contact.id)) || contact;
+      }
       const template = currentQuestionTemplate(contact, this.config);
       if (template) {
         const sent = await this.sendBotMessage(contact, render(template, contact), { bypassQuietHours: true });
@@ -2650,12 +2702,29 @@ class SmsBot {
   }
 
   async escalate(contact, reason, extra = {}) {
+    const now = new Date().toISOString();
+    if (contact.humanEscalationStatus && contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) {
+      const suppressed = await this.store.upsertContact({
+        ...contact,
+        lastSuppressedEscalationAt: now,
+        lastSuppressedEscalationReason: reason,
+        lastSuppressedEscalationMessage: contact.lastInboundMessage || ""
+      });
+      await this.recordDecision(suppressed, "skipped", "duplicate_human_escalation_suppressed", {
+        trigger: "bot_escalation",
+        beforeStatus: contact.engagementStatus || "",
+        afterStatus: suppressed.engagementStatus || "",
+        message: suppressed.lastInboundMessage || "",
+        meta: { reason, ...extra }
+      });
+      return suppressed;
+    }
     const updated = await this.store.upsertContact({
       ...contact,
       engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
       humanEscalationStatus: true,
       humanEscalationStage: "human_review_pending",
-      escalatedAt: new Date().toISOString(),
+      escalatedAt: now,
       escalationReason: reason
     });
     await this.store.cancelJobsForContact(
@@ -2789,6 +2858,8 @@ class SmsBot {
       const lastInboundAt = contact.lastResponseTimestamp ? new Date(contact.lastResponseTimestamp).getTime() : 0;
       const lastOutboundAt = contact.lastOutboundTimestamp ? new Date(contact.lastOutboundTimestamp).getTime() : 0;
       if (
+        contact.engagementStatus !== ENGAGEMENT.ESCALATED_TO_HUMAN &&
+        !contact.humanEscalationStatus &&
         needsQualificationReply(contact) &&
         contact.lastInboundMessage &&
         lastInboundAt &&
@@ -2821,11 +2892,13 @@ class SmsBot {
 
       if (
         [ENGAGEMENT.ACTIVE_CONVERSATION, ENGAGEMENT.WARM_FOLLOW_UP, ENGAGEMENT.RE_ENGAGEMENT].includes(contact.engagementStatus) &&
+        !contact.humanEscalationStatus &&
         needsQualificationReply(contact) &&
         !hasPendingJob(jobs, ["process_inbound_buffer", "warm_followup", "enter_reengagement", "send_reengagement_template"]) &&
         contact.lastOutboundTimestamp &&
         (!contact.lastResponseTimestamp || new Date(contact.lastOutboundTimestamp) > new Date(contact.lastResponseTimestamp)) &&
         Date.now() - new Date(contact.lastOutboundTimestamp).getTime() >= 5 * 60 * 1000 &&
+        Date.now() - new Date(contact.lastOutboundTimestamp).getTime() <= 6 * 60 * 60 * 1000 &&
         isWithinTextingWindow(contact, this.config)
       ) {
         await this.scheduleWarmFollowUps(contact, false);
@@ -2952,8 +3025,29 @@ class SmsBot {
       const fresh = await this.store.getContact(job.contactId);
       const rendered = await this.renderManagedTemplate(fresh, "coldOutreachTemplates", job.payload.templateKey, coldOutreachTemplates[job.payload.templateKey]);
       const sent = await this.sendBotMessage(fresh, rendered.message, rendered.meta);
+      if (!sent) {
+        const latest = (await this.store.getContact(job.contactId)) || fresh;
+        if (
+          latest.optOutStatus ||
+          latest.automationPaused ||
+          latest.engagementStatus === ENGAGEMENT.OPTED_OUT ||
+          hasSignedTag(latest) ||
+          hasNqTag(latest) ||
+          hasManualHumanHoldTag(latest)
+        ) {
+          await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString(), skipReason: "initial_sms_blocked" });
+          return;
+        }
+        await this.store.updateJob(job.id, {
+          status: "pending",
+          runAt: addMinutes(new Date(), latest.lastTagLookupFailedAt ? 5 : 1).toISOString(),
+          retryReason: latest.lastTagLookupFailedAt ? "tag_lookup_failed" : "initial_sms_not_sent"
+        });
+        await this.recordDecision(latest, "queued", "initial_sms_retry_queued", { jobId: job.id, jobType: job.type });
+        return;
+      }
       const updated = await this.store.upsertContact({
-        ...(sent || fresh),
+        ...sent,
         engagementStatus: ENGAGEMENT.INITIAL_SMS_SENT,
         currentSequenceName: "initial_sms",
         currentSequenceDay: 1,
@@ -3009,6 +3103,15 @@ class SmsBot {
     }
     if (job.type === "warm_followup") {
       const fresh = await this.store.getContact(job.contactId);
+      if (needsColdAccidentDate(fresh) && isBriefAcknowledgement(fresh.lastInboundMessage)) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "cold_ack_needs_accident_date"
+        });
+        await this.recordDecision(fresh, "skipped", "cold_ack_needs_accident_date", { jobId: job.id, jobType: job.type });
+        return;
+      }
       const step = Number(job.payload.step || 1);
       const template = warmFollowUpTemplate(fresh, step, this.config);
       const updated = await this.store.upsertContact({
