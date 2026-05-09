@@ -419,6 +419,11 @@ button:disabled {
   background: var(--blue);
 }
 
+.bar.booked,
+.legend .booked {
+  background: var(--accent);
+}
+
 .legend {
   display: flex;
   align-items: center;
@@ -600,6 +605,10 @@ button:disabled {
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.toolbar.tall {
+  grid-template-columns: 150px minmax(0, 1fr);
 }
 
 .contact-list {
@@ -786,6 +795,163 @@ button:disabled {
 .copy-cell {
   max-width: 520px;
   line-height: 1.45;
+}
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.page-toolbar strong {
+  margin-right: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.page-toolbar button,
+.row-actions button,
+.row-actions a,
+.data-table button {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.page-toolbar button.active {
+  background: var(--nav);
+  color: #fff;
+  border-color: var(--nav);
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ghost-link {
+  display: inline-flex;
+  width: max-content;
+  margin: 4px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.issue-page-grid,
+.template-layout {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.experiment-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.experiment-editor label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.experiment-editor textarea,
+.experiment-editor input {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--ink);
+}
+
+.experiment-editor textarea {
+  min-height: 140px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.experiment-editor .primary {
+  width: max-content;
+  min-height: 40px;
+  border: 1px solid var(--nav);
+  border-radius: 6px;
+  background: var(--nav);
+  color: #fff;
+  padding: 0 14px;
+  font-weight: 800;
+}
+
+.lifecycle-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+}
+
+.lifecycle-node {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.lifecycle-node span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.lifecycle-node strong {
+  align-self: center;
+  font-size: 14px;
+}
+
+.lifecycle-node small {
+  grid-column: 2 / 4;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.lifecycle-node b {
+  align-self: center;
+  color: var(--blue);
+}
+
+.badge + .badge {
+  margin-left: 6px;
+}
+
+.badge.warn {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.performance-chart {
+  min-height: 260px;
 }
 
 @media (max-width: 1280px) {

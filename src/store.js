@@ -3,7 +3,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 
 function emptyStore() {
-  return { contacts: {}, jobs: {}, messages: [], escalations: [], webhookEvents: {}, settings: {} };
+  return { contacts: {}, jobs: {}, messages: [], escalations: [], decisionLogs: [], webhookEvents: {}, settings: {} };
 }
 
 function normalizePhone(phone) {
@@ -120,6 +120,18 @@ class Store {
 
   listEscalations(contactId = "") {
     return this.data.escalations.filter((item) => !contactId || item.contactId === contactId);
+  }
+
+  addDecisionLog(entry) {
+    const item = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), ...entry };
+    this.data.decisionLogs = this.data.decisionLogs || [];
+    this.data.decisionLogs.push(item);
+    this.save();
+    return item;
+  }
+
+  listDecisionLogs(contactId = "") {
+    return (this.data.decisionLogs || []).filter((item) => !contactId || item.contactId === contactId);
   }
 
   listContacts() {

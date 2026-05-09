@@ -64,6 +64,16 @@ class PostgresStore {
       );
       create index if not exists escalations_contact_idx on escalations(contact_id);
 
+      create table if not exists decision_logs (
+        id text primary key,
+        contact_id text,
+        action text,
+        reason text,
+        created_at timestamptz not null default now(),
+        data jsonb not null
+      );
+      create index if not exists decision_logs_contact_idx on decision_logs(contact_id);
+
       create table if not exists webhook_events (
         id text primary key,
         received_at timestamptz not null default now(),
@@ -212,6 +222,23 @@ class PostgresStore {
     return result.rows.map(rowData);
   }
 
+  async addDecisionLog(entry) {
+    const item = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), ...entry };
+    await this.pool.query(
+      `insert into decision_logs (id, contact_id, action, reason, created_at, data)
+       values ($1, $2, $3, $4, $5, $6)`,
+      [item.id, item.contactId || "", item.action || "", item.reason || "", item.createdAt, item]
+    );
+    return item;
+  }
+
+  async listDecisionLogs(contactId = "") {
+    const result = contactId
+      ? await this.pool.query("select data from decision_logs where contact_id = $1 order by created_at asc", [contactId])
+      : await this.pool.query("select data from decision_logs order by created_at asc");
+    return result.rows.map(rowData);
+  }
+
   async listContacts() {
     const result = await this.pool.query("select data from contacts order by updated_at desc");
     return result.rows.map(rowData);
@@ -241,7 +268,7 @@ class PostgresStore {
   }
 
   async reset() {
-    await this.pool.query("truncate table messages, escalations, jobs, contacts, webhook_events");
+    await this.pool.query("truncate table messages, escalations, decision_logs, jobs, contacts, webhook_events");
   }
 
   async recordWebhookEvent(id, payload = {}) {

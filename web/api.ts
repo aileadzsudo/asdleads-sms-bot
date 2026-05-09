@@ -73,6 +73,10 @@ export function getDashboard() {
   return request<any>("/api/admin/dashboard");
 }
 
+export function getScanner() {
+  return request<any>("/api/admin/scanner");
+}
+
 export function getTemplates() {
   return request<any>("/api/admin/templates");
 }

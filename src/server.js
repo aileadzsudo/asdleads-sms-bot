@@ -78,6 +78,62 @@ function requireAdmin(req) {
   return { ok: false, reason: "invalid admin password" };
 }
 
+function safeText(value, fallback = "") {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map((item) => safeText(item)).filter(Boolean).join(", ") || fallback;
+  if (typeof value === "object") {
+    const direct =
+      value.label ||
+      value.name ||
+      value.source ||
+      value.utm_source ||
+      value.utmSource ||
+      value.sessionSource ||
+      value.medium;
+    if (direct) return safeText(direct, fallback);
+    return Object.entries(value)
+      .filter(([, entry]) => entry !== undefined && entry !== null && entry !== "")
+      .map(([key, entry]) => `${key}: ${safeText(entry)}`)
+      .join(", ") || fallback;
+  }
+  return fallback;
+}
+
+function leadSourceInfo(contact = {}) {
+  const raw =
+    contact.leadSource ||
+    contact.source ||
+    contact.attributionSource ||
+    contact.utmSource ||
+    contact["UTM Source"] ||
+    contact.customData?.leadSource ||
+    contact.customData?.["UTM Source"] ||
+    "";
+  const label = safeText(raw, "unknown");
+  return {
+    leadSourceLabel: label,
+    leadSourceRaw: raw,
+    leadSourceType: raw && typeof raw === "object" ? "object" : raw ? "string" : "missing"
+  };
+}
+
+function nextPendingJob(jobs = []) {
+  return jobs
+    .filter((job) => job.status === "pending" && job.runAt)
+    .sort((a, b) => new Date(a.runAt) - new Date(b.runAt))[0] || null;
+}
+
+function timezoneSource(contact = {}) {
+  if (contact.timezoneSource) return contact.timezoneSource;
+  const tags = Array.isArray(contact.tags) ? contact.tags.join(", ") : safeText(contact.tags);
+  if (/(^|[, _-])(CA|TX|CO|WA|NV|ND|KY)($|[, _-])/i.test(tags)) return "firm_tag";
+  if (contact.ownerState || contact.state) return "owner_or_state";
+  if (contact.timezone) return contact.timezone === config.texting.defaultTimezone ? "default_or_account" : "stored";
+  return "missing";
+}
+
 function webhookEventId(req, payload) {
   return (
     req.headers["x-ghl-event-id"] ||
@@ -235,8 +291,8 @@ function lastActivityAt(contact, messagesByContact) {
   );
 }
 
-function contactIssueFlags(contact, jobs = [], messages = [], escalations = []) {
-  const flags = [];
+function stuckStateReasons(contact, jobs = [], messages = [], escalations = []) {
+  const reasons = [];
   const pendingJobs = jobs.filter((job) => job.status === "pending");
   const failedJobs = jobs.filter((job) => job.status === "failed");
   const smsBlockedJobs = jobs.filter((job) => job.status === "skipped" && job.skipReason === "permanent_sms_block");
@@ -252,38 +308,49 @@ function contactIssueFlags(contact, jobs = [], messages = [], escalations = []) 
   ].includes(contact.engagementStatus);
 
   if (contact.humanEscalationStatus && contact.humanEscalationStage === "human_review_pending") {
-    flags.push({ type: "urgent", code: "unacknowledged_escalation", label: "Human escalation not acknowledged" });
+    reasons.push({ type: "urgent", code: "unacknowledged_escalation", label: "Human escalation not acknowledged", recommendedAction: "Acknowledge in dashboard or return to bot after review." });
   }
   if (failedJobs.length) {
-    flags.push({ type: "urgent", code: "failed_jobs", label: `${failedJobs.length} failed job(s)` });
+    reasons.push({ type: "urgent", code: "failed_jobs", label: `${failedJobs.length} failed job(s)`, recommendedAction: "Open contact, inspect failed job, then retry/repair from controls." });
   }
   if (smsBlockedJobs.length) {
-    flags.push({ type: "info", code: "sms_dnd_blocked", label: "SMS blocked by GHL DND" });
+    reasons.push({ type: "info", code: "sms_dnd_blocked", label: "SMS blocked by GHL DND", recommendedAction: "No Slack action needed. Check GHL DND/subscription state." });
   }
   if (dueJobs.length) {
-    flags.push({ type: "warn", code: "due_jobs", label: `${dueJobs.length} due job(s)` });
+    reasons.push({ type: "warn", code: "due_jobs", label: `${dueJobs.length} due job(s)`, recommendedAction: "Run/poll job tick or inspect worker health." });
   }
   if (contact.automationPauseReason === "duplicate_phone_conflict") {
-    flags.push({ type: "warn", code: "duplicate_phone_conflict", label: "Duplicate phone conflict" });
+    reasons.push({ type: "warn", code: "duplicate_phone_conflict", label: "Duplicate phone conflict", recommendedAction: "Human should choose the active GHL contact before returning to bot." });
   }
   if (!contact.timezone) {
-    flags.push({ type: "warn", code: "missing_timezone", label: "Missing timezone" });
+    reasons.push({ type: "warn", code: "missing_timezone", label: "Missing timezone", recommendedAction: "Refresh timezone from GHL tags/owner/state." });
   }
   if (contact.automationPaused) {
-    flags.push({ type: "info", code: "automation_paused", label: `Paused: ${contact.automationPauseReason || "unknown"}` });
+    reasons.push({ type: "info", code: "automation_paused", label: `Paused: ${contact.automationPauseReason || "unknown"}`, recommendedAction: "Return to bot only after the human-owned work is complete." });
   }
   if (needsFutureAutomation && !pendingJobs.length && !contact.automationPaused && !contact.optOutStatus) {
-    flags.push({ type: "warn", code: "no_pending_automation", label: "Active status but no pending automation" });
+    reasons.push({ type: "warn", code: "no_pending_automation", label: "Active status but no pending automation", recommendedAction: "Restart chase or ensure reminders depending on status." });
   }
   if (contact.lastLlmClassification?.error || contact.lastLlmError) {
-    flags.push({ type: "warn", code: "llm_issue", label: "LLM fallback issue" });
+    reasons.push({ type: "warn", code: "llm_issue", label: "LLM fallback issue", recommendedAction: "Review message and return to bot if the intent is clear." });
   }
   if (escalations.some((item) => String(item.reason || "").includes("low_confidence"))) {
-    flags.push({ type: "warn", code: "low_confidence", label: "Low confidence classification" });
+    reasons.push({ type: "warn", code: "low_confidence", label: "Low confidence classification", recommendedAction: "Review classification and add rule/test if recurring." });
   }
   if (!messages.length && contact.engagementStatus && contact.engagementStatus !== "new_lead") {
-    flags.push({ type: "warn", code: "no_messages", label: "No stored conversation messages" });
+    reasons.push({ type: "warn", code: "no_messages", label: "No stored conversation messages", recommendedAction: "Verify GHL webhook/message export for this contact." });
   }
+  if ((contact.appointmentId || contact.engagementStatus === "call_scheduled") && !pendingJobs.some((job) => job.type === "appointment_reminder")) {
+    reasons.push({ type: "warn", code: "scheduled_without_reminders", label: "Scheduled call has no pending reminders", recommendedAction: "Click Ensure reminders." });
+  }
+  if (contact.awaitingBackupTime && !pendingJobs.some((job) => job.type === "backup_time_timeout")) {
+    reasons.push({ type: "warn", code: "awaiting_backup_without_timeout", label: "Awaiting backup time with no timeout job", recommendedAction: "Return to bot or ensure appointment reminders." });
+  }
+  return reasons;
+}
+
+function contactIssueFlags(contact, jobs = [], messages = [], escalations = []) {
+  const flags = stuckStateReasons(contact, jobs, messages, escalations);
   return flags;
 }
 
@@ -296,16 +363,23 @@ function groupByContactId(items) {
   return map;
 }
 
-function summarizeContact(contact, jobsByContact, messagesByContact, escalationsByContact) {
+function summarizeContact(contact, jobsByContact, messagesByContact, escalationsByContact, decisionLogsByContact = new Map()) {
   const jobs = jobsByContact.get(contact.id) || [];
   const messages = messagesByContact.get(contact.id) || [];
   const escalations = escalationsByContact.get(contact.id) || [];
+  const decisionLogs = decisionLogsByContact.get(contact.id) || [];
+  const lastDecision = [...decisionLogs].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0] || null;
+  const source = leadSourceInfo(contact);
+  const nextJob = nextPendingJob(jobs);
+  const issues = contactIssueFlags(contact, jobs, messages, escalations);
   return {
     id: contact.id,
     name: contact.name,
     phone: contact.phone,
     leadSource: contact.leadSource,
+    ...source,
     timezone: contact.timezone,
+    timezoneSource: timezoneSource(contact),
     engagementStatus: contact.engagementStatus,
     qualificationProgress: contact.qualificationProgress,
     currentSequenceName: contact.currentSequenceName,
@@ -320,10 +394,15 @@ function summarizeContact(contact, jobsByContact, messagesByContact, escalations
     lastActivityAt: lastActivityAt(contact, messagesByContact),
     pendingJobs: jobs.filter((job) => job.status === "pending").length,
     failedJobs: jobs.filter((job) => job.status === "failed").length,
+    skippedJobs: jobs.filter((job) => job.status === "skipped").length,
     messages: messages.length,
     escalations: escalations.length,
     riskScore: leadRiskScore(contact, jobs, messages, escalations),
-    issueFlags: contactIssueFlags(contact, jobs, messages, escalations),
+    issueFlags: issues,
+    stuckStateReasons: issues,
+    recommendedAction: issues[0]?.recommendedAction || "",
+    nextScheduledJob: nextJob ? { id: nextJob.id, type: nextJob.type, runAt: nextJob.runAt, payload: nextJob.payload } : null,
+    lastBotDecision: lastDecision || contact.lastBotDecision || null,
     ghlContactLink: contact.ghlContactLink
   };
 }
@@ -343,7 +422,7 @@ function leadRiskScore(contact, jobs = [], messages = [], escalations = []) {
   return Math.max(0, Math.min(100, score));
 }
 
-function contactTimeline(contact, messages = [], jobs = [], escalations = []) {
+function contactTimeline(contact, messages = [], jobs = [], escalations = [], decisionLogs = []) {
   const events = [];
   for (const message of messages) {
     events.push({
@@ -370,6 +449,15 @@ function contactTimeline(contact, messages = [], jobs = [], escalations = []) {
       title: `Escalated: ${escalation.reason || "unknown"}`,
       detail: escalation.lastInboundMessage || "",
       template: ""
+    });
+  }
+  for (const log of decisionLogs) {
+    events.push({
+      at: log.createdAt,
+      type: `decision_${log.action || "unknown"}`,
+      title: `Decision: ${safeText(log.action, "unknown")}`,
+      detail: [log.reason, log.message].filter(Boolean).join(" | "),
+      template: log.jobType || log.meta?.templateKey || ""
     });
   }
   if (contact.escalatedAt) {
@@ -413,20 +501,23 @@ function contactQualification(contact = {}) {
 }
 
 async function contactDataSets() {
-  const [contacts, messages, jobs, escalations] = await Promise.all([
+  const [contacts, messages, jobs, escalations, decisionLogs] = await Promise.all([
     store.listContacts ? store.listContacts() : [],
     store.listMessages(),
     store.listJobs(),
-    store.listEscalations()
+    store.listEscalations(),
+    store.listDecisionLogs ? store.listDecisionLogs() : []
   ]);
   return {
     contacts,
     messages,
     jobs,
     escalations,
+    decisionLogs,
     messagesByContact: groupByContactId(messages),
     jobsByContact: groupByContactId(jobs),
-    escalationsByContact: groupByContactId(escalations)
+    escalationsByContact: groupByContactId(escalations),
+    decisionLogsByContact: groupByContactId(decisionLogs)
   };
 }
 
@@ -466,7 +557,7 @@ async function dashboardContactsList(url) {
   const sort = url.searchParams.get("sort") || "sla";
   const data = await contactDataSets();
   const summaries = data.contacts.map((contact) =>
-    summarizeContact(contact, data.jobsByContact, data.messagesByContact, data.escalationsByContact)
+    summarizeContact(contact, data.jobsByContact, data.messagesByContact, data.escalationsByContact, data.decisionLogsByContact)
   );
   const contacts = sortContacts(filterContactQueue(summaries, queue), sort);
   return {
@@ -495,7 +586,7 @@ function lifecycleFunnel(contacts) {
 function sourcePerformance(contacts) {
   const map = new Map();
   for (const contact of contacts) {
-    const source = contact.leadSource || "unknown";
+    const source = leadSourceInfo(contact).leadSourceLabel || "unknown";
     const item = map.get(source) || { source, contacts: 0, replied: 0, escalated: 0, booked: 0, optedOut: 0 };
     item.contacts += 1;
     if (contact.lastInboundMessage || contact.lastResponseTimestamp) item.replied += 1;
@@ -512,6 +603,71 @@ function sourcePerformance(contacts) {
     }))
     .sort((a, b) => b.contacts - a.contacts)
     .slice(0, 20);
+}
+
+function scannerOutput(contactSummaries = [], jobs = []) {
+  const buckets = {
+    humanWaiting: [],
+    stuckBotState: [],
+    appointmentIssues: [],
+    timezoneIssues: [],
+    systemIssues: [],
+    smsBlocked: [],
+    duplicateConflicts: [],
+    recoverable: []
+  };
+
+  const push = (bucket, contact, reason) => {
+    buckets[bucket].push({
+      contactId: contact.id,
+      name: contact.name,
+      phone: contact.phone,
+      engagementStatus: contact.engagementStatus,
+      qualificationProgress: contact.qualificationProgress,
+      lastActivityAt: contact.lastActivityAt,
+      reason,
+      recommendedAction: reason.recommendedAction || contact.recommendedAction || "",
+      ghlContactLink: contact.ghlContactLink
+    });
+  };
+
+  for (const contact of contactSummaries) {
+    for (const reason of contact.stuckStateReasons || contact.issueFlags || []) {
+      if (reason.code === "unacknowledged_escalation") push("humanWaiting", contact, reason);
+      else if (["scheduled_without_reminders", "awaiting_backup_without_timeout"].includes(reason.code)) push("appointmentIssues", contact, reason);
+      else if (["missing_timezone"].includes(reason.code)) push("timezoneIssues", contact, reason);
+      else if (["failed_jobs", "due_jobs", "llm_issue", "low_confidence"].includes(reason.code)) push("systemIssues", contact, reason);
+      else if (reason.code === "sms_dnd_blocked") push("smsBlocked", contact, reason);
+      else if (reason.code === "duplicate_phone_conflict") push("duplicateConflicts", contact, reason);
+      else if (["no_pending_automation", "automation_paused", "no_messages"].includes(reason.code)) push("stuckBotState", contact, reason);
+    }
+    if (contact.recommendedAction && !contact.optOutStatus) {
+      buckets.recoverable.push({
+        contactId: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        engagementStatus: contact.engagementStatus,
+        recommendedAction: contact.recommendedAction,
+        lastBotDecision: contact.lastBotDecision,
+        nextScheduledJob: contact.nextScheduledJob
+      });
+    }
+  }
+
+  const failedJobs = jobs.filter((job) => job.status === "failed").map((job) => ({
+    id: job.id,
+    contactId: job.contactId,
+    type: job.type,
+    runAt: job.runAt,
+    error: job.error || job.lastError || ""
+  }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    counts: Object.fromEntries(Object.entries(buckets).map(([key, value]) => [key, value.length])),
+    buckets,
+    failedJobs
+  };
 }
 
 function timezoneHeatmap(messages, contactsById) {
@@ -652,11 +808,12 @@ function activityHistory(messages, escalations, contacts) {
 }
 
 async function dashboardMetrics() {
-  const [contacts, messages, jobs, escalations, health, experiments, botErrors] = await Promise.all([
+  const [contacts, messages, jobs, escalations, decisionLogs, health, experiments, botErrors] = await Promise.all([
     store.listContacts ? store.listContacts() : [],
     store.listMessages(),
     store.listJobs(),
     store.listEscalations(),
+    store.listDecisionLogs ? store.listDecisionLogs() : [],
     store.health(),
     loadTemplateExperiments(store),
     listBotErrors(store, 100)
@@ -669,6 +826,7 @@ async function dashboardMetrics() {
   const messagesByContact = groupByContactId(messages);
   const jobsByContact = groupByContactId(jobs);
   const escalationsByContact = groupByContactId(escalations);
+  const decisionLogsByContact = groupByContactId(decisionLogs);
   const contactsById = new Map(contacts.map((contact) => [contact.id, contact]));
   for (const contact of contacts) {
     increment(engagement, contact.engagementStatus);
@@ -693,7 +851,7 @@ async function dashboardMetrics() {
   const duplicateConflicts = contacts.filter((contact) => contact.automationPauseReason === "duplicate_phone_conflict");
   const missingTimezone = contacts.filter((contact) => !contact.timezone);
   const paused = contacts.filter((contact) => contact.automationPaused);
-  const contactSummaries = contacts.map((contact) => summarizeContact(contact, jobsByContact, messagesByContact, escalationsByContact));
+  const contactSummaries = contacts.map((contact) => summarizeContact(contact, jobsByContact, messagesByContact, escalationsByContact, decisionLogsByContact));
   const hotLeads = contactSummaries
     .filter((contact) => contact.riskScore >= 35 && !contact.automationPaused && contact.engagementStatus !== "opted_out")
     .sort((a, b) => b.riskScore - a.riskScore || new Date(b.lastActivityAt || 0) - new Date(a.lastActivityAt || 0))
@@ -840,6 +998,11 @@ async function dashboardMetrics() {
     appointmentPipeline: appointmentPipeline(contacts, jobsByContact),
     sourcePerformance: sourcePerformance(contacts),
     timezoneHeatmap: timezoneHeatmap(messages, contactsById),
+    scanner: scannerOutput(contactSummaries, jobs),
+    recentDecisionLogs: decisionLogs
+      .slice()
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .slice(0, 100),
     llmUsage: {
       contactsClassified: llmContacts.length,
       fallbackEnabled: config.llm.fallbackEnabled,
@@ -855,21 +1018,28 @@ async function dashboardMetrics() {
 }
 
 async function dashboardContactDetail(contactId) {
-  const [contact, messages, jobs, escalations] = await Promise.all([
+  const [contact, messages, jobs, escalations, decisionLogs] = await Promise.all([
     store.getContact(contactId),
     store.listMessages(contactId),
     store.listJobs(contactId),
-    store.listEscalations(contactId)
+    store.listEscalations(contactId),
+    store.listDecisionLogs ? store.listDecisionLogs(contactId) : []
   ]);
   if (!contact) return null;
+  const messagesByContact = groupByContactId(messages);
+  const jobsByContact = groupByContactId(jobs);
+  const escalationsByContact = groupByContactId(escalations);
+  const decisionLogsByContact = groupByContactId(decisionLogs);
+  const summary = summarizeContact(contact, jobsByContact, messagesByContact, escalationsByContact, decisionLogsByContact);
   return {
     ok: true,
-    contact,
+    contact: { ...contact, ...summary },
     messages,
     jobs,
     escalations,
+    decisionLogs,
     issueFlags: contactIssueFlags(contact, jobs, messages, escalations),
-    timeline: contactTimeline(contact, messages, jobs, escalations)
+    timeline: contactTimeline(contact, messages, jobs, escalations, decisionLogs)
   };
 }
 
@@ -1721,6 +1891,20 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && req.url.startsWith("/api/admin/scanner")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const data = await contactDataSets();
+      const summaries = data.contacts.map((contact) =>
+        summarizeContact(contact, data.jobsByContact, data.messagesByContact, data.escalationsByContact, data.decisionLogsByContact)
+      );
+      send(res, 200, { ok: true, scanner: scannerOutput(summaries, data.jobs), contacts: summaries.filter((item) => item.issueFlags?.length) });
+      return;
+    }
+
     if (req.method === "GET" && req.url.startsWith("/api/admin/contact")) {
       const auth = requireAdmin(req);
       if (!auth.ok) {
@@ -2136,5 +2320,8 @@ module.exports = {
   notifyBotError,
   requireWebhookSecret,
   isPermanentSmsBlock,
-  contactIssueFlags
+  contactIssueFlags,
+  safeText,
+  leadSourceInfo,
+  scannerOutput
 };
