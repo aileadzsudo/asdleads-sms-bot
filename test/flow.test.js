@@ -1029,6 +1029,29 @@ test("stuck active qualification contact gets warm follow-ups repaired", async (
   );
 });
 
+test("stuck contact with unprocessed call time inbound resumes booking flow", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "stuck-inbound-time",
+    ghlContactId: "stuck-inbound-time",
+    name: "Steve",
+    phone: "+15550000095",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    lastResponseTimestamp: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+    lastInboundMessage: "10:30 a.m.",
+    lastOutboundTimestamp: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
+    lastOutboundMessage: "What time works best?"
+  });
+
+  const healed = await bot.healStuckContacts();
+
+  assert.deepEqual(healed, [{ contactId: "stuck-inbound-time", action: "processed_stale_inbound" }]);
+  assert.equal(store.getContact("stuck-inbound-time").engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.match(store.getContact("stuck-inbound-time").lastOutboundMessage, /backup time/i);
+});
+
 test("stuck recoverable soft escalation gets queued back to bot", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

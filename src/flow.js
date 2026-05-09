@@ -2646,6 +2646,39 @@ class SmsBot {
       }
 
       const jobs = await this.store.listJobs(contact.id);
+      const lastInboundAt = contact.lastResponseTimestamp ? new Date(contact.lastResponseTimestamp).getTime() : 0;
+      const lastOutboundAt = contact.lastOutboundTimestamp ? new Date(contact.lastOutboundTimestamp).getTime() : 0;
+      if (
+        needsQualificationReply(contact) &&
+        contact.lastInboundMessage &&
+        lastInboundAt &&
+        (!lastOutboundAt || lastInboundAt > lastOutboundAt) &&
+        !hasPendingJob(jobs, ["process_inbound_buffer", "warm_followup", "enter_reengagement", "send_reengagement_template"]) &&
+        Date.now() - lastInboundAt >= 2 * 60 * 1000 &&
+        isWithinTextingWindow(contact, this.config)
+      ) {
+        let repaired = null;
+        if (contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME) {
+          repaired = await this.handleCallTime(contact, contact.lastInboundMessage);
+        } else {
+          const answer = parseExpectedAnswer(contact.qualificationProgress, contact.lastInboundMessage);
+          if (answer) repaired = await this.advanceQualification(contact, answer);
+          const dateAnswer = !repaired ? parseAccidentDate(contact.lastInboundMessage) : null;
+          if (dateAnswer && contact.qualificationProgress === QUALIFICATION.NEEDS_FAULT && !contact.accidentDate) {
+            const withDate = await this.store.upsertContact({ ...contact, accidentDate: dateAnswer.value });
+            const sent = await this.sendBotMessage(withDate, render(qualificationTemplates.fault, withDate), {
+              bypassQuietHours: true
+            });
+            repaired = sent || (await this.store.getContact(withDate.id)) || withDate;
+            await this.scheduleWarmFollowUps(repaired, !isWithinTextingWindow(repaired, this.config));
+          }
+        }
+        if (repaired) {
+          healed.push({ contactId: contact.id, action: "processed_stale_inbound" });
+          continue;
+        }
+      }
+
       if (
         [ENGAGEMENT.ACTIVE_CONVERSATION, ENGAGEMENT.WARM_FOLLOW_UP, ENGAGEMENT.RE_ENGAGEMENT].includes(contact.engagementStatus) &&
         needsQualificationReply(contact) &&

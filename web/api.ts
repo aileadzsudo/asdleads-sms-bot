@@ -55,6 +55,13 @@ export function pauseContactBot(contactId: string) {
   return request(`/api/contacts/${encodeURIComponent(contactId)}/pause-bot`, { method: "POST" });
 }
 
+export function adminContactAction(contactId: string, action: string) {
+  return request(`/api/admin/contact/action`, {
+    method: "POST",
+    body: JSON.stringify({ contactId, action })
+  });
+}
+
 export function addContactNote(contactId: string, body: string) {
   return request(`/api/contacts/${encodeURIComponent(contactId)}/note`, {
     method: "POST",
