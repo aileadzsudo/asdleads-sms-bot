@@ -423,6 +423,33 @@ test("backup timeout confirms appointment while acknowledging no backup response
   assert.match(store.getContact("backup-timeout-copy").lastOutboundMessage, /reschedule/i);
 });
 
+test("legacy next-day evening reminder jobs still render", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "legacy-evening-reminder",
+    ghlContactId: "legacy-evening-reminder",
+    name: "Leslie",
+    phone: "+15550000060",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Sat, May 9, 5:00 PM CST",
+    preferredCallTimeIso: new Date(Date.now() + 30 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "appt-legacy"
+  });
+  const job = store.addJob({
+    type: "appointment_reminder",
+    contactId: "legacy-evening-reminder",
+    runAt: new Date().toISOString(),
+    payload: { templateKey: "nextDayEvening" }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.match(store.getContact("legacy-evening-reminder").lastOutboundMessage, /tomorrow/i);
+  assert.equal(store.data.jobs[job.id].status, "done");
+});
+
 test("appointment reminders use cadence based on time until appointment", async () => {
   const { bot, store } = makeBot();
   const soon = new Date(Date.now() + 45 * 60 * 1000).toISOString();
@@ -2515,9 +2542,9 @@ test("fresh no-response enrollment cancels stale qualification follow-up jobs", 
 
 test("fresh no-response enrollment schedules aggressive same-day follow-ups", async () => {
   const { bot, store } = makeBot();
-  const cadenceTimezone = ["America/Chicago", "America/Los_Angeles", "Pacific/Honolulu", "Pacific/Kiritimati"].find((timeZone) => {
+  const cadenceTimezone = ["Pacific/Honolulu", "America/Anchorage", "America/Los_Angeles", "America/Chicago"].find((timeZone) => {
     const local = getLocalParts(new Date(), timeZone);
-    return local.hour >= 8 && local.hour <= 17;
+    return local.hour <= 22;
   }) || "America/Chicago";
 
   const contact = await bot.startFromNoResponseDisposition({

@@ -182,6 +182,7 @@ const warmFollowUpTemplates = {
 };
 
 const reminderTemplates = {
+  nextDayEvening: "Hey [NAME]! 👋 Just a quick reminder, you have a call scheduled with your Accident Support Desk Specialist tomorrow at [TIME]. They'll call from a local number, so keep your phone close 📞",
   nextDayMorning: "Good morning [NAME]! 👋 Quick reminder, you have a call scheduled with your Accident Support Desk Specialist today at [TIME]. They'll call from a local number, so please keep your phone close 💪",
   nextDayOneHour: "Hi [NAME], William here! Quick reminder, your Specialist call is in about an hour at [TIME] ⏰ They'll call from a local number, so please keep your phone close.",
   nextDayFiveMinutes: "[NAME] your Specialist is calling you in 5 minutes! 📞 Pick up even if the number looks unfamiliar, that's them. You're almost at the finish line! 🏁",
