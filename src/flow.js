@@ -3191,6 +3191,22 @@ class SmsBot {
     }
   }
 
+  async notifyAppointmentNotice(contact, title, extra = {}) {
+    try {
+      await slack.sendAppointmentNotice(this.config, contact, title, extra);
+      return true;
+    } catch (error) {
+      await this.notifyBotError("Slack appointment notice failed", {
+        Name: contact.name || "unknown",
+        Phone: contact.phone || "unknown",
+        "GHL contact": contact.ghlContactId || contact.id,
+        "Appointment ID": contact.appointmentId || "unknown",
+        Error: error.message
+      });
+      return false;
+    }
+  }
+
   async scheduleAppointmentReminders(contact) {
     if (!contact.preferredCallTimeIso) return;
     await this.store.cancelJobsForContact(contact.id, "appointment reminders replaced", (job) => job.type === "appointment_reminder");
@@ -3365,6 +3381,24 @@ class SmsBot {
     );
     const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(contact);
     await this.scheduleNoShowFollowUps(contact, { skipEarlySameDay: hasBackupReminderPlan });
+    if (hasBackupReminderPlan) {
+      const backupAlertKey = `${contact.appointmentId || contact.id}|${contact.backupCallTimeIso || contact.backupCallTime || ""}`;
+      if (contact.noShowBackupAlertKey !== backupAlertKey) {
+        const alertSent = await this.notifyAppointmentNotice(contact, "No-show: backup time active", {
+          Primary: contact.preferredCallTime || "unknown",
+          Backup: contact.backupCallTime || "unknown",
+          Appointment: contact.appointmentId || "unknown",
+          Action: "Primary call was missed. Backup time is now the next attempt. If your team edits the GHL appointment to the backup time, reminders will resync."
+        });
+        if (alertSent) {
+          contact = await this.store.upsertContact({
+            ...contact,
+            noShowBackupAlertKey: backupAlertKey,
+            noShowBackupAlertSentAt: new Date().toISOString()
+          });
+        }
+      }
+    }
     contact = await this.store.upsertContact({
       ...contact,
       currentSequenceDay: 1,

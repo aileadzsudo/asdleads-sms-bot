@@ -1635,6 +1635,31 @@ test("booking Slack copy does not include qualification answer noise", async () 
   assert.doesNotMatch(result.text, /Medical:/);
 });
 
+test("backup no-show Slack copy tells team the backup attempt is active", async () => {
+  const result = await slack.sendAppointmentNotice(
+    { ...testConfig(""), dryRun: true, slack: { token: "", channel: "#sms", botErrorsChannel: "#bot-errors", bookingChannel: "#booking" } },
+    {
+      id: "backup-notice",
+      ghlContactId: "backup-notice",
+      name: "Backup Notice",
+      phone: "+15550000077",
+      preferredCallTime: "Sun, May 10, 11:00 AM MST",
+      backupCallTime: "Sun, May 10, 12:00 PM MST",
+      appointmentId: "appt-1"
+    },
+    "No-show: backup time active",
+    {
+      Action: "Primary call was missed. Backup time is now the next attempt."
+    }
+  );
+
+  assert.equal(result.skipped, true);
+  assert.match(result.text, /No-show: backup time active/);
+  assert.match(result.text, /Primary: Sun, May 10, 11:00 AM MST/);
+  assert.match(result.text, /Backup: Sun, May 10, 12:00 PM MST/);
+  assert.match(result.text, /Primary call was missed/);
+});
+
 test("human acknowledgement cancels escalation watchdog jobs", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -2663,6 +2688,47 @@ test("GHL appointment no-show status preserves backup and starts no-show recover
   assert.equal(store.getContact("sync-no-show").backupCallTime, "Backup time");
   assert.equal(jobs.some((job) => job.contactId === "sync-no-show" && job.type === "backup_no_show_reminder" && job.status === "pending"), true);
   assert.equal(jobs.some((job) => job.contactId === "sync-no-show" && job.type === "missed_call_followup" && job.status === "pending"), true);
+  assert.ok(store.getContact("sync-no-show").noShowBackupAlertSentAt);
+});
+
+test("manual appointment edit after no-show replaces recovery with normal reminders", async () => {
+  const { bot, store } = makeBot();
+  const primary = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  const backup = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "sync-no-show-reschedule",
+    ghlContactId: "sync-no-show-reschedule",
+    name: "Sync No Show Reschedule",
+    phone: "+15550000078",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Primary time",
+    preferredCallTimeIso: primary,
+    backupCallTime: "Backup time",
+    backupCallTimeIso: backup,
+    backupCallTimeType: "exact",
+    appointmentId: "sync-no-show-reschedule-event"
+  });
+
+  await bot.syncAppointment({
+    contactId: "sync-no-show-reschedule",
+    appointmentId: "sync-no-show-reschedule-event",
+    status: "no_show"
+  });
+  const resynced = await bot.syncAppointment({
+    contactId: "sync-no-show-reschedule",
+    appointmentId: "sync-no-show-reschedule-event",
+    startTime: backup,
+    status: "confirmed"
+  });
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "sync-no-show-reschedule");
+
+  assert.equal(resynced.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.equal(resynced.preferredCallTimeIso, backup);
+  assert.equal(jobs.some((job) => job.type === "backup_no_show_reminder" && job.status === "pending"), false);
+  assert.equal(jobs.some((job) => job.type === "missed_call_followup" && job.status === "pending"), false);
+  assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
 });
 
 test("warm follow-ups aggressively chase before entering re-engagement", async () => {

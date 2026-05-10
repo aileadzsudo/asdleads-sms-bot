@@ -67,6 +67,20 @@ async function sendAppointmentBooked(config, contact, extra = {}) {
   return postSlack(config, lines.join("\n"), config.slack.bookingChannel || config.slack.channel);
 }
 
+async function sendAppointmentNotice(config, contact, title, extra = {}) {
+  const lines = [
+    `*${title}*`,
+    `Name: ${contact.name || "unknown"}`,
+    `Phone: ${contact.phone || "unknown"}`,
+    `Primary: ${extra.Primary || contact.preferredCallTime || "unknown"}`,
+    `Backup: ${extra.Backup || contact.backupCallTime || "none"}`,
+    `Action: ${extra.Action || "Review appointment status"}`,
+    `GHL: ${contactLink(config, contact) || "unknown"}`
+  ];
+  if (extra.Appointment) lines.splice(5, 0, `Appointment: ${extra.Appointment}`);
+  return postSlack(config, lines.join("\n"), config.slack.bookingChannel || config.slack.channel);
+}
+
 async function sendBotError(config, title, details = {}) {
   const channel = config.slack.botErrorsChannel;
   if (!channel) {
@@ -79,4 +93,4 @@ async function sendBotError(config, title, details = {}) {
   return postSlack(config, lines.join("\n"), channel);
 }
 
-module.exports = { sendEscalation, sendUrgentCallNow, sendAppointmentBooked, sendBotError };
+module.exports = { sendEscalation, sendUrgentCallNow, sendAppointmentBooked, sendAppointmentNotice, sendBotError };
