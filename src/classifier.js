@@ -4,6 +4,8 @@ const { getLocalParts, localDateToUtc } = require("./time");
 function normalize(text) {
   return String(text || "")
     .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
     .replace(/[’']/g, "'")
     .replace(/[^\p{L}\p{N}\s:/.-]/gu, " ")
     .replace(/\s+/g, " ")
@@ -21,6 +23,10 @@ function isOptOut(text) {
     "dont text me",
     "do not text me",
     "wrong number",
+    "numero equivocado",
+    "no me escribas",
+    "no me mandes mensajes",
+    "dejame en paz",
     "leave me alone",
     "stop texting",
     "take me off",
@@ -36,11 +42,12 @@ function escalationReason(text) {
   if (isDocumentOrReport(t)) return "document_or_report";
   const checks = [
     ["human_request", ["human", "real person", "representative", "manager", "supervisor", "agent"]],
-    ["attorney_request", ["attorney", "lawyer", "legal counsel", "law office", "law firm"]],
-    ["company_question", ["who is this", "what company", "where did you get", "why are you texting", "who are you"]],
+    ["human_request", ["humano", "persona real", "representante", "supervisor", "agente"]],
+    ["attorney_request", ["attorney", "lawyer", "legal counsel", "law office", "law firm", "abogado", "abogada", "licenciado", "firma legal"]],
+    ["company_question", ["who is this", "what company", "where did you get", "why are you texting", "who are you", "quien eres", "quien es", "que compania", "de donde sacaron"]],
     [
       "confused_or_upset",
-      ["confused", "i don't understand", "i dont understand", "mad", "angry", "upset", "concerned", "scam", "stop harassing"]
+      ["confused", "i don't understand", "i dont understand", "mad", "angry", "upset", "concerned", "scam", "stop harassing", "confundido", "no entiendo", "enojado", "molesto", "estafa"]
     ],
     [
       "outside_question",
@@ -59,12 +66,19 @@ function escalationReason(text) {
         "only paid",
         "never gave me",
         "gave me anything",
-        "money for the accident"
+        "money for the accident",
+        "cuanto",
+        "aseguranza",
+        "seguro",
+        "compensacion",
+        "danos",
+        "renta",
+        "carro"
       ]
     ],
     [
       "post_intake_or_firm_issue",
-      ["case manager", "my case", "your office", "your firm", "docusign", "already signed", "i signed", "missed call"]
+      ["case manager", "my case", "your office", "your firm", "docusign", "already signed", "i signed", "missed call", "mi caso", "su oficina", "tu oficina", "ya firme", "llamada perdida"]
     ]
   ];
   for (const [reason, phrases] of checks) {
@@ -125,22 +139,26 @@ function parseAccidentDate(text) {
     /\b(yesterday|yeserday|yesterdy|today|last night|this morning|last week|last month|a week ago|about a week ago|around a week ago|a month ago|couple days ago|a couple days ago|few days ago|a few days ago|couple weeks ago|a couple weeks ago|few weeks ago|a few weeks ago|two days ago|three days ago|day before yesterday|\d+\s+days?\s+ago|\d+\s+weeks?\s+ago|\d+\s+months?\s+ago|last\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/
   );
   if (relative) return { value: relative[0], confidence: 0.75 };
+  const spanishRelative = t.match(
+    /\b(ayer|hoy|anoche|esta manana|la semana pasada|el mes pasado|hace una semana|hace como una semana|hace un mes|hace unos dias|hace dos dias|hace tres dias|anteayer|hace\s+\d+\s+dias?|hace\s+\d+\s+semanas?|hace\s+\d+\s+meses?|el\s+(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s+pasado|el\s+(lunes|martes|miercoles|jueves|viernes|sabado|domingo))\b/
+  );
+  if (spanishRelative) return { value: spanishRelative[0], confidence: 0.75 };
   return null;
 }
 
 function parseFaultAnswer(text) {
   const t = normalize(text);
-  if (/\b(not sure|unsure|maybe|partially|partial|both|kind of|kinda)\b/.test(t)) {
+  if (/\b(not sure|unsure|maybe|partially|partial|both|kind of|kinda|no estoy seguro|no se|tal vez|parcial|ambos|los dos)\b/.test(t)) {
     return { value: "unsure_or_partial", confidence: 0.85 };
   }
   if (
-    /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|i wasn't driving|i was not driving|i wasnt driving|passenger|rideshare passenger|uber passenger|lyft passenger|lyft driver|uber driver|pedestrian|walking|crosswalk|no|not me|they hit me|driver hit me|driver hit my|driver hit|hit my car|hit my vehicle|hit my front|hit my fender|kept going|rear ended me|rear-ended me|i got hit|hit me|parked)\b/.test(
+    /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|i wasn't driving|i was not driving|i wasnt driving|passenger|rideshare passenger|uber passenger|lyft passenger|lyft driver|uber driver|pedestrian|walking|crosswalk|no|not me|they hit me|driver hit me|driver hit my|driver hit|hit my car|hit my vehicle|hit my front|hit my fender|kept going|rear ended me|rear-ended me|i got hit|hit me|parked|otro conductor|culpa del otro|no fue mi culpa|yo no tuve la culpa|no manejaba|no estaba manejando|pasajero|peaton|caminando|cruce peatonal|me chocaron|me pegaron|me golpearon|chocaron mi carro|le pegaron a mi carro|me dieron por detras|estaba estacionado)\b/.test(
       t
     )
   ) {
     return { value: "not_at_fault", confidence: 0.9 };
   }
-  if (/\b(my fault|i was at fault|it was my fault|yes|yeah|yep)\b/.test(t)) {
+  if (/\b(my fault|i was at fault|it was my fault|yes|yeah|yep|si|fue mi culpa|yo tuve la culpa|culpable)\b/.test(t)) {
     return { value: "at_fault", confidence: 0.9 };
   }
   return null;
@@ -148,11 +166,11 @@ function parseFaultAnswer(text) {
 
 function parseMedicalAnswer(text) {
   const t = normalize(text);
-  if (/\b(no|not yet|haven't|havent|did not|didn't|none|not seen|no doctor|no treatment)\b/.test(t)) {
+  if (/\b(no|not yet|haven't|havent|did not|didn't|none|not seen|no doctor|no treatment|todavia no|aun no|no he ido|no fui|ninguno|sin tratamiento|no doctor|no medico)\b/.test(t)) {
     return { value: "no", confidence: 0.85 };
   }
   if (
-    /\b(yes|yeah|yep|doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|pt|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray)\b/.test(
+    /\b(yes|yeah|yep|si|doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|pt|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|medico|clinica|ambulancia|terapia|tratamiento|quiropractico|fisioterapia|radiografia|resonancia)\b/.test(
       t
     )
   ) {
@@ -164,13 +182,13 @@ function parseMedicalAnswer(text) {
 function hasExpectedAnswerSignal(progress, text) {
   const t = normalize(text);
   if (progress === QUALIFICATION.NEEDS_FAULT) {
-    return /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|i wasn't driving|i was not driving|i wasnt driving|passenger|rideshare passenger|uber passenger|lyft passenger|lyft driver|uber driver|pedestrian|walking|crosswalk|my fault|i was at fault|at fault|they hit me|hit me|rear ended|rear-ended|not sure|unsure|partially|partial)\b/.test(t);
+    return /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|i wasn't driving|i was not driving|i wasnt driving|passenger|rideshare passenger|uber passenger|lyft passenger|lyft driver|uber driver|pedestrian|walking|crosswalk|my fault|i was at fault|at fault|they hit me|hit me|rear ended|rear-ended|not sure|unsure|partially|partial|otro conductor|culpa del otro|no fue mi culpa|pasajero|peaton|me chocaron|me dieron por detras|fue mi culpa|culpable|no estoy seguro)\b/.test(t);
   }
   if (progress === QUALIFICATION.NEEDS_MEDICAL) {
-    return /\b(doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|no doctor|no treatment|not seen|haven't|havent|didn't|didnt)\b/.test(t);
+    return /\b(doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|no doctor|no treatment|not seen|haven't|havent|didn't|didnt|medico|clinica|ambulancia|terapia|tratamiento|quiropractico|sin tratamiento|no he ido)\b/.test(t);
   }
   if (progress === QUALIFICATION.NEEDS_CALL_TIME) {
-    return /\b(now|today|tomorrow|morning|afternoon|evening|tonight|noon|\d{1,2}(?::\d{2})?\s*(am|pm)?)\b/.test(t);
+    return /\b(now|today|tomorrow|morning|afternoon|evening|tonight|noon|ahora|hoy|manana|tarde|noche|mediodia|\d{1,2}(?::\d{2})?\s*(am|pm)?)\b/.test(t);
   }
   return false;
 }
@@ -180,9 +198,9 @@ function classifyHumanContextIntent(text, progress) {
   if (!t) return null;
 
   const busy =
-    /\b(currently busy|busy right now|i'm busy|im busy|i am busy|busy|at work|working|in a meeting|driving|can't talk|cant talk|cannot talk|not available|occupied)\b/.test(t);
-  const apology = /\b(sorry|my bad|apologize|apologies)\b/.test(t);
-  const prefersText = /\b(text me|text is better|can we text|over text|just text|message me)\b/.test(t);
+    /\b(currently busy|busy right now|i'm busy|im busy|i am busy|busy|at work|working|in a meeting|driving|can't talk|cant talk|cannot talk|not available|occupied|ocupado|estoy ocupado|trabajando|en el trabajo|manejando|no puedo hablar|no disponible)\b/.test(t);
+  const apology = /\b(sorry|my bad|apologize|apologies|perdon|disculpa|lo siento)\b/.test(t);
+  const prefersText = /\b(text me|text is better|can we text|over text|just text|message me|por texto|mandame texto|mensajeame|texto es mejor)\b/.test(t);
 
   if (busy && !hasExpectedAnswerSignal(progress, t)) {
     return { intent: "busy_now", confidence: apology ? 0.92 : 0.88 };
@@ -195,7 +213,7 @@ function classifyHumanContextIntent(text, progress) {
 
 function isCallNow(text) {
   const t = normalize(text);
-  return /\b(call me now|call now|right now|now is fine|now is good|available now|i'm available now|im available now|i can talk now|asap)\b/.test(t);
+  return /\b(call me now|call now|right now|now is fine|now is good|available now|i'm available now|im available now|i can talk now|asap|llamame ahora|llama ahora|ahora esta bien|disponible ahora|puedo hablar ahora)\b/.test(t);
 }
 
 function isNotTodayAvailability(text) {
@@ -214,7 +232,7 @@ function hasClockTimeSignal(text) {
     /\b\d{1,2}:\d{2}\s*(am|pm)?\b/.test(t) ||
     /\b\d{1,2}\s*(am|pm)\b/.test(t) ||
     /\b(?:at|after|around|about)\s*\d{1,2}\b/.test(t) ||
-    /\b(noon|morning|afternoon|evening|tonight)\b/.test(t)
+    /\b(noon|morning|afternoon|evening|tonight|mediodia|manana|tarde|noche)\b/.test(t)
   );
 }
 
@@ -227,6 +245,26 @@ function removeNumericDateTokens(text) {
 
 function parseCallTime(text, contact, config, now = new Date()) {
   const t = normalize(text)
+    .replace(/\ben la manana\b/g, "morning")
+    .replace(/\bpor la manana\b/g, "morning")
+    .replace(/\ben la tarde\b/g, "afternoon")
+    .replace(/\bpor la tarde\b/g, "afternoon")
+    .replace(/\ben la noche\b/g, "evening")
+    .replace(/\bpor la noche\b/g, "evening")
+    .replace(/\bmanana\b/g, "tomorrow")
+    .replace(/\bhoy\b/g, "today")
+    .replace(/\bahora\b/g, "now")
+    .replace(/\bmediodia\b/g, "noon")
+    .replace(/\bmas tarde\b/g, "later")
+    .replace(/\bocupado\b/g, "busy")
+    .replace(/\bestoy trabajando\b/g, "working")
+    .replace(/\blunes\b/g, "monday")
+    .replace(/\bmartes\b/g, "tuesday")
+    .replace(/\bmiercoles\b/g, "wednesday")
+    .replace(/\bjueves\b/g, "thursday")
+    .replace(/\bviernes\b/g, "friday")
+    .replace(/\bsabado\b/g, "saturday")
+    .replace(/\bdomingo\b/g, "sunday")
     .replace(/(\d)\s*([ap])\s*\.?\s*m\.?/g, "$1$2m")
     .replace(/\$\s*\d[\d,.]*/g, " ")
     .replace(/\b\d{1,3},\d{3,}\b/g, " ")

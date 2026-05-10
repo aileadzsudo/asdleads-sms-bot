@@ -11,6 +11,8 @@ const {
   missedCallTemplates,
   noShowTemplates,
   backupReminderTemplates,
+  isSpanishContact,
+  localizeMessage,
   render
 } = require("./templates");
 const {
@@ -197,6 +199,9 @@ function normalizePayload(payload, config) {
   }
   if (normalized.timezone || normalized.state || normalized.owner || normalized.tags || !contactId) {
     normalized.timezone = resolveContactTimezone(normalized, config);
+  }
+  if (isSpanishContact(normalized)) {
+    normalized.language = "es";
   }
   return normalized;
 }
@@ -1294,6 +1299,7 @@ class SmsBot {
   }
 
   async sendBotMessage(contact, message, options = {}) {
+    message = localizeMessage(message, contact);
     if (isEmptyTextToken(message)) {
       await this.recordDecision(contact, "skipped", "empty_bot_message", { meta: { templateKey: options.templateKey || "" } });
       return null;
@@ -1329,6 +1335,7 @@ class SmsBot {
       }
       const duplicateTerminalContact = await this.stopIfDuplicateTerminalContact(contact, message);
       if (duplicateTerminalContact) return null;
+      message = localizeMessage(message, contact);
     }
     if (!options.bypassQuietHours && !isWithinTextingWindow(contact, this.config)) {
       const job = await this.store.addJob({
@@ -1414,7 +1421,8 @@ class SmsBot {
         const withTags = { ...contact, tags: fetched.tags, lastTagLookupFailedAt: "", lastTagLookupError: "" };
         return this.store.upsertContact({
           ...withTags,
-          timezone: resolveContactTimezone(withTags, this.config)
+          timezone: resolveContactTimezone(withTags, this.config),
+          language: isSpanishContact(withTags) ? "es" : withTags.language || ""
         });
       }
     } catch (error) {

@@ -223,6 +223,339 @@ const backupReminderTemplates = {
   fiveBefore: "[NAME], your backup call time is coming up in about 5 minutes 📞 Please pick up even if the number looks unfamiliar."
 };
 
+const spanishTemplates = {
+  coldOutreachTemplates: {
+    day_1_am: "Hola [NAME]! 👋👋 Soy William de Accident Support Desk. Estaba revisando la información de tu accidente y parece muy similar a otro caso que acabamos de resolver por una cantidad importante. Creo que podemos ayudarte a ver si tienes opciones parecidas. Podemos hacerlo rápido por texto, solo necesito unos detalles. ¿Recuerdas la fecha del accidente?",
+    day_1_pm: "Hola [NAME] 🤕 esperar más tiempo puede afectar tu reclamo. Quiero ayudarte a tener una idea clara de tus opciones de compensación. Solo necesito un detalle para empezar. ¿Cuál fue la fecha del accidente?",
+    day_2_am: "Hola [NAME] 👋, soy William. Sé que recibir un mensaje así puede sentirse raro, pero de verdad creo que podrías tener más opciones de las que piensas. Muchas personas no saben para qué califican hasta que alguien las orienta. ¿Cuál fue la fecha del accidente?",
+    day_2_pm: "Soy William de Accident Support Desk. Parte de lo que compartiste parece indicar que la aseguranza podría estar usando tácticas en tu contra. Puedo ayudarte a adelantarte a eso, solo necesito un dato. ¿Cuál fue la fecha del accidente?",
+    day_3_am: "Hola [NAME] 🤔, pregunta rápida y honesta. ¿La aseguranza del otro conductor ya se comunicó contigo? Si lo hicieron, hay una razón y normalmente no es a tu favor. Para orientarte mejor, ¿fuiste culpable del accidente?",
+    day_3_pm: "Hola [NAME]! Soy William. Según la información que diste, puede haber protecciones relacionadas con lesiones si actuamos rápido. Puedo revisarlo contigo. ¿Cuál fue la fecha del accidente?",
+    day_4_am: "Hola [NAME], soy William. Llevo suficiente tiempo en esto para saber que quienes esperan demasiado muchas veces terminan recibiendo menos. No quiero asustarte, solo ser honesto. ¿Tuviste que ver a un doctor después del accidente?",
+    day_4_pm: "Hola [NAME], William otra vez. Noté que podrías estar perdiendo compensación por salarios perdidos, algo que muchas personas pasan por alto. Un par de preguntas rápidas nos dirán más. ¿Cuál fue la fecha del accidente?",
+    day_5_am: "Hola [NAME] 👋 William por aquí. ¿Había pasajeros en tu carro cuando ocurrió el accidente? Ese detalle puede importar más de lo que muchos piensan para valorar un reclamo.",
+    day_5_pm: "Hola [NAME], soy William. Incluso si te sientes más o menos bien físicamente, hay cosas que pueden aparecer después y conviene documentarlas. ¿Tuviste dolor o molestia después del accidente, aunque fuera leve?",
+    day_6_am: "Hola [NAME], soy William de Accident Support Desk. Todavía tengo tu archivo abierto y sigo pensando en tu caso. ¿Cuál fue la fecha del accidente?",
+    day_6_pm: "[NAME], sin presión. Solo no quiero que en 6 meses mires atrás y desees haber preguntado. ¿Fuiste culpable del accidente?",
+    day_7_am: "Hola [NAME], William por aquí. No he sabido de ti y no estaba seguro si todavía querías ayuda con lo del accidente. Si sí, ¿cuál fue la fecha del accidente?",
+    day_7_pm: "Hola [NAME], estoy cerrando la semana y todavía tengo tu archivo abierto. ¿Tuviste alguna lesión en el accidente, aunque pareciera menor en ese momento?",
+    day_8_am: "Hola [NAME] ⏳, William por aquí. Nueva semana, quería empezar de nuevo. Hay límites de tiempo legales en reclamos de accidente y cuando pasan ya no se puede hacer mucho. ¿Cuál fue la fecha de tu accidente para revisar dónde estás?",
+    day_8_pm: "Hola [NAME], William de Accident Support Desk. Existe la posibilidad de que califiques para compensación que muchas personas ni siquiera saben que existe. Solo necesito un detalle rápido para revisar. ¿Cuál fue la fecha del accidente?",
+    day_9_am: "[NAME], te hablo claro. Las aseguranzas tienen equipos completos cuyo trabajo es pagarte lo menos posible. Yo estoy del otro lado de eso. Quiero asegurarme de que no dejes pasar algo que te corresponde. ¿Fuiste culpable del accidente?",
+    day_9_pm: "Hola [NAME], William por aquí. Estoy viendo tu archivo y quizá calificas para ayuda adicional por daños al vehículo dependiendo del tiempo. Pregunta rápida: ¿cuál fue la fecha del accidente?",
+    day_10_am: "Hola [NAME], soy William. Algo que no te he preguntado: ¿se hizo un reporte policial después del accidente? Ese detalle puede cambiar bastante lo que puedes reclamar.",
+    day_10_pm: "Hola [NAME], soy William. Sé que la vida se complica, pero no quería que perdieras ayuda para la que quizá calificas. ¿Me puedes mandar rápido la fecha del accidente?",
+    day_11_am: "Hola [NAME] 💰, te lo digo directo. He visto personas en situaciones similares recibir $40k, $80k o más. También he visto personas quedarse sin nada por esperar demasiado. No quisiera que eso te pase. ¿Cuál fue la fecha del accidente?",
+    day_11_pm: "Hola [NAME], William por aquí. ¿El accidente te afectó emocionalmente, como ansiedad al manejar, problemas para dormir o algo parecido? Eso también puede importar y muchas personas no lo mencionan.",
+    day_12_am: "[NAME], William de Accident Support Desk. Pregunta rápida: ¿alguien más resultó lesionado en el accidente? No solo tú, también pasajeros o el otro conductor. Me ayuda a entender el panorama completo.",
+    day_12_pm: "Hola [NAME] ❤️, de verdad espero que estés bien. Los accidentes afectan más de lo que uno piensa, física y mentalmente. Si quieres revisar tus opciones, sigo aquí. Solo responde con la fecha del accidente.",
+    day_13_am: "Hola [NAME], soy William. Llevo mucho tiempo en este campo y puedo notar cuando un caso tiene potencial real. El tuyo puede tenerlo, pero solo puedo ayudar si respondes. ¿Cuál fue la fecha del accidente?",
+    day_13_pm: "[NAME], algo que no mencioné: incluso si ya aceptaste algo pequeño de la aseguranza, puede que todavía tengas opciones. ¿Firmaste algo con la aseguranza después del accidente?",
+    day_14_am: "Hola [NAME], William por aquí. Dejo de escribirte si sientes que ya no necesitas orientación sobre el valor de tu caso. ¿Todavía quieres ayuda o cierro tu archivo?",
+    day_14_pm: "Hola [NAME], soy William. Ya van dos semanas y sigo regresando a tu archivo. Prefiero preguntarte una vez más que dejarlo pasar. ¿Cuál fue la fecha del accidente?",
+    day_15_am: "Hola [NAME] 👋, William por aquí. Empezando la tercera semana. Sé que han sido varios mensajes, pero no seguiría si no pensara que vale tu tiempo. ¿Fuiste culpable del accidente?",
+    day_15_pm: "[NAME], sin culpa si no te interesa, de verdad. Solo quiero asegurarme de que tomaste esa decisión sabiendo tus opciones y no porque la vida se ocupó. Sigo disponible si quieres ayuda.",
+    day_16_am: "Hola [NAME], William otra vez. Te he escrito algunas veces y no estaba seguro si todavía necesitas ayuda con todo esto.",
+    day_16_pm: "Hola [NAME], ¿alguna vez te preguntaste cuánto podría valer realmente tu reclamo de accidente? Muchas personas piensan que no es mucho. Casi siempre se equivocan. Te puedo dar una idea inicial con literalmente dos preguntas.",
+    day_17_am: "Hola [NAME], William por aquí. He trabajado con muchas personas que al principio dudaban y pensaban que no pasaría nada. Muchas terminaron agradecidas de haber respondido. ¿Cuál fue la fecha de tu accidente?",
+    day_17_pm: "[NAME], no voy a fingir que no estoy dando seguimiento otra vez. Lo hago porque he visto lo que pasa cuando la gente actúa y cuando no. ¿Tuviste alguna lesión?",
+    day_18_am: "Hola [NAME], William por aquí. Antes de dejar de escribirte quería revisar una última vez, algunos plazos en casos de accidente sí importan mucho. ¿Cuál fue la fecha del accidente?",
+    day_18_pm: "Hola [NAME], soy William. Si ya recibiste ayuda o simplemente no te interesa, dime y dejo de escribirte. Sin problema.",
+    day_19_am: "[NAME] 🙏, William de Accident Support Desk. Lo sigo pensando: las personas que han tenido accidentes ya están lidiando con bastante. Lo hago simple: sí o no, ¿quieres que revise tu situación?",
+    day_19_pm: "Hola [NAME], muchas personas que no responden no es que no estén interesadas, solo están ocupadas. Si ese es tu caso, lo entiendo. Sigo aquí cuando tengas un minuto.",
+    day_20_am: "Hola [NAME], William por aquí. Estoy cerrando algunos casos esta semana y el tuyo sigue en mi mente. ¿Cuál fue la fecha del accidente?",
+    day_20_pm: "[NAME], llevo mucho tiempo haciendo esto. He visto personas recibir ayuda que no esperaban y también perderla por completo. Un último intento real de mi parte: ¿fuiste culpable del accidente?",
+    day_21_am: "Hola [NAME] 💬, soy William. Te he escrito todos los días por tres semanas porque creí que había algo en tu archivo que valía la pena pelear. Todavía lo creo. Si quieres ayuda, aquí estoy. Si no, dejo de escribirte. Solo responde sí o no.",
+    day_21_pm: "Hola [NAME], soy William. Este será mi último mensaje para no seguir molestando. Antes de cerrar tu archivo, dime si todavía querías ayuda. Solo necesito confirmar unos detalles."
+  },
+  qualificationTemplates: {
+    fault: "Qué bueno que respondiste, [NAME]! 🙌 Rápido para entender tu situación: ¿fuiste culpable del accidente o fue el otro conductor?",
+    medical: "¿Has tenido que ver a algún doctor o recibir tratamiento médico después del accidente? 🤕",
+    callAsk: "Por lo que me compartiste, definitivamente podemos ayudarte! 💰 El siguiente paso es conectarte con un Especialista de Accident Support Desk para crear un plan de compensación. ¿Puedes tomar una llamada ahora o más tarde hoy? 📞",
+    clarify: "Quiero asegurarme de haberte entendido bien 🙏 ¿Puedes responder la última pregunta con un sí, no o no estoy seguro?",
+    optOutConfirm: "Sin problema, no te volveremos a escribir. Si cambias de opinión, puedes comunicarte con nosotros cuando quieras.",
+    existingRepresentation: "No hay problema 🙏 Siempre estamos aquí para ayudar. Si en algún momento no estás satisfecho con tu representación actual, puedes escribirnos cuando quieras. Con gusto te damos una segunda opinión sobre tu caso para ver si podemos ayudar.",
+    injuryContextCallAsk: "Entiendo, eso definitivamente importa 🤕 Incluso si todavía no has recibido tratamiento, las lesiones son importantes. El siguiente paso es conectarte con un Especialista. ¿Qué hora te queda mejor para una llamada rápida hoy o mañana? 📞",
+    callNowNoAnswer: "Hola [NAME], parece que acabamos de llamarte pero no pudimos comunicarnos. No hay problema si estás ocupado 🙏 ¿Qué hora te queda mejor más tarde hoy o mañana para poder llamarte? 📞",
+    callNow: "Perfecto! 🔥 Te estoy conectando con un Especialista ahora mismo. Deberías recibir una llamada en los próximos minutos. Mantén tu teléfono disponible. ¿Cuál es el mejor número para llamarte?",
+    delay: "Perdón por la pequeña espera, nuestro Especialista está terminando con otro cliente. Sigues tú, debería llamarte en unos 3 a 5 minutos! 📞",
+    backupAsk: "Perfecto, te tengo anotado para [TIME]! 📅 Para asegurarnos de no perdernos, ¿hay una hora de respaldo que también te funcione por si algo pasa?",
+    bookingConfirmedWithBackup: "Listo, [PRIMARY TIME] con [BACKUP TIME] como respaldo. Ya quedaste confirmado, [NAME]! 🙌 Nuestro Especialista llamará desde un número local, así que contesta aunque no reconozcas el número. Te recordaremos antes de la llamada!",
+    bookingConfirmedNoBackup: "No hay problema, no recibí una hora de respaldo, así que te dejo confirmado para [TIME]. 📅 Te enviaremos un recordatorio antes de la llamada. Si necesitas cambiar la hora, mándame un mejor horario.",
+    sameDayBooked: "Te confirmé para [TIME] hoy! 📅 Nuestro Especialista llamará desde un número local, así que mantén tu teléfono cerca.",
+    rescheduleAsk: "No hay problema 👍 ¿Qué nueva hora te funciona mejor para tu llamada hoy o mañana?",
+    rescheduleNeedsSpecificTime: "No hay problema 👍 ¿A qué hora exacta quieres mover tu llamada?",
+    rescheduleConfirmed: "Listo, moví tu llamada con el Especialista a [TIME]. 📅 Te enviaremos un recordatorio antes de la llamada y te llamarán desde un número local."
+  },
+  humanReturnTemplates: {
+    needs_fault_answer: "Hola [NAME], ¿sigues ahí conmigo? 🙏 Quiero asegurarme de no perder el avance en tu caso. Pregunta rápida para saber cómo orientarte: ¿fuiste culpable o fue el otro conductor?",
+    needs_medical_answer: "Hola [NAME], ¿sigues ahí conmigo? 🙏 Quiero ayudarte de la manera correcta. ¿Necesitaste tratamiento médico después del accidente, aunque fuera urgencias, ER, quiropráctico o una visita al doctor? 🤕",
+    needs_call_time: "Hola [NAME], ¿sigues ahí conmigo? 🙏 Quiero conectarte para que recibas respuestas sobre tu caso. ¿Qué hora te queda mejor para una llamada rápida con un Especialista? 📞"
+  },
+  freshLeadFollowUpTemplates: {
+    1: "Hola [NAME] 👋 solo dando seguimiento a mi último mensaje. Todavía tengo abierta tu información del accidente y solo necesito la fecha para ver dónde estás.",
+    2: "[NAME], William por aquí 🙌 No quiero que pierdas ayuda para la que podrías calificar. ¿Cuál fue la fecha del accidente?"
+  },
+  reengagementTemplates: {
+    after_date: {
+      1: "Hola [NAME], soy William, parece que nos quedamos a medias 🙌 Ya tengo la fecha del accidente, solo necesito saber: ¿fuiste culpable o fue el otro conductor?",
+      2: "Hola [NAME], dando seguimiento rápido 👋 No quiero perder el avance que ya hicimos. ¿Fuiste culpable del accidente?",
+      3: "[NAME], un detalle rápido y puedo seguir avanzando. ¿Fue tu culpa, la culpa del otro conductor o no estás seguro?",
+      5: "Hola [NAME], William por aquí. Todavía necesito una respuesta antes de orientarte bien: ¿fuiste culpable?",
+      7: "Último intento sobre esto por ahora, [NAME]. ¿Fuiste culpable del accidente, sí, no o no estás seguro?"
+    },
+    after_q1: {
+      1: "Hola [NAME], William por aquí, parece que nos quedamos a medias! 🙌 Estábamos revisando tu situación. Rápido: ¿has tenido que ver a un doctor o recibir tratamiento médico desde el accidente?",
+      2: "Hola [NAME], dando seguimiento. Ibas muy bien, literalmente falta una pregunta para tener una idea más clara. ¿Recibiste tratamiento médico después del accidente?",
+      3: "[NAME], William por aquí. Estábamos muy cerca de tener el panorama completo de tu caso. ¿Has visto a un doctor desde el accidente, aunque sea una vez?",
+      5: "Hola [NAME], no quiero perder el avance que ya hicimos. Ya respondiste la primera pregunta y eso me dijo bastante. Solo necesito una más: ¿recibiste tratamiento médico después del accidente?",
+      7: "Hola [NAME], William por aquí. Último intento de mi parte: ¿necesitaste tratamiento médico después del accidente, sí o no?"
+    },
+    after_call_booking: {
+      1: "Hola [NAME] 👋, solo revisando que todo siga bien para tu llamada a las [TIME]. Responde SÍ para confirmar o dime si prefieres otra hora.",
+      2: "Hola [NAME], William por aquí. Noté que no recibimos respuesta sobre tu llamada programada 📞 ¿Todavía quieres hablar con un Especialista? Puedo reagendarte rápido, ¿qué hora te funciona?",
+      3: "[NAME], todavía te tenemos en el sistema y queremos asegurarnos de que recibas la ayuda por la que viniste. ¿Podemos confirmar una nueva hora para tu llamada esta semana?"
+    }
+  },
+  persistentReengagementTemplates: {
+    after_date: {
+      day_1_am: "Hola [NAME], soy William, parece que nos quedamos a medias 🙌 Ya tengo la fecha del accidente, solo necesito saber: ¿fuiste culpable o fue el otro conductor?",
+      day_1_pm: "Hola [NAME], todavía solo necesito el detalle de culpa 🙏 ¿Fuiste culpable, no fuiste culpable o no estás seguro?",
+      day_2_am: "Hola [NAME], dando seguimiento rápido 👋 No quiero perder el avance que ya hicimos. ¿Fuiste culpable del accidente?",
+      day_2_pm: "[NAME], aunque haya sido parcialmente tu culpa, eso me ayuda a entender la situación. ¿Fuiste culpable?",
+      day_3_am: "[NAME], un detalle rápido y puedo seguir avanzando. ¿Fue tu culpa, la culpa del otro conductor o no estás seguro?",
+      day_3_pm: "Con un sí, no o no estoy seguro está bien: ¿fuiste culpable del accidente?",
+      day_4_am: "Hola [NAME], William por aquí. Tengo guardada la fecha del accidente. ¿Fue tu culpa o la del otro conductor?",
+      day_4_pm: "Todavía intentando terminar esto para ti. ¿Fuiste culpable, no fuiste culpable o no estás seguro?",
+      day_5_am: "Hola [NAME], William por aquí. Todavía necesito una respuesta antes de orientarte bien: ¿fuiste culpable?",
+      day_5_pm: "[NAME], esta respuesta cambia qué opciones podrían estar disponibles. ¿Fuiste culpable del accidente?",
+      day_6_am: "Buenos días [NAME], pregunta rápida: ¿fue tu culpa el accidente o la del otro conductor?",
+      day_6_pm: "Lo hago simple: responde sí, no o no estoy seguro. ¿Fuiste culpable?",
+      day_7_am: "Último intento sobre esto por ahora, [NAME]. ¿Fuiste culpable del accidente, sí, no o no estás seguro?",
+      day_7_pm: "Último mensaje de mi parte sobre esto por ahora. Si todavía quieres ayuda, responde quién tuvo la culpa."
+    },
+    after_q1: {
+      day_1_am: "Hola [NAME], William por aquí, parece que nos quedamos a medias! 🙌 Estábamos revisando tu situación. Rápido: ¿has tenido que ver a un doctor o recibir tratamiento médico desde el accidente?",
+      day_1_pm: "Hola [NAME], todavía solo necesito esta parte 🤕 ¿recibiste tratamiento médico después del accidente?",
+      day_2_am: "Hola [NAME], dando seguimiento. Ibas muy bien, literalmente falta una pregunta para tener una idea más clara. ¿Recibiste tratamiento médico después del accidente?",
+      day_2_pm: "[NAME], incluso una visita a urgencias, quiropráctico, ER o doctor importa aquí. ¿Te revisaron después del accidente?",
+      day_3_am: "[NAME], William por aquí. Estábamos muy cerca de tener el panorama completo de tu caso. ¿Has visto a un doctor desde el accidente, aunque sea una vez?",
+      day_3_pm: "Con un sí o no está bien: ¿necesitaste tratamiento médico después del accidente?",
+      day_4_am: "Hola [NAME], William por aquí. No quiero que tu archivo se detenga cuando ya empezamos. ¿Recibiste atención médica después del accidente?",
+      day_4_pm: "Todavía tratando de terminar esto para ti. ¿Hubo doctores, terapia, hospital o tratamiento después del accidente?",
+      day_5_am: "Hola [NAME], no quiero perder el avance que ya hicimos. Ya respondiste la primera pregunta y eso me dijo bastante. Solo necesito una más: ¿recibiste tratamiento médico después del accidente?",
+      day_5_pm: "[NAME], esta respuesta puede cambiar qué opciones están disponibles. ¿Recibiste tratamiento médico después del accidente?",
+      day_6_am: "Buenos días [NAME], seguimiento rápido: ¿viste a alguien médico después del accidente, aunque fuera una sola vez?",
+      day_6_pm: "Lo hago simple: responde sí, no o no estoy seguro. ¿Recibiste tratamiento médico después del accidente?",
+      day_7_am: "Hola [NAME], William por aquí. Último intento de mi parte: ¿necesitaste tratamiento médico después del accidente, sí o no?",
+      day_7_pm: "Último mensaje sobre esto por ahora, [NAME]. Si recibiste tratamiento después del accidente, responde sí y todavía puedo ayudar."
+    },
+    after_call_booking: {
+      day_1_am: "Hola [NAME] 👋, solo revisando que todo siga bien para tu llamada a las [TIME]. Responde SÍ para confirmar o dime si prefieres otra hora.",
+      day_1_pm: "Hola [NAME], todavía puedo conectarte con un Especialista 📞 ¿Qué hora te funciona mejor hoy?",
+      day_2_am: "Hola [NAME], William por aquí. Noté que no recibimos respuesta sobre tu llamada programada 📞 ¿Todavía quieres hablar con un Especialista? Puedo reagendarte rápido, ¿qué hora te funciona?",
+      day_2_pm: "[NAME], el siguiente paso es una llamada rápida con un Especialista. ¿Puedes ahora o más tarde hoy?",
+      day_3_am: "[NAME], todavía te tenemos en el sistema y queremos asegurarnos de que recibas la ayuda por la que viniste. ¿Podemos confirmar una nueva hora para tu llamada esta semana?",
+      day_3_pm: "Pregunta rápida: ¿quieres que alguien te llame hoy o mañana te funciona mejor?",
+      day_4_am: "Hola [NAME], William por aquí. No quiero que pierdas la oportunidad de recibir respuestas. ¿Qué hora funciona para una llamada rápida?",
+      day_4_pm: "Todavía mantengo esto abierto para ti. Mándame una hora y puedo conectarte con un Especialista.",
+      day_5_am: "[NAME], todavía puedo ayudarte a poner esto en el calendario. ¿Estás disponible hoy para una llamada rápida?",
+      day_5_pm: "¿A qué hora debe llamarte el Especialista, [NAME]? Incluso una ventana aproximada funciona.",
+      day_6_am: "Buenos días [NAME], revisión rápida de horario: ¿cuándo es buena hora para tu llamada con el Especialista?",
+      day_6_pm: "Responde con cualquier hora que funcione hoy o mañana y puedo ayudarte a dejar la llamada lista.",
+      day_7_am: "Hola [NAME], último intento de mi parte para programar. ¿Todavía quieres hablar con un Especialista?",
+      day_7_pm: "Último mensaje por ahora. Si todavía quieres ayuda, mándame una hora que funcione para la llamada."
+    }
+  },
+  warmFollowUpTemplates: {
+    needs_fault_answer: {
+      1: "Hola [NAME], pregunta rápida 🙌 ¿fuiste culpable del accidente o fue el otro conductor?",
+      2: "Solo necesito esta respuesta para saber cómo orientarte. ¿Fuiste culpable, no fuiste culpable o no estás seguro?",
+      3: "Estábamos justo en el primer detalle. Aunque haya sido parcialmente tu culpa, me ayuda a entender. ¿Fuiste culpable?",
+      4: "Última revisión por ahora: ¿fuiste culpable del accidente, sí, no o no estás seguro?",
+      5: "[NAME], no quiero que esto se detenga si puede haber algo aquí. ¿Fuiste culpable del accidente?",
+      6: "Voy a pausar después de esto por ahora, pero todavía necesito esta respuesta: ¿fuiste culpable?"
+    },
+    needs_medical_answer: {
+      1: "Hola [NAME], pregunta rápida 🤕 ¿necesitaste tratamiento médico después del accidente?",
+      2: "Esto es lo principal que necesito saber antes de orientarte. ¿Viste a un doctor o recibiste tratamiento?",
+      3: "Estábamos cerca de tener suficiente información. Aunque fuera urgencias, quiropráctico o una visita al doctor, ¿te revisaron?",
+      4: "Última revisión por ahora: ¿recibiste tratamiento médico después del accidente, sí o no?",
+      5: "[NAME], no quiero que esto se detenga si hay un reclamo real aquí. ¿Recibiste atención médica después del accidente?",
+      6: "Voy a pausar después de esto por ahora, pero todavía necesito esta respuesta: ¿recibiste tratamiento médico después del accidente?"
+    },
+    needs_call_time: {
+      1: "Hola [NAME], todavía puedo conectarte 📞 ¿puedes tomar una llamada ahora o más tarde hoy?",
+      2: "La llamada con el Especialista es el siguiente paso. ¿Qué hora de hoy te funciona mejor?",
+      3: "No quiero que pierdas la oportunidad de recibir respuestas. ¿Podemos hacer una llamada rápida hoy?",
+      4: "Última revisión por ahora: ¿quieres que un Especialista te llame ahora o más tarde hoy?",
+      5: "[NAME], todavía puedo mantener esto abierto. ¿Qué hora funciona para una llamada rápida con el Especialista?",
+      6: "Voy a pausar después de esto por ahora. Si quieres la llamada, mándame una hora que te funcione."
+    },
+    needs_call_time_specific: {
+      1: "Entiendo, más tarde está bien 👍 ¿A qué hora exacta te pongo?",
+      2: "Sin prisa, solo necesito la hora exacta para confirmarlo. ¿Qué hora te funciona mejor para la llamada con el Especialista? 📞",
+      3: "[NAME], todavía puedo programarlo. Mándame la hora exacta que te funcione hoy o mañana.",
+      4: "Pregunta rápida, ¿a qué hora específica debe llamarte el Especialista?",
+      5: "No quiero que esto se pierda. ¿Qué hora exacta te funciona para la llamada?",
+      6: "Voy a pausar después de esto por ahora. Cuando estés listo, mándame la hora exacta para la llamada."
+    }
+  },
+  reminderTemplates: {
+    nextDayEvening: "Hola [NAME]! 👋 Recordatorio rápido: tienes una llamada programada con tu Especialista de Accident Support Desk mañana a las [TIME]. Te llamarán desde un número local, así que mantén tu teléfono cerca 📞",
+    nextDayMorning: "Buenos días [NAME]! 👋 Recordatorio rápido: tienes una llamada programada con tu Especialista de Accident Support Desk hoy a las [TIME]. Te llamarán desde un número local, así que mantén tu teléfono cerca 💪",
+    nextDayOneHour: "Hola [NAME], soy William! Tu llamada con el Especialista es en aproximadamente una hora a las [TIME] ⏰ Te llamarán desde un número local, así que mantén tu teléfono cerca.",
+    nextDayFiveMinutes: "[NAME], tu Especialista te llamará en 5 minutos! 📞 Contesta aunque el número no te parezca familiar. Ya casi llegamos! 🏁",
+    sameDayOneHour: "Hola [NAME]! Tu llamada con el Especialista es en aproximadamente una hora a las [TIME] ⏰ Te llamarán desde un número local, así que mantén tu teléfono cerca.",
+    sameDayFiveMinutes: "[NAME], tu Especialista te llamará en 5 minutos! 📞 Contesta aunque el número no te parezca familiar. Queremos darte claridad sobre tu caso 💪"
+  },
+  missedCallTemplates: {
+    after10Minutes: "Hola [NAME], parece que no pudimos comunicarnos! Nuestro Especialista intentó llamarte a las [TIME] pero no entró la llamada. No hay problema, ¿podemos reagendar? ¿Qué hora te funciona hoy o mañana?",
+    after3Hours: "Hola [NAME], William por aquí. Solo quería asegurarme de que no pierdas la oportunidad. Un Especialista estaba listo para ti antes. Toma unos 10 minutos y puede hacer una diferencia real en tu caso. ¿Cuándo podemos intentar otra vez?",
+    nextDay: "Hola [NAME] 👋 sé que no pudimos comunicarnos ayer, pero no quiero que pierdas tu lugar. Nuestros Especialistas se llenan rápido y mantuve tu espacio lo más que pude. ¿Puedo ponerte de nuevo en el calendario hoy?"
+  },
+  noShowTemplates: {
+    sameDay10: "Hola [NAME], parece que no pudimos hablar en tu llamada con el Especialista a las [TIME] 📞 No hay problema, todavía quiero ayudarte a recibir respuestas. ¿Qué hora podemos intentar hoy?",
+    sameDay45: "[NAME], no quiero que pierdas ayuda a la que podrías tener derecho después del accidente 💰 ¿Te puedo poner de nuevo en el calendario hoy?",
+    sameDay120: "Pregunta rápida, [NAME] 🙏 nuestro Especialista apartó tiempo para ti y todavía puedo intentar reconectarte. ¿Qué hora te funciona más tarde hoy?",
+    sameDay240: "[NAME], sigo manteniendo esto abierto porque tu caso puede valer una conversación real. Responde con cualquier hora hoy o mañana para una llamada rápida.",
+    sameDayLast: "Último intento por hoy, [NAME]. No quiero que esto se pierda si todavía necesitas ayuda. ¿A qué hora debemos llamarte de nuevo? 📞",
+    day_2_am: "Buenos días [NAME] 👋 no pudimos hablar ayer, pero todavía puedo ayudarte a conectarte. ¿Qué hora te funciona hoy para tu llamada con el Especialista?",
+    day_2_pm: "[NAME], dando seguimiento para que no pierdas tu lugar. Solo toma unos minutos ver qué opciones puedes tener. ¿Podemos reagendar tu llamada hoy?",
+    day_3_am: "Hola [NAME], William por aquí. Sé que la vida se ocupa, pero no quiero que pierdas compensación a la que podrías tener derecho. ¿A qué hora puede llamar un Especialista?",
+    day_3_pm: "Todavía intentando ayudarte, [NAME] 🙏 responde con una hora hoy o mañana y puedo ponerte de nuevo en el calendario.",
+    day_4_am: "[NAME], seguimiento rápido de Accident Support Desk. Perdimos tu llamada programada, pero todavía podemos ayudar. ¿Qué hora funciona para una llamada rápida?",
+    day_4_pm: "Lo hago simple, [NAME]: mándame una hora que funcione y trataré de que un Especialista te llame otra vez 📞",
+    day_5_am: "Buenos días [NAME], todavía tengo tu archivo abierto. Si todavía quieres ayuda con el accidente, ¿a qué hora debemos llamarte?",
+    day_5_pm: "[NAME], no quiero que tu archivo se enfríe después de que ya tenías una llamada programada. ¿Estás disponible hoy o mañana?",
+    day_6_am: "Hola [NAME] 👋 todavía podemos darte respuestas. ¿Qué hora funciona para una llamada rápida con un Especialista?",
+    day_6_pm: "Revisando una vez más, [NAME]. Si todavía quieres ayuda, responde con una hora y puedo tratar de reagendarte.",
+    day_7_am: "Hola [NAME], último día que seguiré insistiendo. ¿Todavía quieres que un Especialista te llame sobre tu caso de accidente?",
+    day_7_pm: "Último mensaje por ahora, [NAME]. Si quieres ayuda, mándame una hora para la llamada y trataremos de ponerte otra vez en el calendario."
+  },
+  backupReminderTemplates: {
+    afterPrimaryMissed: "Hola [NAME], parece que no pudimos hablar a las [PRIMARY TIME] 📞 No hay problema, todavía tengo tu hora de respaldo como [BACKUP TIME]. Intentaremos llamarte entonces. Si ya no te funciona, mándame otra hora.",
+    thirtyBefore: "Recordatorio rápido [NAME], vamos a intentar llamarte en tu hora de respaldo alrededor de [BACKUP TIME] 📞 Mantén tu teléfono cerca.",
+    fiveBefore: "[NAME], tu llamada de respaldo es en unos 5 minutos 📞 Contesta aunque el número no te parezca familiar."
+  }
+};
+
+function normalizeTagForLanguage(tag) {
+  return String(tag || "")
+    .toLowerCase()
+    .replace(/^#/, "")
+    .replace(/[-_\s]+/g, " ")
+    .trim();
+}
+
+function languageTags(tags) {
+  if (!tags) return [];
+  if (Array.isArray(tags)) return tags.flatMap(languageTags);
+  if (typeof tags === "object") return [tags.name, tags.label, tags.value, tags.tag, tags.text].flatMap(languageTags).filter(Boolean);
+  const raw = String(tags || "");
+  return raw.split(",").flatMap((part) => {
+    const value = normalizeTagForLanguage(part);
+    const parts = value.split(/\s+/).filter(Boolean);
+    return parts.length > 1 ? [value, ...parts] : [value];
+  });
+}
+
+function isSpanishContact(contact = {}) {
+  if (["es", "spanish", "espanol", "español"].includes(String(contact.language || "").toLowerCase())) return true;
+  return languageTags(contact.tags).some((tag) => ["spanish", "espanol", "español", "spanish lead", "spanish funnel"].includes(tag));
+}
+
+const exactSpanishMessageMap = new Map();
+
+function addExactTranslations(english, spanish) {
+  if (typeof english === "string" && typeof spanish === "string") {
+    exactSpanishMessageMap.set(english, spanish);
+    return;
+  }
+  if (!english || !spanish || typeof english !== "object" || typeof spanish !== "object") return;
+  for (const [key, value] of Object.entries(english)) {
+    addExactTranslations(value, spanish[key]);
+  }
+}
+
+function spanishTemplate(group, key, fallback = "") {
+  const groupMap = spanishTemplates[group];
+  if (!groupMap) return fallback;
+  const value = groupMap[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function localizeDynamicSpanish(message) {
+  const raw = String(message || "");
+  if (!raw) return raw;
+  if (/^Based on what you.ve shared, we can definitely help you out!/i.test(raw) && /tomorrow or the next day/i.test(raw)) {
+    return "Por lo que me compartiste, definitivamente podemos ayudarte! 💰 El siguiente paso es conectarte con un Especialista de Accident Support Desk para crear un plan de compensación. ¿Qué hora te funciona mejor mañana o pasado mañana? 📞";
+  }
+  if (/^Based on what you.ve shared, we can definitely help you out!/i.test(raw) && /this evening or tomorrow/i.test(raw)) {
+    return "Por lo que me compartiste, definitivamente podemos ayudarte! 💰 El siguiente paso es conectarte con un Especialista de Accident Support Desk para crear un plan de compensación. ¿Puedes tomar una llamada esta tarde/noche o mañana? 📞";
+  }
+  if (/^What specific time works best for your call today or tomorrow\?/i.test(raw)) {
+    return "¿Qué hora específica te funciona mejor para tu llamada hoy o mañana?";
+  }
+  if (/^What specific time later today works best\?/i.test(raw)) {
+    return "¿Qué hora específica más tarde hoy te funciona mejor?";
+  }
+  if (/^What specific time tomorrow works best\?/i.test(raw)) {
+    return "¿Qué hora específica mañana te funciona mejor?";
+  }
+  if (/^What exact time tomorrow (morning|afternoon|evening) works best\?/i.test(raw)) {
+    const part = raw.match(/tomorrow (morning|afternoon|evening)/i)?.[1]?.toLowerCase();
+    const translated = { morning: "en la mañana", afternoon: "en la tarde", evening: "en la noche" }[part] || "";
+    return `¿Qué hora exacta mañana ${translated} te funciona mejor?`;
+  }
+  if (/^No problem, we can do tomorrow or another day/i.test(raw)) {
+    return "No hay problema, podemos hacerlo mañana u otro día 🙏 ¿Qué hora específica te funciona mejor para la llamada con el Especialista?";
+  }
+  if (/^No worries, I hope you feel better/i.test(raw)) {
+    return "No te preocupes, espero que te mejores 🙏 ¿Qué hora mañana o pasado mañana sería más fácil para una llamada rápida con el Especialista?";
+  }
+  if (/^No problem 👍 What exact time tomorrow/i.test(raw)) {
+    return raw.includes("morning")
+      ? "No hay problema 👍 ¿A qué hora exacta mañana en la mañana quieres mover tu llamada?"
+      : raw.includes("afternoon")
+        ? "No hay problema 👍 ¿A qué hora exacta mañana en la tarde quieres mover tu llamada?"
+        : raw.includes("evening")
+          ? "No hay problema 👍 ¿A qué hora exacta mañana en la noche quieres mover tu llamada?"
+          : "No hay problema 👍 ¿A qué hora exacta mañana quieres mover tu llamada?";
+  }
+  if (/^No worries at all/i.test(raw) && /were you at fault/i.test(raw)) {
+    return "No hay problema 🙏 Podemos hacerlo rápido por texto. Solo necesito unos detalles del accidente para ver si podemos ayudar. Primero, ¿fuiste culpable del accidente o fue el otro conductor?";
+  }
+  if (/^No worries at all/i.test(raw) && /medical treatment/i.test(raw)) {
+    return "No hay problema 🙏 Podemos hacerlo rápido por texto. Solo necesito unos detalles del accidente para ver si podemos ayudar. ¿Has tenido que ver a un doctor o recibir tratamiento médico después del accidente? 🤕";
+  }
+  if (/^No worries at all/i.test(raw) && /Specialist call/i.test(raw)) {
+    return "No hay problema 🙏 ¿Qué hora te funciona mejor mañana o pasado mañana para una llamada rápida con un Especialista? 📞";
+  }
+  if (/^Absolutely, we can keep this over text/i.test(raw)) {
+    return raw.replace(/^Absolutely, we can keep this over text 🙏\s*/i, "Claro, podemos seguir por texto 🙏 ");
+  }
+  return raw;
+}
+
+function localizeMessage(message, contact = {}) {
+  const raw = String(message || "");
+  if (!isSpanishContact(contact)) return raw;
+  return exactSpanishMessageMap.get(raw) || localizeDynamicSpanish(raw);
+}
+
+addExactTranslations(coldOutreachTemplates, spanishTemplates.coldOutreachTemplates);
+addExactTranslations(qualificationTemplates, spanishTemplates.qualificationTemplates);
+addExactTranslations(humanReturnTemplates, spanishTemplates.humanReturnTemplates);
+addExactTranslations(freshLeadFollowUpTemplates, spanishTemplates.freshLeadFollowUpTemplates);
+addExactTranslations(reengagementTemplates, spanishTemplates.reengagementTemplates);
+addExactTranslations(persistentReengagementTemplates, spanishTemplates.persistentReengagementTemplates);
+addExactTranslations(warmFollowUpTemplates, spanishTemplates.warmFollowUpTemplates);
+addExactTranslations(reminderTemplates, spanishTemplates.reminderTemplates);
+addExactTranslations(missedCallTemplates, spanishTemplates.missedCallTemplates);
+addExactTranslations(noShowTemplates, spanishTemplates.noShowTemplates);
+addExactTranslations(backupReminderTemplates, spanishTemplates.backupReminderTemplates);
+
 function firstName(contact = {}) {
   const raw =
     contact.firstName ||
@@ -237,7 +570,7 @@ function firstName(contact = {}) {
 }
 
 function render(template, contact, extra = {}) {
-  const rawTemplate = typeof template === "string" ? template : "";
+  const rawTemplate = localizeMessage(typeof template === "string" ? template : "", contact);
   const values = {
     NAME: firstName(contact),
     TIME: extra.time || contact.preferredCallTime || "",
@@ -259,6 +592,10 @@ module.exports = {
   missedCallTemplates,
   noShowTemplates,
   backupReminderTemplates,
+  spanishTemplates,
+  isSpanishContact,
+  localizeMessage,
+  spanishTemplate,
   render,
   firstName
 };

@@ -109,6 +109,57 @@ test("template name personalization uses first name only", () => {
   assert.equal(render("Hi [NAME]", { firstName: "SARAH", name: "Sarah Johnson" }), "Hi Sarah");
 });
 
+test("Spanish tag localizes cold outreach and qualification replies", async () => {
+  const { bot, store } = makeBot();
+  await bot.startFromNoResponseDisposition({
+    contactId: "spanish-lead",
+    name: "Maria Lopez",
+    phone: "+15550000101",
+    tags: ["NR", "Spanish"]
+  });
+
+  assert.equal(store.getContact("spanish-lead").language, "es");
+  assert.match(store.getContact("spanish-lead").lastOutboundMessage, /fecha del accidente/i);
+
+  await bot.queueInboundSms({ contactId: "spanish-lead", message: "ayer", tags: ["Spanish"] });
+  const job = Object.values(store.data.jobs).find((item) => item.contactId === "spanish-lead" && item.type === "process_inbound_buffer" && item.status === "pending");
+  await bot.runDueJob(job);
+
+  const contact = store.getContact("spanish-lead");
+  assert.equal(contact.accidentDate, "ayer");
+  assert.match(contact.lastOutboundMessage, /fuiste culpable|otro conductor/i);
+  assert.doesNotMatch(contact.lastOutboundMessage, /were you at fault/i);
+});
+
+test("Spanish tag localizes appointment reminders", async () => {
+  const { bot, store } = makeBot();
+  const startsAt = new Date(Date.now() + 65 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "spanish-reminder",
+    ghlContactId: "spanish-reminder",
+    name: "Carlos Rivera",
+    phone: "+15550000102",
+    tags: ["Spanish"],
+    language: "es",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Hoy 3:00 PM CST",
+    preferredCallTimeIso: startsAt
+  });
+  const reminder = store.addJob({
+    type: "appointment_reminder",
+    contactId: "spanish-reminder",
+    runAt: new Date().toISOString(),
+    payload: { templateKey: "sameDayOneHour" }
+  });
+
+  await bot.runDueJob(reminder);
+
+  assert.match(store.getContact("spanish-reminder").lastOutboundMessage, /llamada con el Especialista/i);
+  assert.doesNotMatch(store.getContact("spanish-reminder").lastOutboundMessage, /Specialist call is coming up/i);
+});
+
 test("GHL contact links point to GoHighLevel instead of the public bot URL", () => {
   const config = testConfig("");
   config.publicBaseUrl = "https://asdleads-sms-bot.onrender.com";
