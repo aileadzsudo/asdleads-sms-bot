@@ -2253,6 +2253,30 @@ class SmsBot {
       return this.store.getContact(contact.id);
     }
 
+    if (["reschedule_to", "move_appointment_to", "admin_reschedule"].includes(action)) {
+      const requestedTime = textValue(
+        payload.callTime ||
+          payload.call_time ||
+          payload.preferredCallTime ||
+          payload.preferred_call_time ||
+          payload.time ||
+          payload.message
+      );
+      if (!requestedTime) {
+        await this.recordDecision(contact, "skipped", "admin_reschedule_missing_time", {
+          trigger: "admin_action",
+          meta: controlMeta
+        });
+        return contact;
+      }
+      await this.recordDecision(contact, "repaired", "admin_reschedule_requested", {
+        trigger: "admin_action",
+        message: requestedTime,
+        meta: controlMeta
+      });
+      return this.handleReschedule(contact, requestedTime);
+    }
+
     if (["refresh_timezone", "fix_timezone", "timezone_refresh"].includes(action)) {
       const updated = await this.refreshTimezoneFromContact(contact, "admin_timezone_refresh");
       await this.recordDecision(updated || contact, "repaired", "timezone_refreshed", { trigger: "admin_action" });

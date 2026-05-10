@@ -968,6 +968,33 @@ test("reschedule correction remembers tomorrow when lead gives only the new time
   assert.match(store.getContact("lester-reschedule-context").lastOutboundMessage, /moved your Specialist call/i);
 });
 
+test("admin can reschedule an appointment to a supplied time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "admin-reschedule",
+    ghlContactId: "admin-reschedule",
+    name: "Admin Reschedule",
+    phone: "+15550000103",
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "old time",
+    preferredCallTimeIso: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "appt-admin-reschedule"
+  });
+
+  const contact = await bot.applyBotControl({
+    contactId: "admin-reschedule",
+    action: "reschedule_to",
+    callTime: "tomorrow at 6 pm",
+    source: "admin_contact_action"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.match(contact.preferredCallTime, /6:00 PM/);
+  assert.match(contact.lastOutboundMessage, /moved your Specialist call/i);
+});
+
 test("state correction after booking keeps the wall-clock appointment time in the corrected timezone", async () => {
   const { bot, store } = makeBot();
   const originalUpdateAppointment = ghl.updateAppointment;
