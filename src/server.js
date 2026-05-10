@@ -101,6 +101,18 @@ function safeText(value, fallback = "") {
   return fallback;
 }
 
+function requestControlMeta(req, payload = {}, source = "unknown") {
+  const forwardedFor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return {
+    controlSource: source,
+    controlActor: safeText(payload.actor || payload.admin || payload.user || payload.userName || payload.user?.name, "dashboard_admin"),
+    controlNote: safeText(payload.reason || payload.note || payload.pauseReason || payload.controlNote, ""),
+    requestPath: req.url,
+    requestIp: forwardedFor || req.socket?.remoteAddress || "",
+    userAgent: String(req.headers["user-agent"] || "").slice(0, 200)
+  };
+}
+
 function leadSourceInfo(contact = {}) {
   const raw =
     contact.leadSource ||
@@ -401,6 +413,12 @@ function summarizeContact(contact, jobsByContact, messagesByContact, escalations
     currentSequenceDay: contact.currentSequenceDay,
     automationPaused: contact.automationPaused,
     automationPauseReason: contact.automationPauseReason,
+    lastAutomationPauseAt: contact.lastAutomationPauseAt,
+    lastAutomationPauseSource: contact.lastAutomationPauseSource,
+    lastAutomationPauseActor: contact.lastAutomationPauseActor,
+    lastAutomationPauseNote: contact.lastAutomationPauseNote,
+    lastAutomationPauseAction: contact.lastAutomationPauseAction,
+    lastAutomationPauseRequestPath: contact.lastAutomationPauseRequestPath,
     humanEscalationStatus: contact.humanEscalationStatus,
     humanEscalationStage: contact.humanEscalationStage,
     escalationReason: contact.escalationReason,
@@ -867,6 +885,29 @@ async function dashboardMetrics() {
   const missingTimezone = contacts.filter((contact) => !contact.timezone);
   const paused = contacts.filter((contact) => contact.automationPaused);
   const contactSummaries = contacts.map((contact) => summarizeContact(contact, jobsByContact, messagesByContact, escalationsByContact, decisionLogsByContact));
+  const pausedContacts = contactSummaries
+    .filter((contact) => contact.automationPaused)
+    .sort((a, b) => new Date(b.lastAutomationPauseAt || b.lastActivityAt || 0) - new Date(a.lastAutomationPauseAt || a.lastActivityAt || 0));
+  const pauseAudit = decisionLogs
+    .filter((log) => log.action === "paused" || /pause|human_acknowledged|human_outbound|human_call/i.test(log.reason || ""))
+    .map((log) => {
+      const contact = contactsById.get(log.contactId) || {};
+      const meta = log.meta || {};
+      return {
+        ...log,
+        name: contact.name || "",
+        phone: contact.phone || "",
+        contactId: log.contactId,
+        ghlContactLink: contact.ghlContactLink || "",
+        source: meta.source || contact.lastAutomationPauseSource || "unknown",
+        actor: meta.actor || contact.lastAutomationPauseActor || "",
+        note: meta.note || contact.lastAutomationPauseNote || "",
+        rawAction: meta.rawAction || contact.lastAutomationPauseAction || "",
+        requestPath: meta.requestPath || contact.lastAutomationPauseRequestPath || ""
+      };
+    })
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .slice(0, 150);
   const hotLeads = contactSummaries
     .filter((contact) => contact.riskScore >= 35 && !contact.automationPaused && contact.engagementStatus !== "opted_out")
     .sort((a, b) => b.riskScore - a.riskScore || new Date(b.lastActivityAt || 0) - new Date(a.lastActivityAt || 0))
@@ -1002,7 +1043,11 @@ async function dashboardMetrics() {
         id: contact.id,
         name: contact.name,
         phone: contact.phone,
-        reason: contact.automationPauseReason
+        reason: contact.automationPauseReason,
+        source: contact.lastAutomationPauseSource || "unknown",
+        actor: contact.lastAutomationPauseActor || "",
+        pausedAt: contact.lastAutomationPauseAt || "",
+        note: contact.lastAutomationPauseNote || ""
       }))
     },
     funnel: lifecycleFunnel(contacts),
@@ -1014,6 +1059,8 @@ async function dashboardMetrics() {
     sourcePerformance: sourcePerformance(contacts),
     timezoneHeatmap: timezoneHeatmap(messages, contactsById),
     scanner: scannerOutput(contactSummaries, jobs),
+    pausedContacts,
+    pauseAudit,
     recentDecisionLogs: decisionLogs
       .slice()
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -1783,7 +1830,10 @@ const server = http.createServer(async (req, res) => {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
         return;
       }
-      const contact = await bot.applyBotControl(payload);
+      const contact = await bot.applyBotControl({
+        ...payload,
+        ...requestControlMeta(req, payload, "ghl_bot_control_webhook")
+      });
       send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
       return;
     }
@@ -1817,7 +1867,11 @@ const server = http.createServer(async (req, res) => {
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
         return;
       }
-      const contact = await bot.applyBotControl({ ...payload, action: payload.action || "call_started" });
+      const contact = await bot.applyBotControl({
+        ...payload,
+        action: payload.action || "call_started",
+        ...requestControlMeta(req, payload, "ghl_human_active_webhook")
+      });
       send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
       return;
     }
@@ -1923,7 +1977,11 @@ const server = http.createServer(async (req, res) => {
           "return-to-bot": "return_to_bot",
           "pause-bot": "pause_bot"
         }[section];
-        const contact = await bot.applyBotControl({ contactId, action });
+        const contact = await bot.applyBotControl({
+          contactId,
+          action,
+          ...requestControlMeta(req, {}, "dashboard_contact_shortcut")
+        });
         if (!contact) {
           send(res, 404, { ok: false, error: "contact not found" });
           return;
@@ -2097,7 +2155,8 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJson(req);
       const contact = await bot.applyBotControl({
         contactId: payload.contactId,
-        action: payload.action
+        action: payload.action,
+        ...requestControlMeta(req, payload, "admin_contact_action")
       });
       if (!contact) {
         send(res, 404, { ok: false, error: "contact not found" });
@@ -2138,7 +2197,11 @@ const server = http.createServer(async (req, res) => {
       const contactIds = Array.isArray(payload.contactIds) ? payload.contactIds.slice(0, 100) : [];
       const results = [];
       for (const contactId of contactIds) {
-        const contact = await bot.applyBotControl({ contactId, action: payload.action });
+        const contact = await bot.applyBotControl({
+          contactId,
+          action: payload.action,
+          ...requestControlMeta(req, payload, "admin_bulk_contact_action")
+        });
         results.push({ contactId, ok: Boolean(contact), status: contact?.engagementStatus || "" });
       }
       send(res, 200, { ok: true, results });
@@ -2325,7 +2388,8 @@ const server = http.createServer(async (req, res) => {
         name: payload.name,
         phone: payload.phone,
         timezone: payload.timezone,
-        leadSource: payload.leadSource
+        leadSource: payload.leadSource,
+        ...requestControlMeta(req, payload, "local_tester")
       });
       send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
       return;

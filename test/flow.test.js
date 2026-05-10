@@ -1875,16 +1875,54 @@ test("admin pause stops bot automation without marking opt-out", async () => {
   });
   store.addJob({ type: "warm_followup", contactId: "admin-pause", runAt: new Date().toISOString(), payload: { step: 1 } });
 
-  const contact = await bot.applyBotControl({ contactId: "admin-pause", action: "pause_bot" });
+  const contact = await bot.applyBotControl({
+    contactId: "admin-pause",
+    action: "pause_bot",
+    controlSource: "admin_contact_action",
+    controlActor: "dashboard_admin",
+    controlNote: "debug pause",
+    requestPath: "/api/admin/contact/action"
+  });
 
   assert.equal(contact.automationPaused, true);
   assert.equal(contact.automationPauseReason, "admin_pause");
+  assert.equal(contact.lastAutomationPauseSource, "admin_contact_action");
+  assert.equal(contact.lastAutomationPauseActor, "dashboard_admin");
+  assert.equal(contact.lastAutomationPauseNote, "debug pause");
+  assert.equal(contact.lastAutomationPauseRequestPath, "/api/admin/contact/action");
   assert.equal(contact.optOutStatus, undefined);
   assert.equal(contact.humanEscalationStage, "admin_paused");
+  const pauseLog = store.listDecisionLogs("admin-pause").find((log) => log.reason === "admin_pause");
+  assert.equal(pauseLog.meta.source, "admin_contact_action");
+  assert.equal(pauseLog.meta.note, "debug pause");
   assert.equal(
     Object.values(store.data.jobs).some((job) => job.contactId === "admin-pause" && job.status === "pending"),
     false
   );
+});
+
+test("GHL bot-control webhook cannot create an admin pause", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "webhook-pause-block",
+    ghlContactId: "webhook-pause-block",
+    name: "Webhook Pause",
+    phone: "+15550000101",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+
+  const contact = await bot.applyBotControl({
+    contactId: "webhook-pause-block",
+    action: "pause_bot",
+    controlSource: "ghl_bot_control_webhook"
+  });
+
+  assert.equal(contact.automationPaused, undefined);
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  const pauseLog = store.listDecisionLogs("webhook-pause-block").find((log) => log.reason === "admin_pause_blocked_from_non_admin_source");
+  assert.equal(pauseLog.action, "skipped");
+  assert.equal(pauseLog.meta.source, "ghl_bot_control_webhook");
 });
 
 test("return to bot resumes saved qualification progress", async () => {

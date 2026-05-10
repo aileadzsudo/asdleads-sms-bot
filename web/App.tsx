@@ -8,6 +8,7 @@ import { CommandCenter } from "./pages/CommandCenter";
 import { Conversations } from "./pages/Conversations";
 import { IssuesOps } from "./pages/IssuesOps";
 import { LifecycleMap } from "./pages/LifecycleMap";
+import { PauseAudit } from "./pages/PauseAudit";
 import { PerformanceOps } from "./pages/PerformanceOps";
 import { TemplatesOps } from "./pages/TemplatesOps";
 import type { DashboardData } from "./types";
@@ -40,6 +41,7 @@ function AppLogin({ onLogin }: { onLogin: () => void }) {
 function pageFor(active: string, data?: DashboardData): ReactNode {
   if (active === "conversations" || active === "leads" || active === "inbox") return <Conversations />;
   if (active === "issues" || active === "review") return <IssuesOps />;
+  if (active === "pauses" || active === "pause-audit") return <PauseAudit data={data} />;
   if (active === "appointments") return <AppointmentsOps data={data} />;
   if (active === "performance") return <PerformanceOps data={data} />;
   if (active === "templates" || active === "ab-testing") return <TemplatesOps data={data} />;

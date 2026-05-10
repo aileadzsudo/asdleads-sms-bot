@@ -41,6 +41,12 @@ export type ContactSummary = {
   escalationReason?: string;
   automationPaused?: boolean;
   automationPauseReason?: string;
+  lastAutomationPauseAt?: string;
+  lastAutomationPauseSource?: string;
+  lastAutomationPauseActor?: string;
+  lastAutomationPauseNote?: string;
+  lastAutomationPauseAction?: string;
+  lastAutomationPauseRequestPath?: string;
   lastInboundMessage?: string;
   lastOutboundMessage?: string;
   lastActivityAt?: string;
@@ -114,6 +120,8 @@ export type DashboardData = {
   recentContacts?: ContactSummary[];
   recentMessages?: Message[];
   recentDecisionLogs?: DecisionLog[];
+  pausedContacts?: ContactSummary[];
+  pauseAudit?: any[];
   scanner?: any;
   timezoneHeatmap?: any[];
 };

@@ -512,6 +512,12 @@ function canAutoResumeHumanScheduling(contact, text, config) {
   return Boolean(looksLikeCallScheduling(text) && parseCallTime(text, schedulingContact, config));
 }
 
+function canApplyAdminPause(controlMeta = {}) {
+  return ["admin_contact_action", "admin_bulk_contact_action", "dashboard_contact_shortcut", "local_tester"].includes(
+    controlMeta.source
+  );
+}
+
 function needsQualificationReply(contact) {
   return [QUALIFICATION.NEEDS_FAULT, QUALIFICATION.NEEDS_MEDICAL, QUALIFICATION.NEEDS_CALL_TIME].includes(
     contact?.qualificationProgress
@@ -1856,7 +1862,7 @@ class SmsBot {
 
   async applyBotControl(payload) {
     const normalized = normalizePayload(payload, this.config);
-    const action = normalize(
+    const rawAction =
       payload.action ||
         payload.botControl ||
         payload.bot_control ||
@@ -1865,8 +1871,17 @@ class SmsBot {
         payload.status ||
         payload.control ||
         actionFromTags(payload.tags || payload.contactTags || payload.tag || payload.contact?.tags) ||
-        ""
-    ).replace(/\s+/g, "_");
+        "";
+    const action = normalize(rawAction).replace(/\s+/g, "_");
+    const controlMeta = {
+      source: textValue(payload.controlSource || payload.source || "unknown"),
+      actor: textValue(payload.controlActor || payload.actor || payload.user?.name || payload.user || ""),
+      note: textValue(payload.controlNote || payload.reason || payload.note || ""),
+      rawAction: textValue(rawAction),
+      requestPath: textValue(payload.requestPath || ""),
+      requestIp: textValue(payload.requestIp || ""),
+      userAgent: textValue(payload.userAgent || "")
+    };
     const contact = await this.store.getContact(normalized.id);
     if (!contact) return null;
 
@@ -1895,7 +1910,8 @@ class SmsBot {
       await this.recordDecision(updated, "paused", "human_acknowledged", {
         trigger: "admin_action",
         beforeStatus: contact.engagementStatus || "",
-        afterStatus: updated.engagementStatus || ""
+        afterStatus: updated.engagementStatus || "",
+        meta: controlMeta
       });
       return updated;
     }
@@ -1914,7 +1930,8 @@ class SmsBot {
       await this.recordDecision(updated, "repaired", "returned_to_bot", {
         trigger: "admin_action",
         beforeStatus: contact.engagementStatus || "",
-        afterStatus: updated.engagementStatus || ""
+        afterStatus: updated.engagementStatus || "",
+        meta: controlMeta
       });
       if (updated.lastInboundMessage && updated.qualificationProgress === QUALIFICATION.NEEDS_FAULT) {
         let resumeContact = updated;
@@ -1949,13 +1966,30 @@ class SmsBot {
     }
 
     if (["pause_bot", "manual_pause", "admin_pause"].includes(action)) {
+      if (!canApplyAdminPause(controlMeta)) {
+        await this.recordDecision(contact, "skipped", "admin_pause_blocked_from_non_admin_source", {
+          trigger: "bot_control",
+          beforeStatus: contact.engagementStatus || "",
+          afterStatus: contact.engagementStatus || "",
+          meta: controlMeta
+        });
+        return contact;
+      }
       const updated = await this.store.upsertContact({
         ...contact,
         automationPaused: true,
         automationPauseReason: "admin_pause",
         humanEscalationStatus: true,
         humanEscalationStage: "admin_paused",
-        engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN
+        engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+        lastAutomationPauseAt: new Date().toISOString(),
+        lastAutomationPauseReason: "admin_pause",
+        lastAutomationPauseSource: controlMeta.source,
+        lastAutomationPauseActor: controlMeta.actor,
+        lastAutomationPauseNote: controlMeta.note,
+        lastAutomationPauseAction: controlMeta.rawAction,
+        lastAutomationPauseRequestPath: controlMeta.requestPath,
+        lastAutomationPauseUserAgent: controlMeta.userAgent
       });
       await this.store.cancelJobsForContact(updated.id, "admin pause");
       await this.store.addEscalation({
@@ -1966,7 +2000,8 @@ class SmsBot {
       await this.recordDecision(updated, "paused", "admin_pause", {
         trigger: "admin_action",
         beforeStatus: contact.engagementStatus || "",
-        afterStatus: updated.engagementStatus || ""
+        afterStatus: updated.engagementStatus || "",
+        meta: controlMeta
       });
       return updated;
     }

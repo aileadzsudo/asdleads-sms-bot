@@ -60,6 +60,8 @@ export function ContactControls({
           <dt>Timezone</dt><dd>{contact.timezone || "-"} <small>({contact.timezoneSource || "unknown"})</small></dd>
           <dt>Next job</dt><dd>{contact.nextScheduledJob ? `${contact.nextScheduledJob.type} at ${when(contact.nextScheduledJob.runAt)}` : "-"}</dd>
           <dt>Last decision</dt><dd>{contact.lastBotDecision ? `${clean(contact.lastBotDecision.action)}: ${contact.lastBotDecision.reason || "-"}` : "-"}</dd>
+          <dt>Pause source</dt><dd>{contact.automationPaused ? `${clean(contact.lastAutomationPauseSource || "unknown")} at ${when(contact.lastAutomationPauseAt)}` : "-"}</dd>
+          <dt>Pause note</dt><dd>{contact.automationPaused ? shortBody(contact.lastAutomationPauseNote, 80) : "-"}</dd>
         </dl>
       </Panel>
 

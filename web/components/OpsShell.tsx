@@ -6,6 +6,7 @@ export const navItems = [
   { id: "overview", label: "Command", href: "/dashboard" },
   { id: "conversations", label: "Conversations", href: "/dashboard/conversations" },
   { id: "issues", label: "Issues", href: "/dashboard/issues" },
+  { id: "pauses", label: "Pause Audit", href: "/dashboard/pauses" },
   { id: "appointments", label: "Appointments", href: "/dashboard/appointments" },
   { id: "performance", label: "Performance", href: "/dashboard/performance" },
   { id: "templates", label: "Templates", href: "/dashboard/templates" },
