@@ -2431,6 +2431,37 @@ class SmsBot {
       return this.store.getContact(contact.id);
     }
 
+    if (["silent_appointment_sync", "sync_appointment_silent", "repair_appointment_sync"].includes(action)) {
+      const startTime = textValue(
+        payload.startTime ||
+          payload.start_time ||
+          payload.startsAt ||
+          payload.starts_at ||
+          payload.preferredCallTime ||
+          payload.preferred_call_time ||
+          payload.time
+      );
+      if (!startTime) {
+        await this.recordDecision(contact, "skipped", "silent_appointment_sync_missing_time", {
+          trigger: "admin_action",
+          meta: controlMeta
+        });
+        return contact;
+      }
+      await this.recordDecision(contact, "repaired", "silent_appointment_sync_requested", {
+        trigger: "admin_action",
+        message: startTime,
+        meta: controlMeta
+      });
+      return this.syncAppointment({
+        contactId: contact.id,
+        appointmentId: payload.appointmentId || payload.appointment_id || contact.appointmentId || "",
+        startTime,
+        status: payload.status || "confirmed",
+        suppressAlert: true
+      });
+    }
+
     if (["reschedule_to", "move_appointment_to", "admin_reschedule"].includes(action)) {
       const requestedTime = textValue(
         payload.callTime ||

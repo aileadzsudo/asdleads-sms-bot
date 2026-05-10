@@ -1046,6 +1046,36 @@ test("admin can reschedule an appointment to a supplied time", async () => {
   assert.match(contact.lastOutboundMessage, /moved your Specialist call/i);
 });
 
+test("admin can silently repair a bad appointment sync without changing booking alert", async () => {
+  const { bot, store } = makeBot();
+  const originalAlertAt = "2026-05-10T23:23:20.000Z";
+  store.upsertContact({
+    id: "admin-silent-sync",
+    ghlContactId: "admin-silent-sync",
+    name: "Admin Silent Sync",
+    phone: "+15550000081",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Mon, May 11, 5:00 AM CST",
+    preferredCallTimeIso: "2026-05-11T10:00:00.000Z",
+    appointmentId: "bad-id",
+    bookingAlertSentAt: originalAlertAt
+  });
+
+  const contact = await bot.applyBotControl({
+    contactId: "admin-silent-sync",
+    action: "silent_appointment_sync",
+    appointmentId: "fixed-id",
+    startTime: "2026-05-11T10:00:00"
+  });
+
+  assert.equal(contact.preferredCallTimeIso, "2026-05-11T15:00:00.000Z");
+  assert.match(contact.preferredCallTime, /10:00 AM CST/);
+  assert.equal(contact.appointmentId, "fixed-id");
+  assert.equal(contact.bookingAlertSentAt, originalAlertAt);
+});
+
 test("state correction after booking keeps the wall-clock appointment time in the corrected timezone", async () => {
   const { bot, store } = makeBot();
   const originalUpdateAppointment = ghl.updateAppointment;
