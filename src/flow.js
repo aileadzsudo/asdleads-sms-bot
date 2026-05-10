@@ -2551,7 +2551,8 @@ class SmsBot {
       } else if (/\btomorrow\b/.test(normalizedText) || parsed.preferredDay === "tomorrow") {
         question = "What specific time tomorrow works best?";
       } else if (parsed.preferredDay === "weekday" && parsed.preferredDayLabel) {
-        question = `What specific time ${parsed.preferredDayLabel} works best?`;
+        const weekday = `${parsed.preferredDayLabel[0].toUpperCase()}${parsed.preferredDayLabel.slice(1)}`;
+        question = `What specific time ${weekday} works best?`;
       } else if (/\b(today|later today|tonight)\b/.test(normalizedText)) {
         question = "What specific time later today works best?";
       }
