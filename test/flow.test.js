@@ -178,6 +178,159 @@ test("long fault answer is saved instead of escalated as detailed information", 
   assert.match(store.getContact("long-fault").lastOutboundMessage, /medical treatment/i);
 });
 
+test("fresh NR enrollment sends the initial cold message immediately even outside texting hours", async () => {
+  const { bot, store } = makeBot();
+  bot.config.texting.defaultStart = "23:59";
+  bot.config.texting.defaultEnd = "00:00";
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "fresh-quiet",
+    name: "Andrea",
+    phone: "+15550000092"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.INITIAL_SMS_SENT);
+  assert.match(store.getContact("fresh-quiet").lastOutboundMessage, /date of the accident/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "fresh-quiet" && job.type === "initial_sms" && job.status === "pending"),
+    false
+  );
+});
+
+test("repeat NR after call-now no answer uses recovery scheduling instead of restarting cold outreach", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "call-now-missed",
+    ghlContactId: "call-now-missed",
+    name: "Chelesy West",
+    phone: "+15550000093",
+    engagementStatus: ENGAGEMENT.READY_FOR_CALL,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes",
+    humanEscalationStatus: true,
+    escalationReason: "call_now",
+    lastOutboundMessage: "Perfect! I'm connecting you with a Specialist right now"
+  });
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "call-now-missed",
+    name: "Chelesy West",
+    phone: "+15550000093",
+    disposition: "NR"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("call-now-missed").qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.match(store.getContact("call-now-missed").lastOutboundMessage, /tried giving you a call/i);
+  assert.doesNotMatch(store.getContact("call-now-missed").lastOutboundMessage, /looking over your accident info/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "call-now-missed" && job.type === "warm_followup" && job.status === "pending"),
+    true
+  );
+});
+
+test("stale warm follow-up is skipped when qualification progress already advanced", async () => {
+  const { bot, store } = makeBot();
+  const oldOutbound = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "stale-warm",
+    ghlContactId: "stale-warm",
+    name: "Mary Brown",
+    phone: "+15550000094",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "no",
+    lastOutboundTimestamp: oldOutbound,
+    lastResponseTimestamp: new Date().toISOString()
+  });
+  const job = store.addJob({
+    type: "warm_followup",
+    contactId: "stale-warm",
+    runAt: new Date().toISOString(),
+    payload: {
+      step: 3,
+      expectedProgress: QUALIFICATION.NEEDS_MEDICAL,
+      baseOutboundTimestamp: oldOutbound
+    }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "stale_warm_followup_progress_changed");
+  assert.equal(store.getContact("stale-warm").lastOutboundMessage, undefined);
+});
+
+test("not-today replies ask for another day instead of pushing later today", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "not-today",
+    ghlContactId: "not-today",
+    name: "Cornellius",
+    phone: "+15550000095",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "not-today", message: "Today is not tha day" });
+
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.match(store.getContact("not-today").lastOutboundMessage, /tomorrow or another day/i);
+  assert.doesNotMatch(store.getContact("not-today").lastOutboundMessage, /later today/i);
+});
+
+test("LLM call_later date-only output asks for exact time instead of booking a random time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "bare-tomorrow",
+    ghlContactId: "bare-tomorrow",
+    name: "Dejee",
+    phone: "+15550000096",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+
+  const contact = await bot.applyLlmClassification(store.getContact("bare-tomorrow"), {
+    label: "call_later",
+    confidence: 0.9,
+    normalized_value: "2026-05-10",
+    reason: "Lead wants a call tomorrow but did not give a time."
+  }, "I'll call tomorrow");
+
+  assert.equal(contact.appointmentId, undefined);
+  assert.equal(store.getContact("bare-tomorrow").awaitingSpecificCallTime, true);
+  assert.match(store.getContact("bare-tomorrow").lastOutboundMessage, /specific time tomorrow/i);
+});
+
+test("settlement or offer details at call stage escalate instead of becoming an appointment time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "money-not-time",
+    ghlContactId: "money-not-time",
+    name: "Kipshowbe",
+    phone: "+15550000097",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "money-not-time",
+    message: "I got a bad MRI. They tried to offer me $23,000, but I turned it down"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(store.getContact("money-not-time").appointmentId, undefined);
+  assert.equal(store.getContact("money-not-time").escalationReason, "detailed_information");
+});
+
 test("acknowledgement LLM path schedules warm follow-ups after repeating current question", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

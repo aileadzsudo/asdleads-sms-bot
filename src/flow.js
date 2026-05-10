@@ -20,7 +20,9 @@ const {
   classifyHumanContextIntent,
   parseAccidentDate,
   parseCallTime,
-  parseExpectedAnswer
+  parseExpectedAnswer,
+  isNotTodayAvailability,
+  hasClockTimeSignal
 } = require("./classifier");
 const { classifyWithLlm } = require("./llmClassifier");
 const {
@@ -444,7 +446,9 @@ function isSoftEscalationReason(reason = "") {
     "low_confidence_answer",
     "llm_needs_escalation",
     "llm_unhandled_needs_escalation",
-    "llm_unknown"
+    "llm_unknown",
+    "llm_confused",
+    "llm_unhandled_confused"
   ].includes(String(reason || ""));
 }
 
@@ -474,6 +478,8 @@ function canAutoReturnUnacknowledgedEscalation(contact, job = {}) {
     "llm_unhandled_needs_escalation",
     "llm_low_confidence_answer",
     "llm_unhandled_unknown",
+    "llm_confused",
+    "llm_unhandled_confused",
     "llm_call_time_unknown",
     "message_after_bot_paused"
   ].includes(reason);
@@ -638,6 +644,35 @@ function backupReminderTargetIso(contact, config) {
 function looksLikeInjuryContext(text) {
   const t = normalize(text);
   return /\b(injury|injuries|injured|hurt|hurting|pain|painful|sore|soreness|neck|back|shoulder|headache|whiplash|hospital|er|urgent care|doctor|medical|treatment)\b/.test(t);
+}
+
+function looksLikeDetailedLegalOrInsuranceInfo(text) {
+  const t = normalize(text);
+  return (
+    /\b(they|insurance|adjuster|company)\s+(offered|offer|offering|tried to offer)\b/.test(t) ||
+    /\b(settlement|settle|settled|claim offer|insurance offer)\b/.test(t) ||
+    /\$\s*\d/.test(String(text || "")) ||
+    /\b\d{1,3},\d{3,}\b/.test(t)
+  );
+}
+
+function shouldBypassQuietHoursForInitialJob(job = {}) {
+  return job.type === "initial_sms" && ["fresh", "fresh_retry"].includes(job.payload?.source);
+}
+
+function shouldTreatNoResponseAsCallNoAnswer(existing = {}) {
+  if (!existing || existing.optOutStatus || existing.automationPaused) return false;
+  if (existing.engagementStatus === ENGAGEMENT.READY_FOR_CALL) return true;
+  if (existing.humanEscalationStatus && /call_now|ready_for_call/i.test(existing.escalationReason || existing.humanEscalationStage || "")) {
+    return true;
+  }
+  if (
+    existing.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME &&
+    (existing.faultAnswer || existing.medicalTreatmentAnswer || /specialist|call|phone/i.test(existing.lastOutboundMessage || ""))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isPermanentSmsBlockError(error) {
@@ -1137,6 +1172,10 @@ class SmsBot {
     await this.store.cancelJobsForContact(contact.id, "new warm follow-up scheduled", (job) =>
       ["warm_followup", "enter_reengagement"].includes(job.type)
     );
+    const guard = {
+      expectedProgress: contact.qualificationProgress || "",
+      baseOutboundTimestamp: contact.lastOutboundTimestamp || new Date().toISOString()
+    };
     if (afterHours) {
       const warmRunAt = addMinutes(new Date(), 15);
       const reengagementRunAt = nextTextingWindow(contact, this.config, addMinutes(new Date(), 16));
@@ -1144,13 +1183,13 @@ class SmsBot {
         type: "warm_followup",
         contactId: contact.id,
         runAt: warmRunAt.toISOString(),
-        payload: { step: 1, minutes: 15, afterHours: true }
+        payload: { step: 1, minutes: 15, afterHours: true, ...guard }
       });
       await this.store.addJob({
         type: "enter_reengagement",
         contactId: contact.id,
         runAt: (reengagementRunAt > warmRunAt ? reengagementRunAt : addMinutes(warmRunAt, 1)).toISOString(),
-        payload: { afterHours: true }
+        payload: { afterHours: true, ...guard }
       });
       return;
     }
@@ -1159,14 +1198,14 @@ class SmsBot {
         type: "warm_followup",
         contactId: contact.id,
         runAt: addMinutes(new Date(), minutes).toISOString(),
-        payload: { step: index + 1, minutes }
+        payload: { step: index + 1, minutes, ...guard }
       });
     }
     await this.store.addJob({
       type: "enter_reengagement",
       contactId: contact.id,
       runAt: addMinutes(new Date(), 24 * 60).toISOString(),
-      payload: {}
+      payload: { ...guard }
     });
   }
 
@@ -1262,8 +1301,43 @@ class SmsBot {
   }
 
   async startFromNoResponseDisposition(payload) {
+    const normalized = normalizePayload(payload, this.config);
+    const existing = await this.store.getContact(normalized.id);
+    if (shouldTreatNoResponseAsCallNoAnswer(existing)) {
+      let contact = await this.store.upsertContact({
+        ...existing,
+        ...normalized,
+        timezone: chooseContactTimezone(existing, normalized, this.config),
+        engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+        humanEscalationStatus: false,
+        humanEscalationStage: "call_now_no_answer",
+        automationPaused: false,
+        automationPauseReason: "",
+        awaitingSpecificCallTime: true,
+        awaitingBackupTime: false,
+        currentSequenceName: "call_now_no_answer"
+      });
+      await this.store.cancelJobsForContact(contact.id, "call-now no-answer disposition", (job) =>
+        BOT_SEQUENCE_JOB_TYPES.includes(job.type) || job.type === "human_escalation_sla" || job.type === "human_reply_timeout"
+      );
+      contact = await this.hydrateContactTags(contact);
+      if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
+      if (hasNqTag(contact)) return this.stopForNqTag(contact);
+      if (hasManualHumanHoldTag(contact)) return this.stopForManualHoldTag(contact);
+      const sent = await this.sendBotMessage(contact, render(qualificationTemplates.callNowNoAnswer, contact), {
+        bypassQuietHours: true,
+        templateGroup: "qualificationTemplates",
+        templateKey: "callNowNoAnswer"
+      });
+      const latest = sent || (await this.store.getContact(contact.id)) || contact;
+      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+      await this.recordDecision(latest, "sent", "call_now_no_answer_recovery", { trigger: "no_response_disposition" });
+      return latest;
+    }
+
     const contact = await this.store.upsertContact({
-      ...normalizePayload(payload, this.config),
+      ...normalized,
       engagementStatus: ENGAGEMENT.CALLED_NO_ANSWER,
       qualificationProgress: payload.qualificationProgress || QUALIFICATION.NEEDS_FAULT,
       optOutStatus: false,
@@ -1286,16 +1360,11 @@ class SmsBot {
     if (hasNqTag(hydrated)) return this.stopForNqTag(hydrated);
     if (hasManualHumanHoldTag(hydrated)) return this.stopForManualHoldTag(hydrated);
     const initial = render(coldOutreachTemplates.day_1_am, contact);
-    if (!isWithinTextingWindow(contact, this.config)) {
-      await this.store.addJob({
-        type: "initial_sms",
-        contactId: contact.id,
-        runAt: nextTextingWindow(contact, this.config).toISOString(),
-        payload: { templateKey: "day_1_am", source: "fresh" }
-      });
-      return contact;
-    }
-    const sent = await this.sendBotMessage(contact, initial);
+    const sent = await this.sendBotMessage(contact, initial, {
+      bypassQuietHours: true,
+      templateGroup: "coldOutreachTemplates",
+      templateKey: "day_1_am"
+    });
     if (!sent) {
       const latest = (await this.store.getContact(contact.id)) || contact;
       if (
@@ -2179,7 +2248,11 @@ class SmsBot {
     }
 
     if (classification.label === "call_later") {
-      return this.handleCallTime(contact, classification.normalized_value || inboundText);
+      const candidate =
+        classification.normalized_value && hasClockTimeSignal(classification.normalized_value)
+          ? classification.normalized_value
+          : inboundText;
+      return this.handleCallTime(contact, candidate);
     }
 
     if (classification.label === "prefers_text" || classification.label === "acknowledgement") {
@@ -2263,6 +2336,10 @@ class SmsBot {
     }
     const parsed = parseCallTime(text, contact, this.config);
     if (!parsed) {
+      if (looksLikeDetailedLegalOrInsuranceInfo(text)) {
+        await this.escalate(contact, "detailed_information");
+        return this.store.getContact(contact.id);
+      }
       if (looksLikeInjuryContext(text)) {
         const sent = await this.sendBotMessage(contact, qualificationTemplates.injuryContextCallAsk, { bypassQuietHours: true });
         const latest = sent || (await this.store.getContact(contact.id)) || contact;
@@ -2278,8 +2355,13 @@ class SmsBot {
       contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true });
       const normalizedText = normalize(text);
       let question = relativeTimeClarification(parsed, contact, this.config) || "What specific time works best for your call today or tomorrow?";
-      if (/\btomorrow\b/.test(normalizedText)) question = "What specific time tomorrow works best?";
-      if (/\b(today|later today|tonight)\b/.test(normalizedText)) question = "What specific time later today works best?";
+      if (parsed.preferredDay === "tomorrow_or_later" || isNotTodayAvailability(normalizedText)) {
+        question = "No problem, we can do tomorrow or another day 🙏 What specific time works best for the Specialist call?";
+      } else if (/\btomorrow\b/.test(normalizedText) || parsed.preferredDay === "tomorrow") {
+        question = "What specific time tomorrow works best?";
+      } else if (/\b(today|later today|tonight)\b/.test(normalizedText)) {
+        question = "What specific time later today works best?";
+      }
       if (/\b(sick|surgery|bed|not feeling well|recovering|hospital|pain)\b/.test(normalizedText)) {
         question = "No worries, I hope you feel better 🙏 What time tomorrow or the next day would be easiest for a quick Specialist call?";
       }
@@ -2295,18 +2377,18 @@ class SmsBot {
       humanEscalationStatus: true,
       awaitingSpecificCallTime: false
       });
-      await this.sendBotMessage(updated, qualificationTemplates.callNow, { bypassQuietHours: true });
-      try {
-        await slack.sendUrgentCallNow(this.config, updated);
-      } catch (error) {
-        await this.notifyBotError("Slack urgent call-now alert failed", {
+      const slackPromise = slack.sendUrgentCallNow(this.config, updated).catch((error) =>
+        this.notifyBotError("Slack urgent call-now alert failed", {
           Name: updated.name || "unknown",
           Phone: updated.phone || "unknown",
           "GHL contact": updated.ghlContactId || updated.id,
           Error: error.message
-        });
-      }
-      return updated;
+        })
+      );
+      const smsPromise = this.sendBotMessage(updated, qualificationTemplates.callNow, { bypassQuietHours: true });
+      const results = await Promise.allSettled([slackPromise, smsPromise]);
+      const sentResult = results[1];
+      return sentResult.status === "fulfilled" && sentResult.value ? sentResult.value : updated;
     }
     const startsAt = parsed.startsAt;
     const endsAt = addMinutes(new Date(startsAt), 15).toISOString();
@@ -3001,6 +3083,25 @@ class SmsBot {
       if (
         contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN &&
         contact.humanEscalationStatus &&
+        contact.humanEscalationStage === "human_replied_waiting" &&
+        contact.lastHumanOutboundAt &&
+        !hasPendingJob(jobs, ["human_reply_timeout"]) &&
+        Date.now() - new Date(contact.lastHumanOutboundAt).getTime() >= HUMAN_REPLY_TIMEOUT_MINUTES * 60 * 1000
+      ) {
+        const resumed = await this.handleHumanReplyTimeout(
+          {
+            contactId: contact.id,
+            payload: { lastHumanOutboundAt: contact.lastHumanOutboundAt, timeoutMinutes: HUMAN_REPLY_TIMEOUT_MINUTES, healed: true }
+          },
+          contact
+        );
+        if (resumed) healed.push({ contactId: contact.id, action: "auto_returned_after_human_timeout" });
+        continue;
+      }
+
+      if (
+        contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN &&
+        contact.humanEscalationStatus &&
         contact.humanEscalationStage === "human_review_pending" &&
         !hasPendingJob(jobs, ["human_escalation_sla"]) &&
         contact.escalatedAt &&
@@ -3098,7 +3199,7 @@ class SmsBot {
       return;
     }
     if (["initial_sms", "fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "appointment_reminder", "missed_call_followup", "backup_no_show_reminder"].includes(job.type)) {
-      if (!isWithinTextingWindow(contact, this.config)) {
+      if (!shouldBypassQuietHoursForInitialJob(job) && !isWithinTextingWindow(contact, this.config)) {
         await this.store.updateJob(job.id, {
           status: "pending",
           runAt: nextTextingWindow(contact, this.config).toISOString()
@@ -3116,7 +3217,10 @@ class SmsBot {
     if (job.type === "initial_sms") {
       const fresh = await this.store.getContact(job.contactId);
       const rendered = await this.renderManagedTemplate(fresh, "coldOutreachTemplates", job.payload.templateKey, coldOutreachTemplates[job.payload.templateKey]);
-      const sent = await this.sendBotMessage(fresh, rendered.message, rendered.meta);
+      const sent = await this.sendBotMessage(fresh, rendered.message, {
+        ...rendered.meta,
+        bypassQuietHours: shouldBypassQuietHoursForInitialJob(job)
+      });
       if (!sent) {
         const latest = (await this.store.getContact(job.contactId)) || fresh;
         if (
@@ -3195,6 +3299,46 @@ class SmsBot {
     }
     if (job.type === "warm_followup") {
       const fresh = await this.store.getContact(job.contactId);
+      if (
+        job.payload?.expectedProgress &&
+        fresh.qualificationProgress &&
+        fresh.qualificationProgress !== job.payload.expectedProgress
+      ) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "stale_warm_followup_progress_changed"
+        });
+        await this.recordDecision(fresh, "skipped", "stale_warm_followup_progress_changed", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: {
+            expectedProgress: job.payload.expectedProgress,
+            currentProgress: fresh.qualificationProgress
+          }
+        });
+        return;
+      }
+      if (
+        job.payload?.baseOutboundTimestamp &&
+        fresh.lastResponseTimestamp &&
+        new Date(fresh.lastResponseTimestamp) > new Date(job.payload.baseOutboundTimestamp)
+      ) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "stale_warm_followup_contact_replied"
+        });
+        await this.recordDecision(fresh, "skipped", "stale_warm_followup_contact_replied", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: {
+            baseOutboundTimestamp: job.payload.baseOutboundTimestamp,
+            lastResponseTimestamp: fresh.lastResponseTimestamp
+          }
+        });
+        return;
+      }
       if (needsColdAccidentDate(fresh) && isBriefAcknowledgement(fresh.lastInboundMessage)) {
         await this.store.updateJob(job.id, {
           status: "skipped",
@@ -3227,6 +3371,38 @@ class SmsBot {
     }
     if (job.type === "enter_reengagement") {
       const fresh = await this.store.getContact(job.contactId);
+      if (
+        job.payload?.expectedProgress &&
+        fresh.qualificationProgress &&
+        fresh.qualificationProgress !== job.payload.expectedProgress
+      ) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "stale_reengagement_progress_changed"
+        });
+        await this.recordDecision(fresh, "skipped", "stale_reengagement_progress_changed", {
+          jobId: job.id,
+          jobType: job.type
+        });
+        return;
+      }
+      if (
+        job.payload?.baseOutboundTimestamp &&
+        fresh.lastResponseTimestamp &&
+        new Date(fresh.lastResponseTimestamp) > new Date(job.payload.baseOutboundTimestamp)
+      ) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "stale_reengagement_contact_replied"
+        });
+        await this.recordDecision(fresh, "skipped", "stale_reengagement_contact_replied", {
+          jobId: job.id,
+          jobType: job.type
+        });
+        return;
+      }
       await this.scheduleReengagement(fresh, { sendFirstNow: true });
     }
     if (job.type === "send_reengagement_template") {

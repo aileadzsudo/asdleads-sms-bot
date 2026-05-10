@@ -27,6 +27,10 @@ test("parses only the answer expected by current qualification progress", () => 
     parseExpectedAnswer(QUALIFICATION.NEEDS_FAULT, "Yes it was yesterday and the driver hit my front fender").value,
     "not_at_fault"
   );
+  assert.equal(
+    parseExpectedAnswer(QUALIFICATION.NEEDS_FAULT, "I wasn't driving, my Lyft driver hit someone and I was a rideshare passenger").value,
+    "not_at_fault"
+  );
   assert.equal(parseExpectedAnswer(QUALIFICATION.NEEDS_MEDICAL, "I went to urgent care").value, "yes");
   assert.equal(parseExpectedAnswer(QUALIFICATION.NEEDS_FAULT, "who is this"), null);
 });
@@ -59,6 +63,17 @@ test("parses call now and simple scheduled time", () => {
   const parsed = parseCallTime("tomorrow at 3pm", contact, config, new Date("2026-05-07T15:00:00Z"));
   assert.equal(parsed.type, "scheduled");
   assert.ok(parsed.startsAt);
+});
+
+test("call-time parser asks for clarification when the lead says today does not work", () => {
+  assert.equal(parseCallTime("Today is not tha day", contact, config).type, "needs_specific_time");
+  assert.equal(parseCallTime("Again today doesn't work", contact, config).preferredDay, "tomorrow_or_later");
+});
+
+test("call-time parser does not turn bare dates or money amounts into appointments", () => {
+  assert.equal(parseCallTime("2026-05-10", contact, config).type, "needs_specific_time");
+  assert.equal(parseCallTime("I'll call tomorrow", contact, config).type, "needs_specific_time");
+  assert.equal(parseCallTime("They tried to offer me $23,000 but I turned it down", contact, config), null);
 });
 
 test("future availability phrasing wins over call-now words", () => {

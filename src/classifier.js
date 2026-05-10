@@ -118,7 +118,7 @@ function parseFaultAnswer(text) {
     return { value: "unsure_or_partial", confidence: 0.85 };
   }
   if (
-    /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|no|not me|they hit me|driver hit me|driver hit my|driver hit|hit my car|hit my vehicle|hit my front|hit my fender|kept going|rear ended me|rear-ended me|i got hit|hit me|parked)\b/.test(
+    /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|i wasn't driving|i was not driving|i wasnt driving|passenger|rideshare passenger|uber passenger|lyft passenger|lyft driver|uber driver|pedestrian|walking|crosswalk|no|not me|they hit me|driver hit me|driver hit my|driver hit|hit my car|hit my vehicle|hit my front|hit my fender|kept going|rear ended me|rear-ended me|i got hit|hit me|parked)\b/.test(
       t
     )
   ) {
@@ -148,7 +148,7 @@ function parseMedicalAnswer(text) {
 function hasExpectedAnswerSignal(progress, text) {
   const t = normalize(text);
   if (progress === QUALIFICATION.NEEDS_FAULT) {
-    return /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|my fault|i was at fault|at fault|they hit me|hit me|rear ended|rear-ended|not sure|unsure|partially|partial)\b/.test(t);
+    return /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|i wasn't driving|i was not driving|i wasnt driving|passenger|rideshare passenger|uber passenger|lyft passenger|lyft driver|uber driver|pedestrian|walking|crosswalk|my fault|i was at fault|at fault|they hit me|hit me|rear ended|rear-ended|not sure|unsure|partially|partial)\b/.test(t);
   }
   if (progress === QUALIFICATION.NEEDS_MEDICAL) {
     return /\b(doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|no doctor|no treatment|not seen|haven't|havent|didn't|didnt)\b/.test(t);
@@ -182,12 +182,43 @@ function isCallNow(text) {
   return /\b(call me now|call now|right now|now is fine|now is good|available now|i'm available now|im available now|i can talk now|asap)\b/.test(t);
 }
 
-function parseCallTime(text, contact, config, now = new Date()) {
+function isNotTodayAvailability(text) {
+  const t = normalize(text);
+  return (
+    /\b(today|2day|todai|tday)\s+(is\s+)?(not|isn t|isnt|ain t|aint)\s+(the\s+)?(day|tha\s+day)\b/.test(t) ||
+    /\b(today|2day|todai|tday)\s+(doesn t|doesnt|do not|don t|dont|won t|wont)\s+work\b/.test(t) ||
+    /\b(not|no)\s+(today|2day|todai|tday|tonight)\b/.test(t) ||
+    /\b(can t|cant|cannot)\s+(do|talk|speak|call|make it)\s+(today|2day|todai|tday|tonight)\b/.test(t)
+  );
+}
+
+function hasClockTimeSignal(text) {
   const t = normalize(text).replace(/(\d)\s*([ap])\s*\.?\s*m\.?/g, "$1$2m");
+  return (
+    /\b\d{1,2}:\d{2}\s*(am|pm)?\b/.test(t) ||
+    /\b\d{1,2}\s*(am|pm)\b/.test(t) ||
+    /\b(?:at|after|around|about)\s*\d{1,2}\b/.test(t) ||
+    /\b(noon|morning|afternoon|evening|tonight)\b/.test(t)
+  );
+}
+
+function parseCallTime(text, contact, config, now = new Date()) {
+  const t = normalize(text)
+    .replace(/(\d)\s*([ap])\s*\.?\s*m\.?/g, "$1$2m")
+    .replace(/\$\s*\d[\d,.]*/g, " ")
+    .replace(/\b\d{1,3},\d{3,}\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (isCallNow(t)) return { type: "now", confidence: 0.95 };
   const timeZone = contact.timezone || config.texting.defaultTimezone;
   const local = getLocalParts(now, timeZone);
   const explicitToday = /\btoday\b/.test(t);
+  if (/^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/.test(t) || /^\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?$/.test(t)) {
+    return { type: "needs_specific_time", confidence: 0.68, reason: "date_without_time" };
+  }
+  if (isNotTodayAvailability(t)) {
+    return { type: "needs_specific_time", confidence: 0.88, preferredDay: "tomorrow_or_later" };
+  }
   const weekdayMap = {
     sunday: 0,
     sun: 0,
@@ -216,6 +247,9 @@ function parseCallTime(text, contact, config, now = new Date()) {
   if (/\b(later today|later|not now|not right now|can't talk|cant talk|at work|working|busy)\b/.test(t) && !/\d/.test(t)) {
     return { type: "needs_specific_time", confidence: 0.8 };
   }
+  if (/\btomorrow\b/.test(t) && !hasClockTimeSignal(t)) {
+    return { type: "needs_specific_time", confidence: 0.84, preferredDay: "tomorrow" };
+  }
   if (/\b(today|tomorrow|tonight)?\s*(early\s+)?(late\s+)?(morning|afternoon|evening)\b/.test(t) && !/\d/.test(t)) {
     return { type: "needs_specific_time", confidence: 0.82 };
   }
@@ -232,6 +266,8 @@ function parseCallTime(text, contact, config, now = new Date()) {
     let hour = Number(match[1]);
     const minute = Number(match[2] && /^\d{2}$/.test(match[2]) ? match[2] : 0);
     const meridiem = colonTime ? match[3] : match[2];
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return null;
+    if (!meridiem && hour > 12) return null;
     if (meridiem === "pm" && hour < 12) hour += 12;
     if (meridiem === "am" && hour === 12) hour = 0;
     if (!meridiem && hour >= 1 && hour <= 7) hour += 12;
@@ -285,6 +321,8 @@ module.exports = {
   parseCallTime,
   parseExpectedAnswer,
   isCallNow,
+  isNotTodayAvailability,
+  hasClockTimeSignal,
   isDocumentOrReport,
   isVerificationCode
 };
