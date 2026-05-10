@@ -2596,6 +2596,75 @@ test("admin mark no-show preserves backup time and schedules backup reminders", 
   assert.equal(backupJobs.some((job) => job.payload.templateKey === "afterPrimaryMissed"), true);
 });
 
+test("manual GHL appointment sync adopts appointment and schedules reminders", async () => {
+  const { bot, store } = makeBot();
+  const startsAt = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "manual-appt",
+    ghlContactId: "manual-appt",
+    name: "Manual Appt",
+    phone: "+15550000075",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+  store.addJob({
+    type: "send_cold_template",
+    contactId: "manual-appt",
+    runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    payload: { templateKey: "day_1_pm" }
+  });
+
+  const contact = await bot.syncAppointment({
+    contactId: "manual-appt",
+    appointmentId: "manual-appt-event",
+    startTime: startsAt,
+    status: "confirmed"
+  });
+  const jobs = Object.values(store.data.jobs);
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.equal(contact.qualificationProgress, QUALIFICATION.COMPLETE);
+  assert.equal(contact.appointmentId, "manual-appt-event");
+  assert.equal(contact.appointmentSource, "ghl_manual");
+  assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "send_cold_template" && job.status === "pending"), false);
+  assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "appointment_reminder" && job.status === "pending"), true);
+});
+
+test("GHL appointment no-show status preserves backup and starts no-show recovery", async () => {
+  const { bot, store } = makeBot();
+  const primary = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  const backup = new Date(Date.now() + 90 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "sync-no-show",
+    ghlContactId: "sync-no-show",
+    name: "Sync No Show",
+    phone: "+15550000076",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Primary time",
+    preferredCallTimeIso: primary,
+    backupCallTime: "Backup time",
+    backupCallTimeIso: backup,
+    backupCallTimeType: "exact",
+    appointmentId: "sync-no-show-event"
+  });
+
+  const contact = await bot.syncAppointment({
+    contactId: "sync-no-show",
+    appointmentId: "sync-no-show-event",
+    status: "no_show"
+  });
+  const jobs = Object.values(store.data.jobs);
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
+  assert.equal(store.getContact("sync-no-show").preferredCallTime, "Primary time");
+  assert.equal(store.getContact("sync-no-show").backupCallTime, "Backup time");
+  assert.equal(jobs.some((job) => job.contactId === "sync-no-show" && job.type === "backup_no_show_reminder" && job.status === "pending"), true);
+  assert.equal(jobs.some((job) => job.contactId === "sync-no-show" && job.type === "missed_call_followup" && job.status === "pending"), true);
+});
+
 test("warm follow-ups aggressively chase before entering re-engagement", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

@@ -885,6 +885,121 @@ function appointmentNotes(contact, extra = {}) {
   return lines.join("\n");
 }
 
+function nestedValue(source, key) {
+  if (!source || !key) return "";
+  if (source[key] !== undefined && source[key] !== null && source[key] !== "") return source[key];
+  if (!key.includes(".")) return "";
+  return key.split(".").reduce((value, part) => (value && value[part] !== undefined ? value[part] : ""), source);
+}
+
+function appointmentField(payload, keys) {
+  const sources = [
+    payload,
+    payload?.customData,
+    payload?.custom_data,
+    payload?.triggerData,
+    payload?.trigger_data,
+    payload?.appointment,
+    payload?.event,
+    payload?.calendar,
+    payload?.calendarEvent
+  ].filter(Boolean);
+  for (const source of sources) {
+    for (const key of keys) {
+      const value = nestedValue(source, key);
+      if (value !== undefined && value !== null && value !== "") return value;
+    }
+  }
+  return "";
+}
+
+function appointmentContactId(payload = {}) {
+  return textValue(
+    appointmentField(payload, [
+      "contactId",
+      "contact_id",
+      "ghlContactId",
+      "ghl_contact_id",
+      "Contact ID",
+      "contact.id",
+      "contact._id",
+      "contact.contactId",
+      "contact.contact_id",
+      "appointment.contactId",
+      "appointment.contact_id",
+      "event.contactId",
+      "event.contact_id"
+    ])
+  );
+}
+
+function appointmentIdFromPayload(payload = {}) {
+  return textValue(
+    appointmentField(payload, [
+      "appointmentId",
+      "appointment_id",
+      "calendarEventId",
+      "calendar_event_id",
+      "eventId",
+      "event_id",
+      "appointment.id",
+      "event.id",
+      "calendar.id"
+    ])
+  );
+}
+
+function appointmentStatusFromPayload(payload = {}) {
+  return textValue(
+    appointmentField(payload, [
+      "appointmentStatus",
+      "appointment_status",
+      "status",
+      "eventStatus",
+      "event_status",
+      "calendarStatus",
+      "calendar_status",
+      "appointment.status",
+      "event.status"
+    ])
+  ).toLowerCase();
+}
+
+function appointmentStartIsoFromPayload(payload = {}) {
+  const value = appointmentField(payload, [
+    "startTime",
+    "start_time",
+    "startsAt",
+    "starts_at",
+    "startAt",
+    "start_at",
+    "scheduledTime",
+    "scheduled_time",
+    "appointmentTime",
+    "appointment_time",
+    "appointmentStartTime",
+    "appointment_start_time",
+    "calendarStartTime",
+    "calendar_start_time",
+    "startDate",
+    "start_date",
+    "start",
+    "appointment.startTime",
+    "appointment.start_time",
+    "appointment.start",
+    "event.startTime",
+    "event.start_time",
+    "event.start"
+  ]);
+  if (!value) return "";
+  const date = typeof value === "number" ? new Date(value) : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function isNoShowAppointmentStatus(status = "") {
+  return /no[\s_-]?show|noshow|missed/.test(String(status || "").toLowerCase());
+}
+
 function timezoneCorrectionFromText(text) {
   const t = normalize(text);
   const timezoneAlias = t.match(/\b(pacific|pst|pdt|mountain|mst|mdt|central|cst|cdt|eastern|est|edt)\b/);
@@ -3216,14 +3331,33 @@ class SmsBot {
   }
 
   async markNoShow(payload) {
-    const normalized = normalizePayload(payload, this.config);
+    const webhookContactId = appointmentContactId(payload);
+    const normalized = normalizePayload(webhookContactId ? { ...payload, contactId: webhookContactId } : payload, this.config);
+    const existing = await this.store.getContact(normalized.id);
+    const base = { ...(existing || {}), ...normalized };
+    const appointmentId = appointmentIdFromPayload(payload) || payload.appointmentId || payload.appointment_id || base.appointmentId || "";
+    const preferredCallTimeIso =
+      appointmentStartIsoFromPayload(payload) ||
+      normalized.preferredCallTimeIso ||
+      payload.preferredCallTimeIso ||
+      payload.callTimeIso ||
+      base.preferredCallTimeIso ||
+      "";
+    const preferredCallTime =
+      normalized.preferredCallTime ||
+      payload.preferredCallTime ||
+      payload.callTime ||
+      payload.scheduledTime ||
+      base.preferredCallTime ||
+      (preferredCallTimeIso ? formatForContact(new Date(preferredCallTimeIso), base, this.config) : "");
     let contact = await this.store.upsertContact({
-      ...normalized,
+      ...base,
       engagementStatus: ENGAGEMENT.MISSED_CALL,
       qualificationProgress: QUALIFICATION.CALL_BOOKED,
       appointmentNoShowAt: new Date().toISOString(),
-      preferredCallTime: normalized.preferredCallTime || payload.preferredCallTime || payload.callTime || payload.scheduledTime || "",
-      preferredCallTimeIso: normalized.preferredCallTimeIso || payload.preferredCallTimeIso || payload.callTimeIso || "",
+      preferredCallTime,
+      preferredCallTimeIso,
+      appointmentId,
       currentSequenceName: "appointment_no_show"
     });
     await this.store.cancelJobsForContact(contact.id, "appointment marked no-show", (job) =>
@@ -3236,7 +3370,109 @@ class SmsBot {
       currentSequenceDay: 1,
       currentSequenceSlot: "no_show"
     });
+    await this.recordDecision(contact, "missed", "appointment_no_show", {
+      trigger: "appointment_no_show",
+      meta: { appointmentId: contact.appointmentId || "", backupCallTime: contact.backupCallTime || "" }
+    });
     return contact;
+  }
+
+  async syncAppointment(payload) {
+    const status = appointmentStatusFromPayload(payload);
+    if (isNoShowAppointmentStatus(status)) return this.markNoShow(payload);
+
+    const contactId = appointmentContactId(payload);
+    const startsAt = appointmentStartIsoFromPayload(payload);
+    const appointmentId = appointmentIdFromPayload(payload);
+    if (!contactId || !startsAt) {
+      if (this.store.setSetting) {
+        await this.store.setSetting("last_ignored_appointment_sync", {
+          reason: !contactId ? "missing_contact_id" : "missing_start_time",
+          payloadKeys: Object.keys(payload || {}).sort(),
+          receivedAt: new Date().toISOString()
+        });
+      }
+      return null;
+    }
+
+    const normalized = normalizePayload({ ...payload, contactId }, this.config);
+    const existing = await this.store.getContact(normalized.id);
+    let contact = await this.store.upsertContact({
+      ...(existing || {}),
+      ...normalized
+    });
+    contact = await this.hydrateContactTags(contact);
+
+    if (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) {
+      await this.recordDecision(contact, "skipped", "appointment_sync_opted_out", {
+        trigger: "appointment_sync",
+        meta: { appointmentId, startsAt }
+      });
+      return contact;
+    }
+    if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
+    if (hasNqTag(contact)) return this.stopForNqTag(contact);
+
+    const display = formatForContact(new Date(startsAt), contact, this.config);
+    const oldAppointmentId = contact.appointmentId || "";
+    const oldStartsAt = contact.preferredCallTimeIso || "";
+    const updated = await this.store.upsertContact({
+      ...contact,
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.COMPLETE,
+      preferredCallTime: display,
+      preferredCallTimeIso: startsAt,
+      appointmentId: appointmentId || contact.appointmentId || "",
+      awaitingBackupTime: false,
+      humanEscalationStatus: false,
+      humanEscalationStage: "appointment_synced",
+      escalationReason: "",
+      automationPaused: false,
+      automationPauseReason: "",
+      currentSequenceName: "appointment_synced",
+      appointmentSource: "ghl_manual",
+      appointmentSyncedAt: new Date().toISOString()
+    });
+
+    await this.store.cancelJobsForContact(updated.id, "manual appointment synced", (job) =>
+      [
+        "initial_sms",
+        "cold_entry_check",
+        "send_cold_template",
+        "fresh_lead_followup",
+        "warm_followup",
+        "enter_reengagement",
+        "send_reengagement_template",
+        "appointment_reminder",
+        "backup_time_timeout",
+        "missed_call_followup",
+        "backup_no_show_reminder"
+      ].includes(job.type)
+    );
+    await this.scheduleAppointmentReminders(updated);
+    await this.recordDecision(updated, "booked", "manual_appointment_synced", {
+      trigger: "appointment_sync",
+      beforeStatus: contact.engagementStatus || "",
+      afterStatus: ENGAGEMENT.CALL_SCHEDULED,
+      beforeProgress: contact.qualificationProgress || "",
+      afterProgress: QUALIFICATION.COMPLETE,
+      meta: { appointmentId: updated.appointmentId || "", startsAt, oldAppointmentId, oldStartsAt }
+    });
+
+    if (!updated.bookingAlertSentAt || oldAppointmentId !== updated.appointmentId || oldStartsAt !== startsAt) {
+      const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
+        "Primary call time": updated.preferredCallTime,
+        "Backup time": updated.backupCallTime || "none",
+        Timezone: updated.timezone,
+        "GHL appointment": updated.appointmentId || "manual appointment",
+        Source: "GHL manual appointment sync"
+      });
+      if (bookingAlertSent) {
+        return this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() });
+      }
+    }
+
+    return updated;
   }
 
   async escalate(contact, reason, extra = {}) {

@@ -1818,6 +1818,36 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (
+      req.method === "POST" &&
+      [
+        "/webhooks/ghl/appointment",
+        "/webhooks/ghl/appointment-sync",
+        "/webhooks/ghl/appointment-created",
+        "/webhooks/ghl/appointment-updated",
+        "/webhooks/ghl/calendar-appointment"
+      ].includes(req.url)
+    ) {
+      const payload = await readJson(req);
+      const auth = requireWebhookSecret(req, payload);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const dedupe = await dedupeWebhook(req, payload, "appointment-sync");
+      if (dedupe.duplicate) {
+        send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
+        return;
+      }
+      const contact = await bot.syncAppointment(payload);
+      if (!contact) {
+        send(res, 202, { ok: true, ignored: true, reason: "appointment sync missing contact id or start time" });
+        return;
+      }
+      send(res, 200, { ok: true, contact });
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/webhooks/ghl/bot-control") {
       const payload = await readJson(req);
       const auth = requireWebhookSecret(req, payload);
