@@ -2154,6 +2154,7 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await readJson(req);
       const contact = await bot.applyBotControl({
+        ...payload,
         contactId: payload.contactId,
         action: payload.action,
         ...requestControlMeta(req, payload, "admin_contact_action")
@@ -2198,6 +2199,7 @@ const server = http.createServer(async (req, res) => {
       const results = [];
       for (const contactId of contactIds) {
         const contact = await bot.applyBotControl({
+          ...payload,
           contactId,
           action: payload.action,
           ...requestControlMeta(req, payload, "admin_bulk_contact_action")
