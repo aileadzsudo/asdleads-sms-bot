@@ -178,6 +178,40 @@ test("long fault answer is saved instead of escalated as detailed information", 
   assert.match(store.getContact("long-fault").lastOutboundMessage, /medical treatment/i);
 });
 
+test("soft human escalation still captures a qualification answer instead of repeating stale question", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "soft-answer",
+    ghlContactId: "soft-answer",
+    name: "Karson",
+    phone: "+15550000100",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "llm_unhandled_confused"
+  });
+  store.addJob({
+    type: "human_escalation_sla",
+    contactId: "soft-answer",
+    runAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    payload: { minutes: 5, reason: "llm_unhandled_confused" }
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "soft-answer", message: "No" });
+  const latest = store.getContact("soft-answer");
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(latest.humanEscalationStatus, false);
+  assert.equal(latest.faultAnswer, "not_at_fault");
+  assert.equal(latest.qualificationProgress, QUALIFICATION.NEEDS_MEDICAL);
+  assert.match(latest.lastOutboundMessage, /medical treatment/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "soft-answer" && job.type === "human_escalation_sla" && job.status === "pending"),
+    false
+  );
+});
+
 test("fresh NR enrollment sends the initial cold message immediately even outside texting hours", async () => {
   const { bot, store } = makeBot();
   bot.config.texting.defaultStart = "23:59";

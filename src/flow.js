@@ -494,6 +494,15 @@ function canAutoResumeFromSoftEscalation(contact, text, config) {
   return Boolean(looksLikeCallScheduling(text) && parseCallTime(text, contact, config));
 }
 
+function softEscalationQualificationAnswer(contact, text) {
+  if (contact.engagementStatus !== ENGAGEMENT.ESCALATED_TO_HUMAN) return null;
+  if (contact.automationPaused) return null;
+  if (!isSoftEscalationReason(contact.escalationReason)) return null;
+  if (contact.humanEscalationStage && contact.humanEscalationStage !== "human_review_pending") return null;
+  if (![QUALIFICATION.NEEDS_FAULT, QUALIFICATION.NEEDS_MEDICAL].includes(contact.qualificationProgress)) return null;
+  return parseExpectedAnswer(contact.qualificationProgress, text);
+}
+
 function canAutoResumeHumanScheduling(contact, text, config) {
   if (contact.engagementStatus !== ENGAGEMENT.ESCALATED_TO_HUMAN) return false;
   if (!["human_working", "human_replied_waiting"].includes(contact.humanEscalationStage)) return false;
@@ -1666,6 +1675,29 @@ class SmsBot {
         lastHumanManagedInboundMessage: inbound.lastInboundMessage
       });
       }
+    }
+
+    const softEscalationAnswer = softEscalationQualificationAnswer(contact, inbound.lastInboundMessage);
+    if (softEscalationAnswer) {
+      await this.cancelHumanEscalationWatchdog(contact.id, "auto-resumed from soft escalation answer");
+      contact = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+        humanEscalationStatus: false,
+        humanEscalationStage: "auto_resumed_from_soft_escalation_answer",
+        automationPaused: false,
+        automationPauseReason: "",
+        escalationReason: ""
+      });
+      await this.recordDecision(contact, "repaired", "auto_resumed_from_soft_escalation_answer", {
+        trigger: "inbound_sms",
+        beforeStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+        afterStatus: contact.engagementStatus,
+        beforeProgress: contact.qualificationProgress,
+        afterProgress: contact.qualificationProgress,
+        message: inbound.lastInboundMessage
+      });
+      return this.advanceQualification(contact, softEscalationAnswer);
     }
 
     if (canAutoResumeFromSoftEscalation(contact, inbound.lastInboundMessage, this.config)) {
