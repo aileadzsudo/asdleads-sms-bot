@@ -571,6 +571,120 @@ function hasExplicitCallDate(text) {
     /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/.test(t);
 }
 
+function weekdayLabel(text) {
+  const match = normalize(text).match(/\b(sunday|sun|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thurs|friday|fri|saturday|sat)\b/);
+  if (!match) return "";
+  const labels = {
+    sun: "sunday",
+    sunday: "sunday",
+    mon: "monday",
+    monday: "monday",
+    tue: "tuesday",
+    tues: "tuesday",
+    tuesday: "tuesday",
+    wed: "wednesday",
+    wednesday: "wednesday",
+    thu: "thursday",
+    thurs: "thursday",
+    thursday: "thursday",
+    fri: "friday",
+    friday: "friday",
+    sat: "saturday",
+    saturday: "saturday"
+  };
+  return labels[match[1]] || match[1];
+}
+
+function titleCaseWord(value) {
+  const text = String(value || "");
+  return text ? `${text[0].toUpperCase()}${text.slice(1)}` : "";
+}
+
+function daypartFromText(text) {
+  const t = normalize(text);
+  if (/\bmorning\b/.test(t)) return "morning";
+  if (/\bafternoon\b/.test(t)) return "afternoon";
+  if (/\bevening|tonight\b/.test(t)) return "evening";
+  return "";
+}
+
+function hasFreshCallTimeClarification(contact) {
+  if (!contact?.callTimeClarificationDay) return false;
+  if (!contact.callTimeClarificationAskedAt) return true;
+  return Date.now() - new Date(contact.callTimeClarificationAskedAt).getTime() <= 36 * 60 * 60 * 1000;
+}
+
+function callTimeClarificationPatch(contact, parsed, text, mode) {
+  const t = normalize(text);
+  const weekday = weekdayLabel(t);
+  let day = "";
+  let dayLabel = "";
+  if (weekday && parsed?.preferredDay === "weekday") {
+    day = "weekday";
+    dayLabel = weekday;
+  } else if (/\btomorrow\b/.test(t) || parsed?.preferredDay === "tomorrow") {
+    day = "tomorrow";
+  } else if (parsed?.preferredDay === "tomorrow_or_later") {
+    day = "tomorrow_or_later";
+  } else if (hasFreshCallTimeClarification(contact) && daypartFromText(t)) {
+    day = contact.callTimeClarificationDay;
+    dayLabel = contact.callTimeClarificationDayLabel || "";
+  }
+  return {
+    callTimeClarificationDay: day,
+    callTimeClarificationDayLabel: dayLabel,
+    callTimeClarificationMode: mode,
+    callTimeClarificationSource: text,
+    callTimeClarificationAskedAt: new Date().toISOString()
+  };
+}
+
+function clearCallTimeClarificationPatch() {
+  return {
+    callTimeClarificationDay: "",
+    callTimeClarificationDayLabel: "",
+    callTimeClarificationMode: "",
+    callTimeClarificationSource: "",
+    callTimeClarificationAskedAt: ""
+  };
+}
+
+function anchorScheduledTimeToClarifiedDay(parsed, text, contact, config) {
+  if (parsed?.type !== "scheduled") return parsed;
+  if (hasExplicitCallDate(text) || !hasFreshCallTimeClarification(contact)) return parsed;
+  const day = contact.callTimeClarificationDay;
+  if (!["tomorrow", "weekday"].includes(day)) return parsed;
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  const clock = getLocalParts(new Date(parsed.startsAt), timeZone);
+  const local = getLocalParts(new Date(), timeZone);
+  let dayOffset = 1;
+  if (day === "weekday") {
+    const weekdayMap = {
+      sunday: 0,
+      monday: 1,
+      tuesday: 2,
+      wednesday: 3,
+      thursday: 4,
+      friday: 5,
+      saturday: 6
+    };
+    const target = weekdayMap[contact.callTimeClarificationDayLabel];
+    const current = new Date(Date.UTC(local.year, local.month - 1, local.day)).getUTCDay();
+    dayOffset = Number.isFinite(target) ? (target - current + 7) % 7 || 7 : 1;
+  }
+  const startsAt = localDateToUtc(
+    {
+      year: local.year,
+      month: local.month,
+      day: local.day + dayOffset,
+      hour: clock.hour,
+      minute: clock.minute
+    },
+    timeZone
+  );
+  return { ...parsed, startsAt: startsAt.toISOString(), appliedCallTimeClarificationDay: day };
+}
+
 function isRescheduleRequest(text) {
   const t = normalize(text);
   return /\b(reschedule|re-schedule|move it|move the call|change the time|change my time|different time|another time|another day|instead|push it back|push back|can't make it|cant make it|need to move|need a new time)\b/.test(t);
@@ -580,6 +694,12 @@ function isPrimaryCallCorrectionWhileAwaitingBackup(text, contact, config) {
   if (!contact.preferredCallTimeIso) return false;
   const t = normalize(text);
   const parsed = parseCallTime(text, contact, config);
+  if (
+    parsed?.type === "needs_specific_time" &&
+    /\b(that s today|that is today|thats today|wrong day|i said tomorrow|meant tomorrow|not today|not for today)\b/.test(t)
+  ) {
+    return true;
+  }
   if (parsed?.type !== "scheduled") return false;
   if (/\b(not tomorrow|not for tomorrow|today|call today|you can call today|u can call today)\b/.test(t)) return true;
   if (/\b(primary|main time|first time|actual time)\b/.test(t)) return true;
@@ -2527,7 +2647,8 @@ class SmsBot {
     if (resolvedTimezone && resolvedTimezone !== contact.timezone) {
       contact = await this.store.upsertContact({ ...contact, timezone: resolvedTimezone });
     }
-    const parsed = parseCallTime(text, contact, this.config);
+    let parsed = parseCallTime(text, contact, this.config);
+    parsed = anchorScheduledTimeToClarifiedDay(parsed, text, contact, this.config);
     if (!parsed) {
       if (looksLikeDetailedLegalOrInsuranceInfo(text)) {
         return this.escalate(contact, "detailed_information");
@@ -2543,16 +2664,23 @@ class SmsBot {
       return this.escalate(contact, "call_time_unhandled_reply");
     }
     if (parsed.type === "needs_specific_time") {
-      contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true });
+      const contextPatch = callTimeClarificationPatch(contact, parsed, text, "booking");
+      contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true, ...contextPatch });
       const normalizedText = normalize(text);
       let question = relativeTimeClarification(parsed, contact, this.config) || "What specific time works best for your call today or tomorrow?";
-      if (parsed.preferredDay === "tomorrow_or_later" || isNotTodayAvailability(normalizedText)) {
+      const inheritedDay = contextPatch.callTimeClarificationDay || contact.callTimeClarificationDay;
+      const inheritedDayLabel = contextPatch.callTimeClarificationDayLabel || contact.callTimeClarificationDayLabel;
+      const daypart = daypartFromText(normalizedText);
+      if (inheritedDay === "tomorrow" && daypart) {
+        question = `What exact time tomorrow ${daypart} works best?`;
+      } else if (inheritedDay === "weekday" && inheritedDayLabel && daypart) {
+        question = `What exact time ${titleCaseWord(inheritedDayLabel)} ${daypart} works best?`;
+      } else if (parsed.preferredDay === "tomorrow_or_later" || isNotTodayAvailability(normalizedText)) {
         question = "No problem, we can do tomorrow or another day 🙏 What specific time works best for the Specialist call?";
       } else if (/\btomorrow\b/.test(normalizedText) || parsed.preferredDay === "tomorrow") {
         question = "What specific time tomorrow works best?";
       } else if (parsed.preferredDay === "weekday" && parsed.preferredDayLabel) {
-        const weekday = `${parsed.preferredDayLabel[0].toUpperCase()}${parsed.preferredDayLabel.slice(1)}`;
-        question = `What specific time ${weekday} works best?`;
+        question = `What specific time ${titleCaseWord(parsed.preferredDayLabel)} works best?`;
       } else if (/\b(today|later today|tonight)\b/.test(normalizedText)) {
         question = "What specific time later today works best?";
       }
@@ -2569,7 +2697,8 @@ class SmsBot {
       ...contact,
       engagementStatus: ENGAGEMENT.READY_FOR_CALL,
       humanEscalationStatus: true,
-      awaitingSpecificCallTime: false
+      awaitingSpecificCallTime: false,
+      ...clearCallTimeClarificationPatch()
       });
       const slackPromise = slack.sendUrgentCallNow(this.config, updated).catch((error) =>
         this.notifyBotError("Slack urgent call-now alert failed", {
@@ -2624,6 +2753,7 @@ class SmsBot {
       appointmentId: appointment.id || appointment.appointment?.id || "",
       awaitingBackupTime: true,
       awaitingSpecificCallTime: false,
+      ...clearCallTimeClarificationPatch(),
       lastAppointmentBookingError: ""
     });
     const afterBackupAsk =
@@ -2650,13 +2780,27 @@ class SmsBot {
   }
 
   async handleReschedule(contact, text) {
-    const parsed = parseCallTime(text, contact, this.config);
+    let parsed = parseCallTime(text, contact, this.config);
+    parsed = anchorScheduledTimeToClarifiedDay(parsed, text, contact, this.config);
     if (!parsed || parsed.type === "now") {
       const sent = await this.sendBotMessage(contact, qualificationTemplates.rescheduleAsk, { bypassQuietHours: true });
       return sent || (await this.store.getContact(contact.id)) || contact;
     }
     if (parsed.type === "needs_specific_time") {
-      const sent = await this.sendBotMessage(contact, qualificationTemplates.rescheduleNeedsSpecificTime, { bypassQuietHours: true });
+      const contextPatch = callTimeClarificationPatch(contact, parsed, text, "reschedule");
+      const updated = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true, ...contextPatch });
+      const inheritedDay = contextPatch.callTimeClarificationDay || contact.callTimeClarificationDay;
+      const inheritedDayLabel = contextPatch.callTimeClarificationDayLabel || contact.callTimeClarificationDayLabel;
+      const part = daypartFromText(text);
+      let question = qualificationTemplates.rescheduleNeedsSpecificTime;
+      if (inheritedDay === "tomorrow" && part) {
+        question = `No problem 👍 What exact time tomorrow ${part} should I move your call to?`;
+      } else if (inheritedDay === "tomorrow") {
+        question = "No problem 👍 What exact time tomorrow should I move your call to?";
+      } else if (inheritedDay === "weekday" && inheritedDayLabel) {
+        question = `No problem 👍 What exact time ${titleCaseWord(inheritedDayLabel)} should I move your call to?`;
+      }
+      const sent = await this.sendBotMessage(updated, question, { bypassQuietHours: true });
       return sent || (await this.store.getContact(contact.id)) || contact;
     }
 
@@ -2696,6 +2840,8 @@ class SmsBot {
       preferredCallTimeIso: startsAt,
       appointmentId: appointment.id || appointment.appointment?.id || contact.appointmentId || "",
       awaitingBackupTime: false,
+      awaitingSpecificCallTime: false,
+      ...clearCallTimeClarificationPatch(),
       appointmentConfirmed: false,
       appointmentRescheduledAt: new Date().toISOString()
     });

@@ -35,6 +35,11 @@ function makeBot() {
   return { bot, store };
 }
 
+function localDayNumber(date, timeZone) {
+  const parts = getLocalParts(date, timeZone);
+  return Math.floor(Date.UTC(parts.year, parts.month - 1, parts.day) / (24 * 60 * 60 * 1000));
+}
+
 test("opt-out marks contact, cancels jobs, and sends one confirmation", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -899,6 +904,68 @@ test("scheduled call time reply without reschedule keyword still updates appoint
 
   assert.equal(store.getContact("reschedule-2").humanEscalationStatus, undefined);
   assert.match(store.getContact("reschedule-2").preferredCallTime, /5:00 PM/);
+});
+
+test("specific time after tomorrow clarification books tomorrow instead of today", async () => {
+  const { bot, store } = makeBot();
+  const timeZone = "America/Denver";
+  store.upsertContact({
+    id: "tomorrow-context-booking",
+    ghlContactId: "tomorrow-context-booking",
+    name: "Lester",
+    phone: "+15550000101",
+    timezone: timeZone,
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "no",
+    awaitingSpecificCallTime: true,
+    callTimeClarificationDay: "tomorrow",
+    callTimeClarificationMode: "booking",
+    callTimeClarificationAskedAt: new Date().toISOString()
+  });
+
+  await bot.handleInboundSms({ contactId: "tomorrow-context-booking", message: "6" });
+
+  const contact = store.getContact("tomorrow-context-booking");
+  const booked = getLocalParts(new Date(contact.preferredCallTimeIso), timeZone);
+  assert.equal(booked.hour, 18);
+  assert.equal(localDayNumber(new Date(contact.preferredCallTimeIso), timeZone), localDayNumber(new Date(), timeZone) + 1);
+  assert.match(contact.lastOutboundMessage, /6:00 PM/);
+});
+
+test("reschedule correction remembers tomorrow when lead gives only the new time", async () => {
+  const { bot, store } = makeBot();
+  const timeZone = "America/Denver";
+  store.upsertContact({
+    id: "lester-reschedule-context",
+    ghlContactId: "lester-reschedule-context",
+    name: "Lester",
+    phone: "+15550000102",
+    timezone: timeZone,
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "today at 6",
+    preferredCallTimeIso: localDateToUtc({ ...getLocalParts(new Date(), timeZone), hour: 18, minute: 0 }, timeZone).toISOString(),
+    appointmentId: "appt-lester-context"
+  });
+
+  let contact = await bot.handleInboundSms({
+    contactId: "lester-reschedule-context",
+    message: "That's today I said tomorrow"
+  });
+
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.equal(store.getContact("lester-reschedule-context").callTimeClarificationDay, "tomorrow");
+  assert.match(store.getContact("lester-reschedule-context").lastOutboundMessage, /tomorrow/i);
+
+  contact = await bot.handleInboundSms({ contactId: "lester-reschedule-context", message: "6 pm" });
+
+  const booked = getLocalParts(new Date(contact.preferredCallTimeIso), timeZone);
+  assert.equal(booked.hour, 18);
+  assert.equal(localDayNumber(new Date(contact.preferredCallTimeIso), timeZone), localDayNumber(new Date(), timeZone) + 1);
+  assert.equal(contact.callTimeClarificationDay, "");
+  assert.match(store.getContact("lester-reschedule-context").lastOutboundMessage, /moved your Specialist call/i);
 });
 
 test("state correction after booking keeps the wall-clock appointment time in the corrected timezone", async () => {
@@ -2758,7 +2825,7 @@ test("vague tomorrow daypart asks for exact time instead of booking", async () =
   assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
   assert.equal(store.getContact("tomorrow-afternoon").awaitingSpecificCallTime, true);
   assert.equal(store.getContact("tomorrow-afternoon").appointmentId, undefined);
-  assert.match(store.getContact("tomorrow-afternoon").lastOutboundMessage, /specific time tomorrow/i);
+  assert.match(store.getContact("tomorrow-afternoon").lastOutboundMessage, /time tomorrow/i);
 });
 
 test("early call time before qualification moves into scheduling without LLM", async () => {
@@ -2782,7 +2849,7 @@ test("early call time before qualification moves into scheduling without LLM", a
   assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
   assert.equal(contact.awaitingSpecificCallTime, true);
   assert.equal(contact.earlyCallTimeBeforeQualification, true);
-  assert.match(contact.lastOutboundMessage, /specific time tomorrow/i);
+  assert.match(contact.lastOutboundMessage, /time tomorrow/i);
 });
 
 test("medical answer reuses recent call time given before scheduling step", async () => {
