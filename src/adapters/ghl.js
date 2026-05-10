@@ -114,6 +114,29 @@ async function searchContactsByTag(config, tag = "NR", options = {}) {
   };
 }
 
+async function searchContactsByPhone(config, phone, options = {}) {
+  const limit = Math.max(1, Math.min(Number(options.limit || 20), 100));
+  const page = Math.max(1, Number(options.page || 1));
+  const payload = await ghlSearch(config, "/contacts/search", {
+    locationId: config.ghl.locationId,
+    page,
+    pageLimit: limit,
+    filters: [
+      {
+        field: "phone",
+        operator: "eq",
+        value: phone
+      }
+    ]
+  });
+  return {
+    raw: payload,
+    contacts: extractContacts(payload),
+    nextPage: payload.nextPage || payload.meta?.nextPage || payload.pageInfo?.nextPage || null,
+    total: payload.total || payload.meta?.total || payload.totalCount || null
+  };
+}
+
 async function sendSms(config, contact, message) {
   return ghlRequest(config, "/conversations/messages", {
     type: "SMS",
@@ -170,4 +193,13 @@ function contactLink(config, contact) {
   return `${baseUrl}/v2/location/${encodeURIComponent(config.ghl.locationId)}/contacts/detail/${encodeURIComponent(contactId)}`;
 }
 
-module.exports = { sendSms, createAppointment, updateAppointment, deleteAppointment, getContact, searchContactsByTag, contactLink };
+module.exports = {
+  sendSms,
+  createAppointment,
+  updateAppointment,
+  deleteAppointment,
+  getContact,
+  searchContactsByTag,
+  searchContactsByPhone,
+  contactLink
+};

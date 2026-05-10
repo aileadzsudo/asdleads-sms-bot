@@ -40,6 +40,7 @@ const ghl = require("./adapters/ghl");
 const slack = require("./adapters/slack");
 const { recordBotError } = require("./opsLog");
 const { chooseTemplateVariant } = require("./templateManager");
+const { normalizePhone } = require("./store");
 
 const WARM_FOLLOW_UP_MINUTES = [5, 15, 30, 60, 120, 240];
 const REENGAGEMENT_DAYS = [1, 2, 3, 4, 5, 6, 7];
@@ -255,6 +256,40 @@ function hasManualHumanHoldTag(contact) {
     "missed_follow_up",
     "qr"
   ]);
+}
+
+function contactIdentitySet(contact) {
+  return new Set(
+    [
+      contact?.id,
+      contact?.ghlContactId,
+      contact?.contactId,
+      ...(Array.isArray(contact?.aliasContactIds) ? contact.aliasContactIds : [])
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+}
+
+function sameContactIdentity(contact, candidate) {
+  const current = contactIdentitySet(contact);
+  return [
+    candidate?.id,
+    candidate?.contactId,
+    candidate?.ghlContactId,
+    candidate?._id
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .some((value) => current.has(value));
+}
+
+function duplicateTerminalReason(candidate) {
+  if (hasNqTag(candidate)) return "duplicate_nq_tag";
+  if (hasSignedTag(candidate)) return "duplicate_signed_tag";
+  if (hasManualHumanHoldTag(candidate)) return "duplicate_manual_hold_tag";
+  if (hasAnyTag(candidate, ["dnc", "do_not_contact", "opt_out", "opted_out"])) return "duplicate_do_not_contact_tag";
+  return "";
 }
 
 function hasExistingRepresentation(text) {
@@ -939,6 +974,90 @@ class SmsBot {
     }
   }
 
+  async stopForDuplicateTerminalContact(contact, duplicate, reason, message) {
+    const duplicateId = duplicate?.id || duplicate?.contactId || duplicate?.ghlContactId || "";
+    const duplicateTags = normalizeTags(duplicate?.tags);
+    const updated = await this.store.upsertContact({
+      ...contact,
+      automationPaused: true,
+      automationPauseReason: reason,
+      humanEscalationStatus: true,
+      humanEscalationStage: "duplicate_terminal_contact",
+      currentSequenceName: "",
+      duplicateTerminalContactId: duplicateId,
+      duplicateTerminalContactName: duplicate?.contactName || duplicate?.name || duplicate?.fullName || "",
+      duplicateTerminalTags: duplicateTags,
+      duplicateTerminalReason: reason,
+      lastDuplicateTerminalCheckAt: new Date().toISOString()
+    });
+    await this.store.cancelJobsForContact(updated.id, `duplicate terminal contact: ${reason}`);
+    await this.recordDecision(updated, "skipped", reason, {
+      message,
+      meta: {
+        duplicateContactId: duplicateId,
+        duplicateContactName: duplicate?.contactName || duplicate?.name || duplicate?.fullName || "",
+        duplicateTags: duplicateTags.join(", ")
+      }
+    });
+    await this.notifyBotError("Duplicate terminal contact paused SMS bot", {
+      Name: updated.name || "unknown",
+      Phone: updated.phone || "unknown",
+      "Bot contact": updated.ghlContactId || updated.id,
+      "Duplicate contact": duplicateId || "unknown",
+      Reason: reason,
+      Tags: duplicateTags.join(", ")
+    }, { operationalOnly: true, slack: false, level: "warn" });
+    return updated;
+  }
+
+  async stopIfDuplicateTerminalContact(contact, message) {
+    if (this.config.dryRun || !this.config.ghl?.token || !contact?.phone) return null;
+    try {
+      const primaryLookupPhone = contact.phone;
+      const normalized = normalizePhone(primaryLookupPhone);
+      const lookupPhones = Array.from(new Set([primaryLookupPhone, normalized ? `+1${normalized}` : ""].filter(Boolean)));
+      let contacts = [];
+      for (const lookupPhone of lookupPhones) {
+        const result = await ghl.searchContactsByPhone(this.config, lookupPhone, { limit: 20 });
+        contacts = [...contacts, ...(result.contacts || [])];
+        if (contacts.length) break;
+      }
+      const seen = new Set();
+      const uniqueContacts = contacts.filter((candidate) => {
+        const id = candidate?.id || candidate?.contactId || candidate?.ghlContactId || `${candidate?.phone}-${candidate?.name}`;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      const duplicate = uniqueContacts.find((candidate) => {
+        if (sameContactIdentity(contact, candidate)) return false;
+        if (normalizePhone(candidate?.phone || candidate?.phoneNumber || candidate?.phone_number) !== normalizePhone(contact.phone)) {
+          return false;
+        }
+        return Boolean(duplicateTerminalReason(candidate));
+      });
+      if (!duplicate) return null;
+      return this.stopForDuplicateTerminalContact(contact, duplicate, duplicateTerminalReason(duplicate), message);
+    } catch (error) {
+      const failed = await this.store.upsertContact({
+        ...contact,
+        lastDuplicateLookupFailedAt: new Date().toISOString(),
+        lastDuplicateLookupError: error.message
+      });
+      await this.recordDecision(failed, "skipped", "duplicate_phone_lookup_failed_no_send", {
+        message,
+        meta: { error: error.message }
+      });
+      await this.notifyBotError("GHL duplicate phone lookup failed", {
+        Name: failed.name || "unknown",
+        Phone: failed.phone || "unknown",
+        "GHL contact": failed.ghlContactId || failed.id,
+        Error: error.message
+      }, { operationalOnly: true, slack: false, level: "warn" });
+      return failed;
+    }
+  }
+
   async sendBotMessage(contact, message, options = {}) {
     if (isEmptyTextToken(message)) {
       await this.recordDecision(contact, "skipped", "empty_bot_message", { meta: { templateKey: options.templateKey || "" } });
@@ -973,6 +1092,8 @@ class SmsBot {
         await this.recordDecision(contact, "skipped", "manual_hold_tag", { message });
         return null;
       }
+      const duplicateTerminalContact = await this.stopIfDuplicateTerminalContact(contact, message);
+      if (duplicateTerminalContact) return null;
     }
     if (!options.bypassQuietHours && !isWithinTextingWindow(contact, this.config)) {
       const job = await this.store.addJob({
@@ -2429,6 +2550,8 @@ class SmsBot {
         question = "No problem, we can do tomorrow or another day 🙏 What specific time works best for the Specialist call?";
       } else if (/\btomorrow\b/.test(normalizedText) || parsed.preferredDay === "tomorrow") {
         question = "What specific time tomorrow works best?";
+      } else if (parsed.preferredDay === "weekday" && parsed.preferredDayLabel) {
+        question = `What specific time ${parsed.preferredDayLabel} works best?`;
       } else if (/\b(today|later today|tonight)\b/.test(normalizedText)) {
         question = "What specific time later today works best?";
       }

@@ -76,6 +76,19 @@ test("call-time parser does not turn bare dates or money amounts into appointmen
   assert.equal(parseCallTime("They tried to offer me $23,000 but I turned it down", contact, config), null);
 });
 
+test("call-time parser does not turn medical dates plus weekday into an appointment", () => {
+  const parsed = parseCallTime(
+    "PCP visit and 4/30 Orthopedic visit 4/30 probably not until Tuesday",
+    contact,
+    config,
+    new Date("2026-05-10T16:00:00.000Z")
+  );
+  assert.equal(parsed.type, "needs_specific_time");
+  assert.equal(parsed.preferredDay, "weekday");
+  assert.equal(parsed.preferredDayLabel, "tuesday");
+  assert.equal(parsed.startsAt, undefined);
+});
+
 test("future availability phrasing wins over call-now words", () => {
   const pacificContact = { timezone: "America/Los_Angeles" };
   const pacificConfig = { texting: { defaultTimezone: "America/Chicago" } };

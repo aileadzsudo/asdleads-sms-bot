@@ -218,6 +218,13 @@ function hasClockTimeSignal(text) {
   );
 }
 
+function removeNumericDateTokens(text) {
+  return normalize(text)
+    .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseCallTime(text, contact, config, now = new Date()) {
   const t = normalize(text)
     .replace(/(\d)\s*([ap])\s*\.?\s*m\.?/g, "$1$2m")
@@ -225,6 +232,7 @@ function parseCallTime(text, contact, config, now = new Date()) {
     .replace(/\b\d{1,3},\d{3,}\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  const clockText = removeNumericDateTokens(t);
   if (isCallNow(t)) return { type: "now", confidence: 0.95 };
   const timeZone = contact.timezone || config.texting.defaultTimezone;
   const local = getLocalParts(now, timeZone);
@@ -263,19 +271,22 @@ function parseCallTime(text, contact, config, now = new Date()) {
   if (/\b(later today|later|not now|not right now|can't talk|cant talk|at work|working|busy)\b/.test(t) && !/\d/.test(t)) {
     return { type: "needs_specific_time", confidence: 0.8 };
   }
-  if (/\btomorrow\b/.test(t) && !hasClockTimeSignal(t)) {
+  if (/\btomorrow\b/.test(t) && !hasClockTimeSignal(clockText)) {
     return { type: "needs_specific_time", confidence: 0.84, preferredDay: "tomorrow" };
   }
-  if (/\b(today|tomorrow|tonight)?\s*(early\s+)?(late\s+)?(morning|afternoon|evening)\b/.test(t) && !/\d/.test(t)) {
+  if (/\b(today|tomorrow|tonight)?\s*(early\s+)?(late\s+)?(morning|afternoon|evening)\b/.test(t) && !/\d/.test(clockText)) {
     return { type: "needs_specific_time", confidence: 0.82 };
+  }
+  if (weekdayMatch && !hasClockTimeSignal(clockText)) {
+    return { type: "needs_specific_time", confidence: 0.84, preferredDay: "weekday", preferredDayLabel: weekdayMatch[1] };
   }
   if (/\bnoon\b/.test(t)) {
     const startsAt = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, hour: 12, minute: 0 }, timeZone);
     return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: 0.85 };
   }
-  const colonTime = t.match(/\b(?:at|after|around|about)?\s*(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
-  const simpleTime = t.match(
-    /\b(?:at|after|around|about)?\s*(\d{1,2})\s*(am|pm)?\b(?!\s*:)(?!\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b)/
+  const colonTime = clockText.match(/\b(?:at|after|around|about)?\s*(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
+  const simpleTime = clockText.match(
+    /\b(?:at|after|around|about)?\s*(\d{1,2})\s*(am|pm)?\b(?!\s*[:/.-])(?!\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b)/
   );
   const match = colonTime || simpleTime;
   if (match) {

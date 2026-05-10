@@ -386,6 +386,31 @@ test("LLM call_later date-only output asks for exact time instead of booking a r
   assert.match(store.getContact("bare-tomorrow").lastOutboundMessage, /specific time tomorrow/i);
 });
 
+test("medical dates plus weekday at call stage ask for exact weekday time instead of booking", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "autumn-weekday",
+    ghlContactId: "autumn-weekday",
+    name: "Autumn",
+    phone: "+15550000098",
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "autumn-weekday",
+    message: "PCP visit and 4/30 Orthopedic visit 4/30 probably not until Tuesday"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("autumn-weekday").appointmentId, undefined);
+  assert.equal(store.getContact("autumn-weekday").awaitingSpecificCallTime, true);
+  assert.match(store.getContact("autumn-weekday").lastOutboundMessage, /specific time tuesday/i);
+});
+
 test("settlement or offer details at call stage escalate instead of becoming an appointment time", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -2318,6 +2343,54 @@ test("inbound duplicate phone pauses when multiple active bot threads match", as
   assert.equal(contact.automationPauseReason, "duplicate_phone_conflict");
   assert.deepEqual(contact.duplicateActiveContactIds, ["active-1", "active-2"]);
   assert.equal(contact.humanEscalationStatus, undefined);
+});
+
+test("outbound SMS is blocked when a same-phone GHL duplicate has an NQ tag", async () => {
+  const { bot, store } = makeBot();
+  bot.config.dryRun = false;
+  bot.config.ghl.token = "test-token";
+  bot.config.ghl.locationId = "loc-test";
+  let sent = false;
+  const originalGetContact = ghl.getContact;
+  const originalSearchContactsByPhone = ghl.searchContactsByPhone;
+  const originalSendSms = ghl.sendSms;
+  ghl.getContact = async () => ({ contact: { id: "manuel-active", tags: ["levin_co", "nr"] } });
+  ghl.searchContactsByPhone = async () => ({
+    contacts: [
+      { id: "manuel-active", phone: "+17192895474", tags: ["levin_co", "nr"] },
+      { id: "manuel-duplicate-nq", phone: "+17192895474", tags: ["levin_co", "nq"] }
+    ]
+  });
+  ghl.sendSms = async () => {
+    sent = true;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "manuel-active",
+      ghlContactId: "manuel-active",
+      name: "Manuel",
+      phone: "+17192895474",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+    });
+
+    const result = await bot.sendBotMessage(store.getContact("manuel-active"), "What exact call time works for you?", {
+      bypassQuietHours: true
+    });
+
+    const contact = store.getContact("manuel-active");
+    assert.equal(result, null);
+    assert.equal(sent, false);
+    assert.equal(contact.automationPaused, true);
+    assert.equal(contact.automationPauseReason, "duplicate_nq_tag");
+    assert.equal(contact.duplicateTerminalContactId, "manuel-duplicate-nq");
+    assert.equal(store.listDecisionLogs("manuel-active").some((log) => log.reason === "duplicate_nq_tag"), true);
+  } finally {
+    ghl.getContact = originalGetContact;
+    ghl.searchContactsByPhone = originalSearchContactsByPhone;
+    ghl.sendSms = originalSendSms;
+  }
 });
 
 test("missed call follow-up includes scheduled call time", async () => {
