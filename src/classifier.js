@@ -44,7 +44,23 @@ function escalationReason(text) {
     ],
     [
       "outside_question",
-      ["how much", "do i need", "insurance", "settlement", "claim worth", "compensation", "property damage", "rental car"]
+      [
+        "how much",
+        "do i need",
+        "insurance",
+        "settlement",
+        "claim worth",
+        "compensation",
+        "property damage",
+        "rental car",
+        "car damage",
+        "vehicle damage",
+        "paid for",
+        "only paid",
+        "never gave me",
+        "gave me anything",
+        "money for the accident"
+      ]
     ],
     [
       "post_intake_or_firm_issue",

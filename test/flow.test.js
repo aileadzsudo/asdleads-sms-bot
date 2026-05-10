@@ -283,6 +283,50 @@ test("not-today replies ask for another day instead of pushing later today", asy
   assert.doesNotMatch(store.getContact("not-today").lastOutboundMessage, /later today/i);
 });
 
+test("insurance payment detail while asking fault escalates instead of repeating yes-no clarification", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "yolanda-payment",
+    ghlContactId: "yolanda-payment",
+    name: "Yolanda",
+    phone: "+15550000098",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    clarificationAttemptsByQuestion: { [QUALIFICATION.NEEDS_FAULT]: 1 }
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "yolanda-payment",
+    message: "They only paid for the car damage. Never gave me anything for the accident"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(store.getContact("yolanda-payment").escalationReason, "outside_question");
+  assert.doesNotMatch(store.getContact("yolanda-payment").lastOutboundMessage || "", /yes, no, or not sure/i);
+});
+
+test("repeated low-confidence non-answer escalates after one clarification", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "repeat-non-answer",
+    ghlContactId: "repeat-non-answer",
+    name: "Repeat",
+    phone: "+15550000099",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  await bot.clarifyOrEscalate(store.getContact("repeat-non-answer"), "Call you tomorrow", "call_time_before_qualification_needs_human");
+  const contact = await bot.clarifyOrEscalate(
+    store.getContact("repeat-non-answer"),
+    "Never gave me anything for the accident",
+    "llm_low_confidence_answer"
+  );
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(store.getContact("repeat-non-answer").clarificationAttemptsByQuestion[QUALIFICATION.NEEDS_FAULT], 2);
+});
+
 test("LLM call_later date-only output asks for exact time instead of booking a random time", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

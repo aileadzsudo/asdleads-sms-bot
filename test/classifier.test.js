@@ -128,6 +128,7 @@ test("flags common escalation messages", () => {
   assert.equal(escalationReason("I was in an accident yesterday"), "");
   assert.equal(escalationReason("Your verification code for JustCall account login is - 162705"), "off_topic_verification_code");
   assert.equal(escalationReason("I need an attorney"), "attorney_request");
+  assert.equal(escalationReason("They only paid for the car damage and never gave me anything for the accident"), "outside_question");
 });
 
 test("flags document and report messages", () => {

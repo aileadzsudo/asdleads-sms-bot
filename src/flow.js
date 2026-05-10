@@ -1705,8 +1705,7 @@ class SmsBot {
     }
 
     if (contact.engagementStatus === ENGAGEMENT.READY_FOR_CALL || contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) {
-      await this.escalate(contact, "message_after_bot_paused");
-      return contact;
+      return this.escalate(contact, "message_after_bot_paused");
     }
 
     if (contact.awaitingBackupTime) {
@@ -1735,8 +1734,7 @@ class SmsBot {
       if (requestedTime?.type === "scheduled" || requestedTime?.type === "needs_specific_time") {
         return this.handleReschedule(contact, inbound.lastInboundMessage);
       }
-      await this.escalate(contact, "appointment_reply_needs_human_review");
-      return contact;
+      return this.escalate(contact, "appointment_reply_needs_human_review");
     }
 
     if (contact.engagementStatus === ENGAGEMENT.MISSED_CALL) {
@@ -1760,8 +1758,7 @@ class SmsBot {
       if (canUseExtractedAnswer && expectedAnswer) {
         return this.advanceQualification(contact, expectedAnswer);
       }
-      await this.escalate(contact, reason);
-      return contact;
+      return this.escalate(contact, reason);
     }
 
     if (!contact.qualificationProgress) {
@@ -1769,8 +1766,7 @@ class SmsBot {
     }
 
     if (contact.qualificationProgress === QUALIFICATION.COMPLETE) {
-      await this.escalate(contact, "message_after_completed_flow");
-      return contact;
+      return this.escalate(contact, "message_after_completed_flow");
     }
 
     contact = await this.store.upsertContact({ ...contact, engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION });
@@ -1820,16 +1816,7 @@ class SmsBot {
       }
       const llmResult = await this.tryLlmFallback(contact, inbound.lastInboundMessage);
       if (llmResult) return llmResult;
-      const attempts = { ...(contact.clarificationAttemptsByQuestion || {}) };
-      const key = contact.qualificationProgress;
-      attempts[key] = (attempts[key] || 0) + 1;
-      contact = await this.store.upsertContact({ ...contact, clarificationAttemptsByQuestion: attempts });
-      if (attempts[key] > 1) {
-        await this.escalate(contact, "low_confidence_answer");
-        return contact;
-      }
-      await this.sendBotMessage(contact, qualificationTemplates.clarify, { bypassQuietHours: true });
-      return contact;
+      return this.clarifyOrEscalate(contact, inbound.lastInboundMessage, "low_confidence_answer");
     }
 
     return this.advanceQualification(contact, answer);
@@ -2173,11 +2160,28 @@ class SmsBot {
       confidence >= this.config.llm.clarifyConfidence;
 
     if (!callStageIntent && confidence < this.config.llm.minConfidence) {
-      await this.sendBotMessage(updated, qualificationTemplates.clarify, { bypassQuietHours: true });
-      return this.store.getContact(updated.id);
+      return this.clarifyOrEscalate(updated, inboundText, "llm_low_confidence_answer");
     }
 
     return this.applyLlmClassification(updated, classification, inboundText);
+  }
+
+  async clarifyOrEscalate(contact, inboundText, reason = "low_confidence_answer") {
+    const attempts = { ...(contact.clarificationAttemptsByQuestion || {}) };
+    const key = contact.qualificationProgress || "unknown";
+    attempts[key] = (attempts[key] || 0) + 1;
+    const updated = await this.store.upsertContact({
+      ...contact,
+      clarificationAttemptsByQuestion: attempts,
+      lastClarificationReason: reason,
+      lastClarificationMessage: inboundText || contact.lastInboundMessage || ""
+    });
+    if (attempts[key] > 1) {
+      await this.escalate(updated, reason);
+      return this.store.getContact(updated.id) || updated;
+    }
+    await this.sendBotMessage(updated, qualificationTemplates.clarify, { bypassQuietHours: true });
+    return this.store.getContact(updated.id) || updated;
   }
 
   async recentCallTimeCandidate(contact, options = {}) {
@@ -2209,11 +2213,10 @@ class SmsBot {
       contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME &&
       !["call_now", "call_later", "prefers_text", "acknowledgement"].includes(classification.label)
     ) {
-      await this.escalate(contact, `llm_call_time_${classification.label}`, {
+      return this.escalate(contact, `llm_call_time_${classification.label}`, {
         Confidence: String(classification.confidence || ""),
         Reason: classification.reason || "Reply did not answer the requested call time."
       });
-      return this.store.getContact(contact.id);
     }
 
     if (classification.label === "accident_date") {
@@ -2252,6 +2255,9 @@ class SmsBot {
         classification.normalized_value && hasClockTimeSignal(classification.normalized_value)
           ? classification.normalized_value
           : inboundText;
+      if (contact.qualificationProgress !== QUALIFICATION.NEEDS_CALL_TIME && !hasClockTimeSignal(candidate)) {
+        return this.clarifyOrEscalate(contact, inboundText, "call_time_before_qualification_needs_human");
+      }
       return this.handleCallTime(contact, candidate);
     }
 
@@ -2271,11 +2277,10 @@ class SmsBot {
       }
     }
 
-    await this.escalate(contact, `llm_unhandled_${classification.label}`, {
+    return this.escalate(contact, `llm_unhandled_${classification.label}`, {
       Confidence: String(classification.confidence || ""),
       Reason: classification.reason || ""
     });
-    return this.store.getContact(contact.id);
   }
 
   async advanceQualification(contact, answer) {
@@ -2337,8 +2342,7 @@ class SmsBot {
     const parsed = parseCallTime(text, contact, this.config);
     if (!parsed) {
       if (looksLikeDetailedLegalOrInsuranceInfo(text)) {
-        await this.escalate(contact, "detailed_information");
-        return this.store.getContact(contact.id);
+        return this.escalate(contact, "detailed_information");
       }
       if (looksLikeInjuryContext(text)) {
         const sent = await this.sendBotMessage(contact, qualificationTemplates.injuryContextCallAsk, { bypassQuietHours: true });
@@ -2348,8 +2352,7 @@ class SmsBot {
       }
       const llmResult = await this.tryLlmFallback(contact, text);
       if (llmResult) return llmResult;
-      await this.escalate(contact, "call_time_unhandled_reply");
-      return this.store.getContact(contact.id);
+      return this.escalate(contact, "call_time_unhandled_reply");
     }
     if (parsed.type === "needs_specific_time") {
       contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true });
