@@ -2782,6 +2782,67 @@ test("manual appointment edit after no-show replaces recovery with normal remind
   assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
 });
 
+test("GHL appointment sync treats no-zone start time as contact local and suppresses duplicate booking alert", async () => {
+  const { bot, store } = makeBot();
+  const originalAlertAt = "2026-05-10T23:23:20.000Z";
+  store.upsertContact({
+    id: "appointment-echo",
+    ghlContactId: "appointment-echo",
+    name: "Appointment Echo",
+    phone: "+15550000079",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Mon, May 11, 10:00 AM CST",
+    preferredCallTimeIso: "2026-05-11T15:00:00.000Z",
+    appointmentId: "bot-created-id",
+    bookingAlertSentAt: originalAlertAt
+  });
+
+  const contact = await bot.syncAppointment({
+    contactId: "appointment-echo",
+    appointmentId: "ghl-echo-id",
+    startTime: "2026-05-11T10:00:00",
+    status: "confirmed"
+  });
+
+  assert.equal(contact.preferredCallTimeIso, "2026-05-11T15:00:00.000Z");
+  assert.match(contact.preferredCallTime, /10:00 AM CST/);
+  assert.equal(contact.appointmentId, "ghl-echo-id");
+  assert.equal(contact.bookingAlertSentAt, originalAlertAt);
+});
+
+test("GHL appointment sync can repair appointment time silently", async () => {
+  const { bot, store } = makeBot();
+  const originalAlertAt = "2026-05-10T23:23:20.000Z";
+  store.upsertContact({
+    id: "appointment-repair",
+    ghlContactId: "appointment-repair",
+    name: "Appointment Repair",
+    phone: "+15550000080",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Mon, May 11, 5:00 AM CST",
+    preferredCallTimeIso: "2026-05-11T10:00:00.000Z",
+    appointmentId: "wrong-sync-id",
+    bookingAlertSentAt: originalAlertAt
+  });
+
+  const contact = await bot.syncAppointment({
+    contactId: "appointment-repair",
+    appointmentId: "correct-sync-id",
+    startTime: "2026-05-11T10:00:00",
+    status: "confirmed",
+    suppressAlert: true
+  });
+
+  assert.equal(contact.preferredCallTimeIso, "2026-05-11T15:00:00.000Z");
+  assert.match(contact.preferredCallTime, /10:00 AM CST/);
+  assert.equal(contact.appointmentId, "correct-sync-id");
+  assert.equal(contact.bookingAlertSentAt, originalAlertAt);
+});
+
 test("warm follow-ups aggressively chase before entering re-engagement", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

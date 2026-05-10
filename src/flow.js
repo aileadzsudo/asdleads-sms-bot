@@ -970,8 +970,8 @@ function appointmentStatusFromPayload(payload = {}) {
   ).toLowerCase();
 }
 
-function appointmentStartIsoFromPayload(payload = {}) {
-  const value = appointmentField(payload, [
+function appointmentStartRawFromPayload(payload = {}) {
+  return appointmentField(payload, [
     "startTime",
     "start_time",
     "startsAt",
@@ -996,9 +996,64 @@ function appointmentStartIsoFromPayload(payload = {}) {
     "event.start_time",
     "event.start"
   ]);
+}
+
+function parseLocalAppointmentStart(value, contact = {}, config = {}) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const timeZone = contact.timezone || config.texting?.defaultTimezone || "America/Chicago";
+  const isoNoZone = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?$/);
+  if (isoNoZone) {
+    const [, year, month, day, hour, minute] = isoNoZone;
+    return localDateToUtc(
+      {
+        year: Number(year),
+        month: Number(month),
+        day: Number(day),
+        hour: Number(hour),
+        minute: Number(minute)
+      },
+      timeZone
+    ).toISOString();
+  }
+  const usDateTime = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (usDateTime) {
+    const [, month, day, rawYear, rawHour, rawMinute, meridiem] = usDateTime;
+    let year = Number(rawYear);
+    if (year < 100) year += 2000;
+    let hour = Number(rawHour);
+    if (meridiem?.toLowerCase() === "pm" && hour < 12) hour += 12;
+    if (meridiem?.toLowerCase() === "am" && hour === 12) hour = 0;
+    return localDateToUtc(
+      {
+        year,
+        month: Number(month),
+        day: Number(day),
+        hour,
+        minute: Number(rawMinute || 0)
+      },
+      timeZone
+    ).toISOString();
+  }
+  return "";
+}
+
+function appointmentStartIsoFromPayload(payload = {}, contact = {}, config = {}) {
+  const value = appointmentStartRawFromPayload(payload);
   if (!value) return "";
+  if (typeof value === "string" && !/(?:z|[+-]\d{2}:?\d{2})$/i.test(value.trim())) {
+    const localIso = parseLocalAppointmentStart(value, contact, config);
+    if (localIso) return localIso;
+  }
   const date = typeof value === "number" ? new Date(value) : new Date(String(value));
   return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function suppressAppointmentAlertFromPayload(payload = {}) {
+  const value = textValue(
+    appointmentField(payload, ["suppressAlert", "suppress_alert", "silent", "noSlack", "no_slack"])
+  );
+  return ["true", "1", "yes", "y"].includes(normalize(value));
 }
 
 function isNoShowAppointmentStatus(status = "") {
@@ -3361,7 +3416,7 @@ class SmsBot {
     const base = { ...(existing || {}), ...normalized };
     const appointmentId = appointmentIdFromPayload(payload) || payload.appointmentId || payload.appointment_id || base.appointmentId || "";
     const preferredCallTimeIso =
-      appointmentStartIsoFromPayload(payload) ||
+      appointmentStartIsoFromPayload(payload, base, this.config) ||
       normalized.preferredCallTimeIso ||
       payload.preferredCallTimeIso ||
       payload.callTimeIso ||
@@ -3424,9 +3479,9 @@ class SmsBot {
     if (isNoShowAppointmentStatus(status)) return this.markNoShow(payload);
 
     const contactId = appointmentContactId(payload);
-    const startsAt = appointmentStartIsoFromPayload(payload);
+    const rawStartsAt = appointmentStartRawFromPayload(payload);
     const appointmentId = appointmentIdFromPayload(payload);
-    if (!contactId || !startsAt) {
+    if (!contactId || !rawStartsAt) {
       if (this.store.setSetting) {
         await this.store.setSetting("last_ignored_appointment_sync", {
           reason: !contactId ? "missing_contact_id" : "missing_start_time",
@@ -3444,6 +3499,18 @@ class SmsBot {
       ...normalized
     });
     contact = await this.hydrateContactTags(contact);
+    const startsAt = appointmentStartIsoFromPayload(payload, contact, this.config);
+    if (!startsAt) {
+      if (this.store.setSetting) {
+        await this.store.setSetting("last_ignored_appointment_sync", {
+          reason: "invalid_start_time",
+          rawStartTime: textValue(rawStartsAt),
+          payloadKeys: Object.keys(payload || {}).sort(),
+          receivedAt: new Date().toISOString()
+        });
+      }
+      return null;
+    }
 
     if (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) {
       await this.recordDecision(contact, "skipped", "appointment_sync_opted_out", {
@@ -3501,7 +3568,8 @@ class SmsBot {
       meta: { appointmentId: updated.appointmentId || "", startsAt, oldAppointmentId, oldStartsAt }
     });
 
-    if (!updated.bookingAlertSentAt || oldAppointmentId !== updated.appointmentId || oldStartsAt !== startsAt) {
+    const suppressAppointmentAlert = suppressAppointmentAlertFromPayload(payload);
+    if (!suppressAppointmentAlert && (!updated.bookingAlertSentAt || oldStartsAt !== startsAt)) {
       const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
         "Primary call time": updated.preferredCallTime,
         "Backup time": updated.backupCallTime || "none",
