@@ -47,6 +47,7 @@ test("extracts accident date without needing AI", () => {
 test("parses call now and simple scheduled time", () => {
   assert.equal(parseCallTime("call me now", contact, config).type, "now");
   assert.equal(parseCallTime("I can talk now", contact, config).type, "now");
+  assert.equal(parseCallTime("Yes now", contact, config).type, "now");
   assert.equal(parseCallTime("Now is ok", contact, config).type, "now");
   assert.equal(parseCallTime("anytime", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("can you call back later?", contact, config).type, "needs_specific_time");

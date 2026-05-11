@@ -346,6 +346,103 @@ test("repeat NR after call-now no answer uses recovery scheduling instead of res
   );
 });
 
+test("repeat NR after short yes-now reply uses missed-call recovery even if human flag was cleared", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "john-now-missed",
+    ghlContactId: "john-now-missed",
+    name: "John Aguilar",
+    phone: "+15550000094",
+    tags: ["lhpark_ca", "nr"],
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    humanEscalationStatus: false,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "detailed_information",
+    lastInboundMessage: "Yes now",
+    lastOutboundMessage: "Hi John, do you remember the date of the accident?",
+    sentColdTemplateKeys: ["day_1_am"]
+  });
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "john-now-missed",
+    name: "John Aguilar",
+    phone: "+15550000094",
+    tags: ["NR"],
+    disposition: "NR"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("john-now-missed").qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.match(store.getContact("john-now-missed").lastOutboundMessage, /tried giving you a call/i);
+  assert.doesNotMatch(store.getContact("john-now-missed").lastOutboundMessage, /looking over your accident info/i);
+});
+
+test("repeat NR on an already enrolled NR lead does not resend the initial cold SMS", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "already-nr",
+    ghlContactId: "already-nr",
+    name: "Already NR",
+    phone: "+15550000095",
+    tags: ["NR"],
+    engagementStatus: ENGAGEMENT.INITIAL_SMS_SENT,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    currentSequenceName: "initial_sms",
+    sentColdTemplateKeys: ["day_1_am"],
+    lastOutboundMessage: "Hi Already, do you remember the date of the accident?"
+  });
+
+  const contact = await bot.startFromNoResponseDisposition({
+    contactId: "already-nr",
+    name: "Already NR",
+    phone: "+15550000095",
+    tags: ["NR"],
+    disposition: "NR"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.INITIAL_SMS_SENT);
+  assert.equal(store.getContact("already-nr").lastOutboundMessage, "Hi Already, do you remember the date of the accident?");
+  assert.equal(
+    Object.values(store.data.messages).some((message) => message.contactId === "already-nr" && /looking over your accident info/i.test(message.body || "")),
+    false
+  );
+  assert.equal(
+    store.data.decisionLogs.some((log) => log.contactId === "already-nr" && log.reason === "repeat_no_response_already_enrolled"),
+    true
+  );
+});
+
+test("short yes-now inbound triggers urgent call-now instead of staying in cold outreach", async () => {
+  const { bot, store } = makeBot();
+  let urgentAlerts = 0;
+  const originalUrgent = slack.sendUrgentCallNow;
+  slack.sendUrgentCallNow = async () => {
+    urgentAlerts += 1;
+  };
+  store.upsertContact({
+    id: "yes-now",
+    ghlContactId: "yes-now",
+    name: "Yes Now",
+    phone: "+15550000096",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    lastOutboundMessage: "What was the date of the accident?"
+  });
+
+  try {
+    const contact = await bot.handleInboundSms({
+      contactId: "yes-now",
+      message: "Yes now"
+    });
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.READY_FOR_CALL);
+    assert.equal(urgentAlerts, 1);
+  } finally {
+    slack.sendUrgentCallNow = originalUrgent;
+  }
+});
+
 test("stale warm follow-up is skipped when qualification progress already advanced", async () => {
   const { bot, store } = makeBot();
   const oldOutbound = new Date(Date.now() - 10 * 60 * 1000).toISOString();

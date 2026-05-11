@@ -839,7 +839,11 @@ function shouldBypassQuietHoursForInitialJob(job = {}) {
 function shouldTreatNoResponseAsCallNoAnswer(existing = {}) {
   if (!existing || existing.optOutStatus || existing.automationPaused) return false;
   if (existing.engagementStatus === ENGAGEMENT.READY_FOR_CALL) return true;
+  if (isCallNow(existing.lastInboundMessage || "")) return true;
   if (existing.humanEscalationStatus && /call_now|ready_for_call/i.test(existing.escalationReason || existing.humanEscalationStage || "")) {
+    return true;
+  }
+  if (/call_now|ready_for_call|call_now_no_answer/i.test(existing.escalationReason || existing.humanEscalationStage || "")) {
     return true;
   }
   if (
@@ -849,6 +853,18 @@ function shouldTreatNoResponseAsCallNoAnswer(existing = {}) {
     return true;
   }
   return false;
+}
+
+function hasNoResponseMemory(existing = {}) {
+  if (!existing) return false;
+  return Boolean(
+    hasAnyTag(existing, ["nr", "no_response"]) &&
+      (existing.lastOutboundMessage ||
+        existing.lastOutboundTimestamp ||
+        existing.currentSequenceName ||
+        (existing.sentColdTemplateKeys || []).length ||
+        existing.engagementStatus)
+  );
 }
 
 function isPermanentSmsBlockError(error) {
@@ -1843,6 +1859,29 @@ class SmsBot {
       await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
       await this.recordDecision(latest, "sent", "call_now_no_answer_recovery", { trigger: "no_response_disposition" });
       return latest;
+    }
+
+    if (hasNoResponseMemory(existing)) {
+      let contact = await this.store.upsertContact({
+        ...existing,
+        ...normalized,
+        timezone: chooseContactTimezone(existing, normalized, this.config),
+        optOutStatus: existing.optOutStatus || false,
+        humanEscalationStatus: existing.humanEscalationStatus || false
+      });
+      contact = await this.hydrateContactTags(contact);
+      if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
+      if (hasNqTag(contact)) return this.stopForNqTag(contact);
+      if (hasManualHumanHoldTag(contact)) return this.stopForManualHoldTag(contact);
+      await this.recordDecision(contact, "skipped", "repeat_no_response_already_enrolled", {
+        trigger: "no_response_disposition",
+        meta: {
+          currentSequenceName: contact.currentSequenceName || "",
+          engagementStatus: contact.engagementStatus || "",
+          lastOutboundMessage: contact.lastOutboundMessage || ""
+        }
+      });
+      return contact;
     }
 
     const contact = await this.store.upsertContact({
