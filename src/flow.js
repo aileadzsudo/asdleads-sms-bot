@@ -23,6 +23,7 @@ const {
   parseAccidentDate,
   parseCallTime,
   parseExpectedAnswer,
+  isCallNow,
   isNotTodayAvailability,
   hasClockTimeSignal
 } = require("./classifier");
@@ -2056,6 +2057,9 @@ class SmsBot {
       return this.stopForManualHoldTag(contact);
     }
     contact = await this.applyTimezoneCorrection(contact, inbound.lastInboundMessage);
+    if (isCallNow(inbound.lastInboundMessage)) {
+      return this.handleCallTime(contact, "call me now");
+    }
     if (hasExistingRepresentation(inbound.lastInboundMessage)) {
       const updated = await this.store.upsertContact({
         ...contact,
@@ -2429,6 +2433,15 @@ class SmsBot {
       await this.scheduleWarmFollowUps(contact, !isWithinTextingWindow(contact, this.config));
       await this.recordDecision(contact, "repaired", "warm_followups_scheduled", { trigger: "admin_action" });
       return this.store.getContact(contact.id);
+    }
+
+    if (["urgent_call_now", "call_now", "ready_for_call_now"].includes(action)) {
+      await this.recordDecision(contact, "repaired", "admin_urgent_call_now_requested", {
+        trigger: "admin_action",
+        message: contact.lastInboundMessage || "",
+        meta: controlMeta
+      });
+      return this.handleCallTime(contact, "call me now");
     }
 
     if (["silent_appointment_sync", "sync_appointment_silent", "repair_appointment_sync"].includes(action)) {
@@ -2993,23 +3006,14 @@ class SmsBot {
       (await this.sendBotMessage(updated, render(qualificationTemplates.backupAsk, updated, { time: display }), {
       bypassQuietHours: true
       })) || updated;
-    const bookingAlertSent = await this.notifyAppointmentBooked(afterBackupAsk, {
-      "Primary call time": afterBackupAsk.preferredCallTime,
-      "Backup time": "pending",
-      Timezone: afterBackupAsk.timezone,
-      "GHL appointment": afterBackupAsk.appointmentId || "created"
-    });
-    const afterAlert = bookingAlertSent
-      ? await this.store.upsertContact({ ...afterBackupAsk, bookingAlertSentAt: new Date().toISOString() })
-      : afterBackupAsk;
-    await this.scheduleAppointmentReminders(afterAlert);
+    await this.scheduleAppointmentReminders(afterBackupAsk);
     await this.store.addJob({
       type: "backup_time_timeout",
-      contactId: afterAlert.id,
+      contactId: afterBackupAsk.id,
       runAt: addMinutes(new Date(), 15).toISOString(),
       payload: {}
     });
-    return afterAlert;
+    return afterBackupAsk;
   }
 
   async handleReschedule(contact, text) {
@@ -3563,7 +3567,7 @@ class SmsBot {
       preferredCallTime: display,
       preferredCallTimeIso: startsAt,
       appointmentId: appointmentId || contact.appointmentId || "",
-      awaitingBackupTime: false,
+      awaitingBackupTime: Boolean(contact.awaitingBackupTime),
       humanEscalationStatus: false,
       humanEscalationStage: "appointment_synced",
       escalationReason: "",
@@ -3584,7 +3588,6 @@ class SmsBot {
         "enter_reengagement",
         "send_reengagement_template",
         "appointment_reminder",
-        "backup_time_timeout",
         "missed_call_followup",
         "backup_no_show_reminder"
       ].includes(job.type)
@@ -3600,7 +3603,7 @@ class SmsBot {
     });
 
     const suppressAppointmentAlert = suppressAppointmentAlertFromPayload(payload);
-    if (!suppressAppointmentAlert && (!updated.bookingAlertSentAt || oldStartsAt !== startsAt)) {
+    if (!updated.awaitingBackupTime && !suppressAppointmentAlert && (!updated.bookingAlertSentAt || oldStartsAt !== startsAt)) {
       const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
         "Primary call time": updated.preferredCallTime,
         "Backup time": updated.backupCallTime || "none",

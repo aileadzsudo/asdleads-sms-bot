@@ -755,6 +755,90 @@ test("backup timeout confirms appointment while acknowledging no backup response
   assert.match(store.getContact("backup-timeout-copy").lastOutboundMessage, /reschedule/i);
 });
 
+test("booking Slack waits until backup time is resolved or timeout fires", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentBooked = slack.sendAppointmentBooked;
+  let bookingAlerts = 0;
+  slack.sendAppointmentBooked = async () => {
+    bookingAlerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "booking-alert-delay",
+      ghlContactId: "booking-alert-delay",
+      name: "Booking Alert Delay",
+      phone: "+15550000141",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+    });
+
+    const booked = await bot.handleCallTime(store.getContact("booking-alert-delay"), "tomorrow at 10am");
+    const timeoutJob = Object.values(store.data.jobs).find(
+      (job) => job.contactId === "booking-alert-delay" && job.type === "backup_time_timeout" && job.status === "pending"
+    );
+
+    assert.equal(booked.awaitingBackupTime, true);
+    assert.equal(store.getContact("booking-alert-delay").bookingAlertSentAt, undefined);
+    assert.equal(bookingAlerts, 0);
+    assert.ok(timeoutJob);
+
+    await bot.syncAppointment({
+      contactId: "booking-alert-delay",
+      appointmentId: "ghl-echo-before-backup",
+      startTime: store.getContact("booking-alert-delay").preferredCallTimeIso,
+      status: "confirmed"
+    });
+
+    assert.equal(store.getContact("booking-alert-delay").awaitingBackupTime, true);
+    assert.equal(bookingAlerts, 0);
+    assert.equal(store.data.jobs[timeoutJob.id].status, "pending");
+
+    await bot.runDueJob({ ...store.data.jobs[timeoutJob.id], runAt: new Date().toISOString() });
+
+    assert.equal(store.getContact("booking-alert-delay").awaitingBackupTime, false);
+    assert.ok(store.getContact("booking-alert-delay").bookingAlertSentAt);
+    assert.equal(bookingAlerts, 1);
+  } finally {
+    slack.sendAppointmentBooked = originalSendAppointmentBooked;
+  }
+});
+
+test("backup time answer sends the first booking Slack with backup included", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentBooked = slack.sendAppointmentBooked;
+  const alerts = [];
+  slack.sendAppointmentBooked = async (_config, _contact, extra) => {
+    alerts.push(extra);
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "booking-alert-backup",
+      ghlContactId: "booking-alert-backup",
+      name: "Backup Alert",
+      phone: "+15550000142",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.CALL_BOOKED,
+      preferredCallTime: "Mon, May 11, 10:00 AM CST",
+      preferredCallTimeIso: "2026-05-11T15:00:00.000Z",
+      appointmentId: "appt-backup-alert",
+      awaitingBackupTime: true
+    });
+
+    const contact = await bot.handleInboundSms({ contactId: "booking-alert-backup", message: "11am works as backup" });
+
+    assert.equal(contact.awaitingBackupTime, false);
+    assert.ok(store.getContact("booking-alert-backup").bookingAlertSentAt);
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0]["Backup time"], /11:00 AM/);
+  } finally {
+    slack.sendAppointmentBooked = originalSendAppointmentBooked;
+  }
+});
+
 test("legacy next-day evening reminder jobs still render", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -3327,6 +3411,71 @@ test("after vague later reply, warm follow-up asks for exact time", async () => 
   assert.doesNotMatch(store.getContact("later-specific").lastOutboundMessage, /now or later/i);
   const message = store.data.messages.find((item) => item.contactId === "later-specific" && item.direction === "outbound");
   assert.equal(message.templateKey, "needs_call_time_specific.1");
+});
+
+test("call-now phrase interrupts qualification and sends urgent call alert", async () => {
+  const { bot, store } = makeBot();
+  const originalSendUrgentCallNow = slack.sendUrgentCallNow;
+  let urgentAlerts = 0;
+  slack.sendUrgentCallNow = async () => {
+    urgentAlerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "call-now-mid-qualification",
+      ghlContactId: "call-now-mid-qualification",
+      name: "Wytasha",
+      phone: "+15550000143",
+      timezone: "America/Los_Angeles",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+      lastOutboundMessage: "Have you needed to see any doctors or receive any medical treatment after the accident?"
+    });
+
+    const contact = await bot.handleInboundSms({
+      contactId: "call-now-mid-qualification",
+      message: "Okay\nNow is ok"
+    });
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.READY_FOR_CALL);
+    assert.equal(contact.humanEscalationStatus, true);
+    assert.equal(urgentAlerts, 1);
+    assert.match(store.getContact("call-now-mid-qualification").lastOutboundMessage, /connecting you with a Specialist/i);
+  } finally {
+    slack.sendUrgentCallNow = originalSendUrgentCallNow;
+  }
+});
+
+test("admin can force urgent call-now alert for a missed call-now lead", async () => {
+  const { bot, store } = makeBot();
+  const originalSendUrgentCallNow = slack.sendUrgentCallNow;
+  let urgentAlerts = 0;
+  slack.sendUrgentCallNow = async () => {
+    urgentAlerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "admin-urgent-now",
+      ghlContactId: "admin-urgent-now",
+      name: "Admin Urgent",
+      phone: "+15550000144",
+      timezone: "America/Los_Angeles",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+      humanEscalationStatus: true,
+      escalationReason: "detailed_information",
+      lastInboundMessage: "Now is ok"
+    });
+
+    const contact = await bot.applyBotControl({ contactId: "admin-urgent-now", action: "urgent_call_now" });
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.READY_FOR_CALL);
+    assert.equal(urgentAlerts, 1);
+  } finally {
+    slack.sendUrgentCallNow = originalSendUrgentCallNow;
+  }
 });
 
 test("admin can restart hot call-time chase without sending a duplicate question", async () => {

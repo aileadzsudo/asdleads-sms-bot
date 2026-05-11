@@ -213,7 +213,7 @@ function classifyHumanContextIntent(text, progress) {
 
 function isCallNow(text) {
   const t = normalize(text);
-  return /\b(call me now|call now|right now|now is fine|now is good|available now|i'm available now|im available now|i can talk now|asap|llamame ahora|llama ahora|ahora esta bien|disponible ahora|puedo hablar ahora)\b/.test(t);
+  return /\b(call me now|call now|right now|now is fine|now is good|now is ok|now is okay|available now|i'm available now|im available now|i can talk now|asap|llamame ahora|llama ahora|ahora esta bien|disponible ahora|puedo hablar ahora)\b/.test(t);
 }
 
 function isNotTodayAvailability(text) {
