@@ -950,7 +950,7 @@ function appointmentIdFromPayload(payload = {}) {
       "event_id",
       "appointment.id",
       "event.id",
-      "calendar.id"
+      "calendarEvent.id"
     ])
   );
 }
@@ -999,11 +999,13 @@ function appointmentStartRawFromPayload(payload = {}) {
   ]);
 }
 
-function parseLocalAppointmentStart(value, contact = {}, config = {}) {
+function parseLocalAppointmentStart(value, contact = {}, config = {}, timezoneOverride = "") {
   const raw = String(value || "").trim();
   if (!raw) return "";
-  const timeZone = contact.timezone || config.texting?.defaultTimezone || "America/Chicago";
-  const isoNoZone = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?$/);
+  const timeZone = timezoneOverride || contact.timezone || config.texting?.defaultTimezone || "America/Chicago";
+  const isoNoZone = raw.match(
+    /^(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?$/
+  );
   if (isoNoZone) {
     const [, year, month, day, hour, minute] = isoNoZone;
     return localDateToUtc(
@@ -1042,9 +1044,25 @@ function parseLocalAppointmentStart(value, contact = {}, config = {}) {
 function appointmentStartIsoFromPayload(payload = {}, contact = {}, config = {}) {
   const value = appointmentStartRawFromPayload(payload);
   if (!value) return "";
-  if (typeof value === "string" && !/(?:z|[+-]\d{2}:?\d{2})$/i.test(value.trim())) {
-    const localIso = parseLocalAppointmentStart(value, contact, config);
-    if (localIso) return localIso;
+  if (typeof value === "string") {
+    const raw = value.trim();
+    const date = new Date(raw);
+    const absoluteIso = Number.isNaN(date.getTime()) ? "" : date.toISOString();
+    if (absoluteIso) {
+      for (const knownIso of [contact.preferredCallTimeIso, contact.backupCallTimeIso].filter(Boolean)) {
+        const existing = new Date(knownIso);
+        if (!Number.isNaN(existing.getTime()) && Math.abs(existing.getTime() - date.getTime()) < 60 * 1000) {
+          return knownIso;
+        }
+      }
+    }
+
+    // GHL appointment workflow merge fields can serialize calendar-local wall time
+    // with a trailing Z, so parse string values as calendar time unless they match
+    // an already-known bot-created appointment instant.
+    const calendarTimezone = config.texting?.defaultTimezone || "America/Chicago";
+    const calendarLocalIso = parseLocalAppointmentStart(raw, contact, config, calendarTimezone);
+    if (calendarLocalIso) return calendarLocalIso;
   }
   const date = typeof value === "number" ? new Date(value) : new Date(String(value));
   return Number.isNaN(date.getTime()) ? "" : date.toISOString();
@@ -1083,6 +1101,7 @@ class SmsBot {
   constructor(store, config) {
     this.store = store;
     this.config = config;
+    this.bookingAlertLocks = new Set();
   }
 
   async notifyBotError(title, details = {}, options = {}) {
@@ -3610,16 +3629,22 @@ class SmsBot {
     });
 
     const suppressAppointmentAlert = suppressAppointmentAlertFromPayload(payload);
-    if (!updated.awaitingBackupTime && !suppressAppointmentAlert && (!updated.bookingAlertSentAt || oldStartsAt !== startsAt)) {
-      const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
-        "Primary call time": updated.preferredCallTime,
-        "Backup time": updated.backupCallTime || "none",
-        Timezone: updated.timezone,
-        "GHL appointment": updated.appointmentId || "manual appointment",
-        Source: "GHL manual appointment sync"
-      });
-      if (bookingAlertSent) {
-        return this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() });
+    const bookingAlertKey = `manual_appointment_booked:${updated.id}`;
+    if (!updated.awaitingBackupTime && !suppressAppointmentAlert && !updated.bookingAlertSentAt && !this.bookingAlertLocks.has(bookingAlertKey)) {
+      this.bookingAlertLocks.add(bookingAlertKey);
+      try {
+        const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
+          "Primary call time": updated.preferredCallTime,
+          "Backup time": updated.backupCallTime || "none",
+          Timezone: updated.timezone,
+          "GHL appointment": updated.appointmentId || "manual appointment",
+          Source: "GHL manual appointment sync"
+        });
+        if (bookingAlertSent) {
+          return this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() });
+        }
+      } finally {
+        this.bookingAlertLocks.delete(bookingAlertKey);
       }
     }
 

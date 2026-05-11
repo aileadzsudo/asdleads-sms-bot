@@ -2952,6 +2952,51 @@ test("GHL appointment sync treats no-zone start time as contact local and suppre
   assert.equal(contact.bookingAlertSentAt, originalAlertAt);
 });
 
+test("GHL appointment sync treats UTC-looking merge field as calendar local and does not reuse calendar id", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentBooked = slack.sendAppointmentBooked;
+  const alerts = [];
+  slack.sendAppointmentBooked = async (_config, _contact, extra) => {
+    alerts.push(extra);
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "manual-pacific-appt",
+      ghlContactId: "manual-pacific-appt",
+      name: "Manual Pacific",
+      phone: "+15550000081",
+      timezone: "America/Los_Angeles",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+    });
+
+    const contact = await bot.syncAppointment({
+      contactId: "manual-pacific-appt",
+      startTime: "2026-05-11T10:00:00.000Z",
+      status: "confirmed",
+      calendar: { id: "calendar-not-appointment-id" }
+    });
+
+    assert.equal(contact.preferredCallTimeIso, "2026-05-11T15:00:00.000Z");
+    assert.match(contact.preferredCallTime, /8:00 AM PST/);
+    assert.equal(contact.appointmentId, "");
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0]["Primary call time"], /8:00 AM PST/);
+
+    await bot.syncAppointment({
+      contactId: "manual-pacific-appt",
+      startTime: "2026-05-11T10:00:00.000Z",
+      status: "confirmed",
+      calendar: { id: "calendar-not-appointment-id" }
+    });
+
+    assert.equal(alerts.length, 1);
+  } finally {
+    slack.sendAppointmentBooked = originalSendAppointmentBooked;
+  }
+});
+
 test("GHL appointment sync can repair appointment time silently", async () => {
   const { bot, store } = makeBot();
   const originalAlertAt = "2026-05-10T23:23:20.000Z";
