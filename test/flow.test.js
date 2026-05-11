@@ -3970,7 +3970,7 @@ test("warm follow-up job marks contact as warm follow-up", async () => {
   assert.equal(store.getContact("warm-status").engagementStatus, ENGAGEMENT.WARM_FOLLOW_UP);
   assert.equal(store.getContact("warm-status").currentSequenceName, "warm_follow_up");
   assert.equal(store.getContact("warm-status").currentSequenceDay, 3);
-  assert.match(store.getContact("warm-status").lastOutboundMessage, /urgent care|chiro|doctor/i);
+  assert.match(store.getContact("warm-status").lastOutboundMessage, /medical visit|treat|evaluate|urgent care|chiro|doctor/i);
 });
 
 test("warm follow-up copy changes by step instead of repeating the same question", async () => {
@@ -4004,7 +4004,7 @@ test("warm follow-up copy changes by step instead of repeating the same question
   await bot.runDueJob(secondJob);
 
   assert.notEqual(store.getContact("warm-copy").lastOutboundMessage, firstMessage);
-  assert.match(store.getContact("warm-copy").lastOutboundMessage, /Specialist call|time today/i);
+  assert.match(store.getContact("warm-copy").lastOutboundMessage, /call is quick|later today|tomorrow|Specialist call|time today/i);
 });
 
 test("enter re-engagement job schedules the correct saved-progress sequence", async () => {
@@ -4029,7 +4029,7 @@ test("enter re-engagement job schedules the correct saved-progress sequence", as
 
   assert.equal(store.getContact("warm-2").engagementStatus, ENGAGEMENT.RE_ENGAGEMENT);
   assert.equal(store.getContact("warm-2").currentSequenceName, "after_q1");
-  assert.match(store.getContact("warm-2").lastOutboundMessage, /looks like we got cut off/i);
+  assert.match(store.getContact("warm-2").lastOutboundMessage, /fault part|medical treatment|checked out/i);
   assert.equal(
     Object.values(store.data.jobs).some(
       (item) =>
@@ -4099,7 +4099,7 @@ test("re-engagement job keeps the sent message on contact summary", async () => 
 
   await bot.runDueJob(job);
 
-  assert.match(store.getContact("reengage-message").lastOutboundMessage, /looks like we got cut off/i);
+  assert.match(store.getContact("reengage-message").lastOutboundMessage, /fault part|medical treatment|checked out/i);
   assert.equal(store.getContact("reengage-message").currentSequenceName, "after_q1");
   assert.equal(store.getContact("reengage-message").currentSequenceDay, 1);
 });
