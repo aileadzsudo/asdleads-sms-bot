@@ -2997,6 +2997,36 @@ test("GHL appointment sync treats UTC-looking merge field as calendar local and 
   }
 });
 
+test("silent appointment sync can repair an existing bad UTC-shifted display from no-zone calendar time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "manual-pacific-repair",
+    ghlContactId: "manual-pacific-repair",
+    name: "Manual Pacific Repair",
+    phone: "+15550000082",
+    timezone: "America/Los_Angeles",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Mon, May 11, 3:00 AM PST",
+    preferredCallTimeIso: "2026-05-11T10:00:00.000Z",
+    appointmentId: "bad-calendar-id",
+    bookingAlertSentAt: "2026-05-11T14:17:08.032Z"
+  });
+
+  const contact = await bot.syncAppointment({
+    contactId: "manual-pacific-repair",
+    appointmentId: "real-appointment-id",
+    startTime: "2026-05-11T10:00:00",
+    status: "confirmed",
+    suppressAlert: true
+  });
+
+  assert.equal(contact.preferredCallTimeIso, "2026-05-11T15:00:00.000Z");
+  assert.match(contact.preferredCallTime, /8:00 AM PST/);
+  assert.equal(contact.appointmentId, "real-appointment-id");
+  assert.equal(contact.bookingAlertSentAt, "2026-05-11T14:17:08.032Z");
+});
+
 test("GHL appointment sync can repair appointment time silently", async () => {
   const { bot, store } = makeBot();
   const originalAlertAt = "2026-05-10T23:23:20.000Z";

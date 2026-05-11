@@ -1048,7 +1048,8 @@ function appointmentStartIsoFromPayload(payload = {}, contact = {}, config = {})
     const raw = value.trim();
     const date = new Date(raw);
     const absoluteIso = Number.isNaN(date.getTime()) ? "" : date.toISOString();
-    if (absoluteIso) {
+    const hasExplicitZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    if (absoluteIso && hasExplicitZone) {
       for (const knownIso of [contact.preferredCallTimeIso, contact.backupCallTimeIso].filter(Boolean)) {
         const existing = new Date(knownIso);
         if (!Number.isNaN(existing.getTime()) && Math.abs(existing.getTime() - date.getTime()) < 60 * 1000) {
