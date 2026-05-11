@@ -864,6 +864,21 @@ function formatTimeOnly(date, contact, config) {
   }).format(date);
 }
 
+function formatTimeOnlyWithZone(date, contact, config) {
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+    timeZoneName: "short"
+  })
+    .format(date)
+    .replace(/\bEDT\b/g, "EST")
+    .replace(/\bCDT\b/g, "CST")
+    .replace(/\bMDT\b/g, "MST")
+    .replace(/\bPDT\b/g, "PST");
+}
+
 function roundToQuarterHour(date) {
   const rounded = new Date(date);
   const minutes = rounded.getMinutes();
@@ -1078,6 +1093,45 @@ function suppressAppointmentAlertFromPayload(payload = {}) {
 
 function isNoShowAppointmentStatus(status = "") {
   return /no[\s_-]?show|noshow|missed/.test(String(status || "").toLowerCase());
+}
+
+function expectedAppointmentReminderRunAt(contact, templateKey, config) {
+  if (!contact?.preferredCallTimeIso || !templateKey) return null;
+  const appointment = new Date(contact.preferredCallTimeIso);
+  if (Number.isNaN(appointment.getTime())) return null;
+  if (/OneHour$/.test(templateKey)) return addMinutes(appointment, -60);
+  if (/FiveMinutes$/.test(templateKey)) return addMinutes(appointment, -5);
+  if (templateKey === "nextDayMorning") {
+    const timeZone = contact.timezone || config.texting.defaultTimezone;
+    const appointmentLocal = getLocalParts(appointment, timeZone);
+    const morningReminderHour = appointmentLocal.hour <= 10 ? 8 : 9;
+    return localDateToUtc(
+      {
+        year: appointmentLocal.year,
+        month: appointmentLocal.month,
+        day: appointmentLocal.day,
+        hour: morningReminderHour,
+        minute: 0
+      },
+      timeZone
+    );
+  }
+  return null;
+}
+
+function isCurrentAppointmentReminderJob(contact, job, config) {
+  if (!contact?.preferredCallTimeIso) return false;
+  if (job.payload?.appointmentIso) {
+    const jobAppointment = new Date(job.payload.appointmentIso);
+    const currentAppointment = new Date(contact.preferredCallTimeIso);
+    if (Number.isNaN(jobAppointment.getTime()) || Number.isNaN(currentAppointment.getTime())) return false;
+    if (jobAppointment.getTime() !== currentAppointment.getTime()) return false;
+  }
+  const expected = expectedAppointmentReminderRunAt(contact, job.payload?.templateKey, config);
+  if (!expected || !job.runAt) return true;
+  const runAt = new Date(job.runAt);
+  if (Number.isNaN(runAt.getTime())) return false;
+  return Math.abs(runAt.getTime() - expected.getTime()) <= 90 * 1000;
 }
 
 function timezoneCorrectionFromText(text) {
@@ -3360,7 +3414,7 @@ class SmsBot {
           type: "appointment_reminder",
           contactId: contact.id,
           runAt: morningReminder.toISOString(),
-          payload: { templateKey: "nextDayMorning" }
+          payload: { templateKey: "nextDayMorning", appointmentIso: contact.preferredCallTimeIso }
         });
       }
     }
@@ -3369,7 +3423,7 @@ class SmsBot {
         type: "appointment_reminder",
         contactId: contact.id,
         runAt: oneHour.toISOString(),
-        payload: { templateKey: sameDay ? "sameDayOneHour" : "nextDayOneHour" }
+        payload: { templateKey: sameDay ? "sameDayOneHour" : "nextDayOneHour", appointmentIso: contact.preferredCallTimeIso }
       });
     }
     if (fiveMinutes > now) {
@@ -3377,7 +3431,7 @@ class SmsBot {
         type: "appointment_reminder",
         contactId: contact.id,
         runAt: fiveMinutes.toISOString(),
-        payload: { templateKey: sameDay ? "sameDayFiveMinutes" : "nextDayFiveMinutes" }
+        payload: { templateKey: sameDay ? "sameDayFiveMinutes" : "nextDayFiveMinutes", appointmentIso: contact.preferredCallTimeIso }
       });
     }
     await this.recordDecision(contact, "reminded", "appointment_reminders_scheduled", {
@@ -3587,6 +3641,11 @@ class SmsBot {
     const display = formatForContact(new Date(startsAt), contact, this.config);
     const oldAppointmentId = contact.appointmentId || "";
     const oldStartsAt = contact.preferredCallTimeIso || "";
+    const shouldAskBackupForManualSync =
+      !oldAppointmentId &&
+      !contact.awaitingBackupTime &&
+      !contact.bookingAlertSentAt &&
+      new Date(startsAt) > addMinutes(new Date(), 20);
     const updated = await this.store.upsertContact({
       ...contact,
       engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
@@ -3628,6 +3687,24 @@ class SmsBot {
       afterProgress: QUALIFICATION.COMPLETE,
       meta: { appointmentId: updated.appointmentId || "", startsAt, oldAppointmentId, oldStartsAt }
     });
+
+    if (shouldAskBackupForManualSync) {
+      const afterBackupAsk = await this.sendBotMessage(updated, render(qualificationTemplates.backupAsk, updated, { time: display }), {
+        bypassQuietHours: true
+      });
+      if (!afterBackupAsk) return updated;
+      const awaitingBackup = await this.store.upsertContact({
+        ...afterBackupAsk,
+        awaitingBackupTime: true
+      });
+      await this.store.addJob({
+        type: "backup_time_timeout",
+        contactId: awaitingBackup.id,
+        runAt: addMinutes(new Date(), 15).toISOString(),
+        payload: { appointmentIso: startsAt, source: "manual_appointment_sync" }
+      });
+      return awaitingBackup;
+    }
 
     const suppressAppointmentAlert = suppressAppointmentAlertFromPayload(payload);
     const bookingAlertKey = `manual_appointment_booked:${updated.id}`;
@@ -4239,7 +4316,29 @@ class SmsBot {
         });
         return;
       }
-      const rendered = await this.renderManagedTemplate(contact, "reminderTemplates", job.payload.templateKey, template);
+      if (!isCurrentAppointmentReminderJob(contact, job, this.config)) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "stale_appointment_reminder_time_changed"
+        });
+        await this.recordDecision(contact, "skipped", "stale_appointment_reminder_time_changed", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: {
+            templateKey: job.payload.templateKey || "",
+            jobAppointmentIso: job.payload.appointmentIso || "",
+            currentAppointmentIso: contact.preferredCallTimeIso || "",
+            jobRunAt: job.runAt || ""
+          }
+        });
+        return;
+      }
+      const rendered = await this.renderManagedTemplate(contact, "reminderTemplates", job.payload.templateKey, template, {
+        time: contact.preferredCallTimeIso
+          ? formatTimeOnlyWithZone(new Date(contact.preferredCallTimeIso), contact, this.config)
+          : contact.preferredCallTime || "your scheduled time"
+      });
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
     if (job.type === "missed_call_followup") {

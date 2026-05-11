@@ -8,7 +8,7 @@ const { SmsBot, normalizePayload, callAskTemplateForTime } = require("../src/flo
 const { ENGAGEMENT, QUALIFICATION } = require("../src/constants");
 const { hasNoResponseTag, isNoResponseDisposition, isNoResponseSignal } = require("../src/disposition");
 const { render } = require("../src/templates");
-const { getLocalParts, localDateToUtc } = require("../src/time");
+const { addDays, getLocalParts, localDateToUtc } = require("../src/time");
 const ghl = require("../src/adapters/ghl");
 const slack = require("../src/adapters/slack");
 
@@ -150,8 +150,8 @@ test("Spanish tag localizes appointment reminders", async () => {
   const reminder = store.addJob({
     type: "appointment_reminder",
     contactId: "spanish-reminder",
-    runAt: new Date().toISOString(),
-    payload: { templateKey: "sameDayOneHour" }
+    runAt: new Date(new Date(startsAt).getTime() - 60 * 60 * 1000).toISOString(),
+    payload: { templateKey: "sameDayOneHour", appointmentIso: startsAt }
   });
 
   await bot.runDueJob(reminder);
@@ -988,6 +988,72 @@ test("appointment reminders use cadence based on time until appointment", async 
       .map((job) => job.payload.templateKey),
     ["nextDayMorning", "nextDayOneHour", "nextDayFiveMinutes"]
   );
+  assert.equal(
+    Object.values(store.data.jobs)
+      .filter((job) => job.contactId === "reminder-tomorrow" && job.type === "appointment_reminder")
+      .every((job) => job.payload.appointmentIso === tomorrow),
+    true
+  );
+});
+
+test("appointment reminder copy uses time only instead of repeating the full date", async () => {
+  const { bot, store } = makeBot();
+  const appointment = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  const runAt = new Date(new Date(appointment).getTime() - 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "reminder-time-only",
+    ghlContactId: "reminder-time-only",
+    name: "Time Only",
+    phone: "+15550000181",
+    timezone: "America/Chicago",
+    preferredCallTime: "Mon, May 11, 3:00 PM CST",
+    preferredCallTimeIso: appointment
+  });
+  const job = store.addJob({
+    type: "appointment_reminder",
+    contactId: "reminder-time-only",
+    runAt,
+    payload: { templateKey: "sameDayOneHour", appointmentIso: appointment }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.match(store.getContact("reminder-time-only").lastOutboundMessage, /\b\d{1,2}:\d{2} [AP]M (?:CST|MST|PST|EST)\b/);
+  assert.doesNotMatch(store.getContact("reminder-time-only").lastOutboundMessage, /Mon, May|Tue, May|Wed, May|Thu, May|Fri, May|Sat, May|Sun, May/);
+});
+
+test("stale appointment reminder is skipped when appointment time changes", async () => {
+  const { bot, store } = makeBot();
+  const localTomorrow = getLocalParts(addDays(new Date(), 1), "America/Chicago");
+  const appointment = localDateToUtc(
+    { year: localTomorrow.year, month: localTomorrow.month, day: localTomorrow.day, hour: 23, minute: 0 },
+    "America/Chicago"
+  ).toISOString();
+  const staleRunAt = localDateToUtc(
+    { year: localTomorrow.year, month: localTomorrow.month, day: localTomorrow.day, hour: 8, minute: 0 },
+    "America/Chicago"
+  ).toISOString();
+  store.upsertContact({
+    id: "stale-reminder",
+    ghlContactId: "stale-reminder",
+    name: "Stale Reminder",
+    phone: "+15550000182",
+    timezone: "America/Chicago",
+    preferredCallTime: "Tomorrow 11:00 PM CST",
+    preferredCallTimeIso: appointment
+  });
+  const job = store.addJob({
+    type: "appointment_reminder",
+    contactId: "stale-reminder",
+    runAt: staleRunAt,
+    payload: { templateKey: "sameDayOneHour" }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "stale_appointment_reminder_time_changed");
+  assert.equal(store.getContact("stale-reminder").lastOutboundMessage, undefined);
 });
 
 test("admin action can ensure reminders for an already booked appointment", async () => {
@@ -2843,8 +2909,11 @@ test("manual GHL appointment sync adopts appointment and schedules reminders", a
   assert.equal(contact.qualificationProgress, QUALIFICATION.COMPLETE);
   assert.equal(contact.appointmentId, "manual-appt-event");
   assert.equal(contact.appointmentSource, "ghl_manual");
+  assert.equal(contact.awaitingBackupTime, true);
+  assert.match(store.getContact("manual-appt").lastOutboundMessage, /backup time/i);
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "send_cold_template" && job.status === "pending"), false);
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "appointment_reminder" && job.status === "pending"), true);
+  assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "backup_time_timeout" && job.status === "pending"), true);
 });
 
 test("GHL appointment no-show status preserves backup and starts no-show recovery", async () => {
