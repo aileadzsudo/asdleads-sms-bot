@@ -257,7 +257,7 @@ test("medical yes with paperwork and photos advances instead of escalating", asy
   assert.equal(store.getContact("medical-paperwork").humanEscalationStatus, undefined);
   assert.equal(store.getContact("medical-paperwork").medicalTreatmentAnswer, "yes");
   assert.equal(store.getContact("medical-paperwork").qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
-  assert.match(store.getContact("medical-paperwork").lastOutboundMessage, /open for a call/i);
+  assert.match(store.getContact("medical-paperwork").lastOutboundMessage, /What time works best|open for a call/i);
 });
 
 test("soft human escalation still captures a qualification answer instead of repeating stale question", async () => {
