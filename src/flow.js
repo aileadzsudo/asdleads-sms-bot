@@ -1829,36 +1829,7 @@ class SmsBot {
     const normalized = normalizePayload(payload, this.config);
     const existing = await this.store.getContact(normalized.id);
     if (shouldTreatNoResponseAsCallNoAnswer(existing)) {
-      let contact = await this.store.upsertContact({
-        ...existing,
-        ...normalized,
-        timezone: chooseContactTimezone(existing, normalized, this.config),
-        engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
-        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
-        humanEscalationStatus: false,
-        humanEscalationStage: "call_now_no_answer",
-        automationPaused: false,
-        automationPauseReason: "",
-        awaitingSpecificCallTime: true,
-        awaitingBackupTime: false,
-        currentSequenceName: "call_now_no_answer"
-      });
-      await this.store.cancelJobsForContact(contact.id, "call-now no-answer disposition", (job) =>
-        BOT_SEQUENCE_JOB_TYPES.includes(job.type) || job.type === "human_escalation_sla" || job.type === "human_reply_timeout"
-      );
-      contact = await this.hydrateContactTags(contact);
-      if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
-      if (hasNqTag(contact)) return this.stopForNqTag(contact);
-      if (hasManualHumanHoldTag(contact)) return this.stopForManualHoldTag(contact);
-      const sent = await this.sendBotMessage(contact, render(qualificationTemplates.callNowNoAnswer, contact), {
-        bypassQuietHours: true,
-        templateGroup: "qualificationTemplates",
-        templateKey: "callNowNoAnswer"
-      });
-      const latest = sent || (await this.store.getContact(contact.id)) || contact;
-      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
-      await this.recordDecision(latest, "sent", "call_now_no_answer_recovery", { trigger: "no_response_disposition" });
-      return latest;
+      return this.sendCallNowNoAnswerRecovery(existing, normalized, "no_response_disposition");
     }
 
     if (hasNoResponseMemory(existing)) {
@@ -1957,6 +1928,39 @@ class SmsBot {
       payload: { lastOutboundTimestamp: afterInitial.lastOutboundTimestamp || new Date().toISOString() }
     });
     return afterInitial;
+  }
+
+  async sendCallNowNoAnswerRecovery(existing, normalized = {}, trigger = "manual_repair") {
+    let contact = await this.store.upsertContact({
+      ...existing,
+      ...normalized,
+      timezone: chooseContactTimezone(existing, normalized, this.config),
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      humanEscalationStatus: false,
+      humanEscalationStage: "call_now_no_answer",
+      automationPaused: false,
+      automationPauseReason: "",
+      awaitingSpecificCallTime: true,
+      awaitingBackupTime: false,
+      currentSequenceName: "call_now_no_answer"
+    });
+    await this.store.cancelJobsForContact(contact.id, "call-now no-answer recovery", (job) =>
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type) || job.type === "human_escalation_sla" || job.type === "human_reply_timeout"
+    );
+    contact = await this.hydrateContactTags(contact);
+    if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
+    if (hasNqTag(contact)) return this.stopForNqTag(contact);
+    if (hasManualHumanHoldTag(contact)) return this.stopForManualHoldTag(contact);
+    const sent = await this.sendBotMessage(contact, render(qualificationTemplates.callNowNoAnswer, contact), {
+      bypassQuietHours: true,
+      templateGroup: "qualificationTemplates",
+      templateKey: "callNowNoAnswer"
+    });
+    const latest = sent || (await this.store.getContact(contact.id)) || contact;
+    await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+    await this.recordDecision(latest, "sent", "call_now_no_answer_recovery", { trigger });
+    return latest;
   }
 
   async queueNoResponseBackfill(payload, runAt) {
@@ -2562,6 +2566,15 @@ class SmsBot {
         meta: controlMeta
       });
       return this.handleCallTime(contact, "call me now");
+    }
+
+    if (["call_now_no_answer", "missed_call_now", "call_now_missed", "call_now_no_answer_recovery"].includes(action)) {
+      await this.recordDecision(contact, "repaired", "admin_call_now_no_answer_requested", {
+        trigger: "admin_action",
+        message: contact.lastInboundMessage || "",
+        meta: controlMeta
+      });
+      return this.sendCallNowNoAnswerRecovery(contact, {}, "admin_action");
     }
 
     if (["silent_appointment_sync", "sync_appointment_silent", "repair_appointment_sync"].includes(action)) {

@@ -443,6 +443,45 @@ test("short yes-now inbound triggers urgent call-now instead of staying in cold 
   }
 });
 
+test("admin can force call-now no-answer recovery and cancel stale cold cadence", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "admin-call-now-missed",
+    ghlContactId: "admin-call-now-missed",
+    name: "Admin Missed",
+    phone: "+15550000097",
+    tags: ["NR"],
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    lastInboundMessage: "Yes now",
+    sentColdTemplateKeys: ["day_1_am"],
+    lastOutboundMessage: "What was the date of the accident?"
+  });
+  store.addJob({
+    type: "send_cold_template",
+    contactId: "admin-call-now-missed",
+    runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    payload: { templateKey: "day_1_pm" }
+  });
+
+  const contact = await bot.applyBotControl({
+    contactId: "admin-call-now-missed",
+    action: "call_now_no_answer"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.match(store.getContact("admin-call-now-missed").lastOutboundMessage, /tried giving you a call/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "admin-call-now-missed" && job.type === "send_cold_template" && job.status === "pending"),
+    false
+  );
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "admin-call-now-missed" && job.type === "warm_followup" && job.status === "pending"),
+    true
+  );
+});
+
 test("stale warm follow-up is skipped when qualification progress already advanced", async () => {
   const { bot, store } = makeBot();
   const oldOutbound = new Date(Date.now() - 10 * 60 * 1000).toISOString();
