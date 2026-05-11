@@ -2028,6 +2028,33 @@ test("booking Slack copy does not include qualification answer noise", async () 
   assert.doesNotMatch(result.text, /Medical:/);
 });
 
+test("urgent call-now Slack alerts route to leads channel", async () => {
+  const result = await slack.sendUrgentCallNow(
+    {
+      ...testConfig(""),
+      dryRun: true,
+      slack: {
+        token: "",
+        channel: "#sms-escalations",
+        leadsChannel: "C09N85J9G4Q",
+        botErrorsChannel: "#bot-errors",
+        bookingChannel: "#booking"
+      }
+    },
+    {
+      id: "urgent-lead",
+      ghlContactId: "urgent-lead",
+      name: "Urgent Lead",
+      phone: "+15550000070",
+      lastInboundMessage: "Call me now"
+    }
+  );
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.channel, "C09N85J9G4Q");
+  assert.match(result.text, /URGENT: PC wants a call now/);
+});
+
 test("backup no-show Slack copy tells team the backup attempt is active", async () => {
   const result = await slack.sendAppointmentNotice(
     { ...testConfig(""), dryRun: true, slack: { token: "", channel: "#sms", botErrorsChannel: "#bot-errors", bookingChannel: "#booking" } },
@@ -3229,6 +3256,38 @@ test("GHL appointment sync treats UTC-looking merge field as calendar local and 
   }
 });
 
+test("manual appointment sync can recover bad GHL start time from recent lead call-time text", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "manual-bad-start",
+    ghlContactId: "manual-bad-start",
+    name: "Manual Bad Start",
+    phone: "+15550000083",
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+  store.addMessage({
+    contactId: "manual-bad-start",
+    direction: "inbound",
+    body: "If you can call me tomorrow at 11:30 I would appreciate it"
+  });
+
+  const contact = await bot.syncAppointment({
+    contactId: "manual-bad-start",
+    appointmentId: "manual-bad-start-appt",
+    startTime: new Date().toISOString(),
+    status: "confirmed",
+    suppressAlert: true
+  });
+  const local = getLocalParts(new Date(contact.preferredCallTimeIso), "America/Denver");
+
+  assert.equal(local.hour, 11);
+  assert.equal(local.minute, 30);
+  assert.equal(contact.lastAppointmentSyncTimeSource, "recent_inbound_call_time");
+  assert.match(contact.lastAppointmentSyncRecoveredFromInbound, /tomorrow at 11:30/i);
+});
+
 test("silent appointment sync can repair an existing bad UTC-shifted display from no-zone calendar time", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -3408,6 +3467,27 @@ test("vague call time reply schedules hot lead warm follow-ups", async () => {
     120,
     240
   ]);
+});
+
+test("brief acknowledgement at call stage asks for exact time instead of repeating call ask", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "call-ask-ok",
+    ghlContactId: "call-ask-ok",
+    name: "Juan",
+    phone: "+15550000108",
+    timezone: "America/Los_Angeles",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    lastOutboundMessage: "Are you open for a call now or later today?"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "call-ask-ok", message: "Ok" });
+
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.match(store.getContact("call-ask-ok").lastOutboundMessage, /what time works best/i);
+  assert.doesNotMatch(store.getContact("call-ask-ok").lastOutboundMessage, /Based on what/);
 });
 
 test("cold acknowledgement asks for accident date instead of starting fault warm chase", async () => {

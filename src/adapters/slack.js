@@ -49,7 +49,11 @@ async function sendEscalation(config, contact, reason, extra = {}) {
 }
 
 async function sendUrgentCallNow(config, contact, extra = {}) {
-  return postSlack(config, baseEscalationText(config, contact, "URGENT: PC wants a call now", "call_now", extra));
+  return postSlack(
+    config,
+    baseEscalationText(config, contact, "URGENT: PC wants a call now", "call_now", extra),
+    config.slack.leadsChannel || config.slack.channel
+  );
 }
 
 async function sendAppointmentBooked(config, contact, extra = {}) {

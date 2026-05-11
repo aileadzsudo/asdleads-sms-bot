@@ -943,15 +943,15 @@ function nestedValue(source, key) {
 
 function appointmentField(payload, keys) {
   const sources = [
-    payload,
+    payload?.appointment,
+    payload?.event,
+    payload?.calendar,
+    payload?.calendarEvent,
     payload?.customData,
     payload?.custom_data,
     payload?.triggerData,
     payload?.trigger_data,
-    payload?.appointment,
-    payload?.event,
-    payload?.calendar,
-    payload?.calendarEvent
+    payload
   ].filter(Boolean);
   for (const source of sources) {
     for (const key of keys) {
@@ -960,6 +960,22 @@ function appointmentField(payload, keys) {
     }
   }
   return "";
+}
+
+function shouldPreferRecentInboundCallTime(rawIso, candidateIso, contact = {}, config = {}) {
+  const rawDate = new Date(rawIso || "");
+  const candidateDate = new Date(candidateIso || "");
+  if (Number.isNaN(rawDate.getTime()) || Number.isNaN(candidateDate.getTime())) return false;
+  const now = new Date();
+  const timeZone = contact.timezone || config.texting?.defaultTimezone || "America/Chicago";
+  const rawLocal = getLocalParts(rawDate, timeZone);
+  const candidateLocal = getLocalParts(candidateDate, timeZone);
+  const candidateLooksCallable = candidateLocal.hour >= 8 && candidateLocal.hour <= 20;
+  if (!candidateLooksCallable) return false;
+  const rawIsPastOrTooSoon = rawDate <= addMinutes(now, 10);
+  const rawIsOutsideNormalCallingWindow = rawLocal.hour < 8 || rawLocal.hour > 20;
+  const veryDifferentFromLeadRequest = Math.abs(rawDate.getTime() - candidateDate.getTime()) > 3 * 60 * 60 * 1000;
+  return rawIsPastOrTooSoon || rawIsOutsideNormalCallingWindow || veryDifferentFromLeadRequest;
 }
 
 function appointmentContactId(payload = {}) {
@@ -3046,6 +3062,22 @@ class SmsBot {
     let parsed = parseCallTime(text, contact, this.config);
     parsed = anchorScheduledTimeToClarifiedDay(parsed, text, contact, this.config);
     if (!parsed) {
+      if (isBriefAcknowledgement(text)) {
+        const updated = await this.store.upsertContact({
+          ...contact,
+          awaitingSpecificCallTime: true,
+          lastCallTimeAcknowledgement: text,
+          ...callTimeClarificationPatch(contact, { type: "needs_specific_time" }, text, "booking")
+        });
+        const sent = await this.sendBotMessage(
+          updated,
+          "Got it 🙌 What time works best for the call? If now works, just reply now. 📞",
+          { bypassQuietHours: true }
+        );
+        const latest = sent || (await this.store.getContact(updated.id)) || updated;
+        await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+        return latest;
+      }
       if (looksLikeDetailedLegalOrInsuranceInfo(text)) {
         return this.escalate(contact, "detailed_information");
       }
@@ -3684,7 +3716,7 @@ class SmsBot {
       ...normalized
     });
     contact = await this.hydrateContactTags(contact);
-    const startsAt = appointmentStartIsoFromPayload(payload, contact, this.config);
+    let startsAt = appointmentStartIsoFromPayload(payload, contact, this.config);
     if (!startsAt) {
       if (this.store.setSetting) {
         await this.store.setSetting("last_ignored_appointment_sync", {
@@ -3696,11 +3728,20 @@ class SmsBot {
       }
       return null;
     }
+    let appointmentTimeSource = "ghl_appointment_payload";
+    const recentCallTime = await this.recentCallTimeCandidate(contact, { cutoffMinutes: 240 });
+    if (
+      recentCallTime?.parsed?.type === "scheduled" &&
+      shouldPreferRecentInboundCallTime(startsAt, recentCallTime.parsed.startsAt, contact, this.config)
+    ) {
+      startsAt = recentCallTime.parsed.startsAt;
+      appointmentTimeSource = "recent_inbound_call_time";
+    }
 
     if (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) {
       await this.recordDecision(contact, "skipped", "appointment_sync_opted_out", {
         trigger: "appointment_sync",
-        meta: { appointmentId, startsAt }
+        meta: { appointmentId, startsAt, rawStartsAt: textValue(rawStartsAt), appointmentTimeSource }
       });
       return contact;
     }
@@ -3730,7 +3771,11 @@ class SmsBot {
       automationPauseReason: "",
       currentSequenceName: "appointment_synced",
       appointmentSource: "ghl_manual",
-      appointmentSyncedAt: new Date().toISOString()
+      appointmentSyncedAt: new Date().toISOString(),
+      lastAppointmentSyncRawStart: textValue(rawStartsAt),
+      lastAppointmentSyncResolvedStart: startsAt,
+      lastAppointmentSyncTimeSource: appointmentTimeSource,
+      lastAppointmentSyncRecoveredFromInbound: appointmentTimeSource === "recent_inbound_call_time" ? recentCallTime.message : ""
     });
 
     await this.store.cancelJobsForContact(updated.id, "manual appointment synced", (job) =>
@@ -3754,7 +3799,14 @@ class SmsBot {
       afterStatus: ENGAGEMENT.CALL_SCHEDULED,
       beforeProgress: contact.qualificationProgress || "",
       afterProgress: QUALIFICATION.COMPLETE,
-      meta: { appointmentId: updated.appointmentId || "", startsAt, oldAppointmentId, oldStartsAt }
+      meta: {
+        appointmentId: updated.appointmentId || "",
+        startsAt,
+        oldAppointmentId,
+        oldStartsAt,
+        rawStartsAt: textValue(rawStartsAt),
+        appointmentTimeSource
+      }
     });
 
     if (shouldAskBackupForManualSync) {

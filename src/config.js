@@ -57,6 +57,7 @@ function loadConfig() {
     slack: {
       token: process.env.SLACK_BOT_TOKEN || "",
       channel: process.env.SLACK_ESCALATION_CHANNEL || "#sms-esiliation",
+      leadsChannel: process.env.SLACK_LEADS_CHANNEL || "C09N85J9G4Q",
       botErrorsChannel: process.env.SLACK_BOT_ERRORS_CHANNEL || "",
       bookingChannel: process.env.SLACK_BOOKING_CHANNEL || process.env.SLACK_ESCALATION_CHANNEL || "#sms-esiliation",
       sendInDryRun: String(process.env.SLACK_SEND_IN_DRY_RUN || "false").toLowerCase() === "true"
