@@ -1,6 +1,6 @@
 const coldOutreachTemplates = {
   day_1_am: "Hi [NAME]! 👋👋 It's William from Accident Support Desk, I was looking over your accident info and it looks very similar to another accident we just settled for a pretty significant amount. I think we can help show you how to do the same, just had a few quick questions for us to understand the situation a bit better. We can handle this over text message real quick, should only take a minute. Do you remember the date of the accident?",
-  day_1_pm: "Hey [NAME] 🤕 waiting any longer could actually hurt your claim. I want to make sure you get a clear picture of your compensation options. I only need one quick detail to start. What was the date of the accident?",
+  day_1_pm: "Hey [NAME], William here. Before I close this out for today, I wanted to make sure you had a chance to check your options. People often leave money on the table because they wait or talk to insurance too early. What was the date of the accident?",
   day_2_am: "Hi [NAME] 👋, William here. I know getting a message out of nowhere feels weird but I genuinely think you might be sitting on more than you realize. People in accidents like yours often don't know what they qualify for until someone walks them through it. What was the date of the accident?",
   day_2_pm: "William from Accident Support Desk here. Some of what you shared looks like the insurance company may already be using tactics against you. I can help you get ahead of it, just need one detail. What was the date of the accident?",
   day_3_am: "Hey [NAME] 🤔, quick honest question. Has the other driver's insurance reached out to you yet? If they have, there's a reason for that and it's not in your favor. I can explain what's happening on their end. Just need to know, were you at fault?",
@@ -70,8 +70,10 @@ const humanReturnTemplates = {
 };
 
 const freshLeadFollowUpTemplates = {
-  1: "Hey [NAME] 👋 just following up on my last message. I still have your accident info open and only need the date of the accident to see where you stand.",
-  2: "[NAME], William here again 🙌 I do not want you to miss out on help you may qualify for. What was the date of the accident?"
+  1: "Hey [NAME] 👋 just checking that my last text came through. The accident date helps me see what options may still be open for you and whether timing could affect your claim.",
+  2: "[NAME], one thing I do not want is for you to wait too long and accidentally hurt your claim 🤕 What date did the accident happen? Even a rough date is fine.",
+  3: "Quick question, [NAME] 🙏 has the insurance company reached out to you yet? If they have, that may not be in your favor. They often try to get statements or details before you know what your claim may be worth.",
+  4: "No worries if you're busy. I still have your file open and I want to make sure you do not miss compensation you may be entitled to 💰 What was the date of the accident?"
 };
 
 const reengagementTemplates = {
@@ -293,8 +295,10 @@ const spanishTemplates = {
     needs_call_time: "Hola [NAME], ¿sigues ahí conmigo? 🙏 Quiero conectarte para que recibas respuestas sobre tu caso. ¿Qué hora te queda mejor para una llamada rápida con un Especialista? 📞"
   },
   freshLeadFollowUpTemplates: {
-    1: "Hola [NAME] 👋 solo dando seguimiento a mi último mensaje. Todavía tengo abierta tu información del accidente y solo necesito la fecha para ver dónde estás.",
-    2: "[NAME], William por aquí 🙌 No quiero que pierdas ayuda para la que podrías calificar. ¿Cuál fue la fecha del accidente?"
+    1: "Hola [NAME] 👋 solo quería confirmar que recibiste mi último mensaje. La fecha del accidente me ayuda a ver qué opciones podrían seguir abiertas para ti y si el tiempo puede afectar tu reclamo.",
+    2: "[NAME], algo que no quiero es que esperes demasiado y eso perjudique tu reclamo 🤕 ¿Qué fecha fue el accidente? Aunque sea una fecha aproximada está bien.",
+    3: "Pregunta rápida, [NAME] 🙏 ¿la compañía de seguros ya se comunicó contigo? Si ya lo hicieron, puede que no sea a tu favor. A veces intentan obtener declaraciones o detalles antes de que sepas cuánto podría valer tu reclamo.",
+    4: "No te preocupes si estás ocupado. Todavía tengo tu archivo abierto y quiero asegurarme de que no pierdas compensación a la que podrías tener derecho 💰 ¿Cuál fue la fecha del accidente?"
   },
   reengagementTemplates: {
     after_date: {

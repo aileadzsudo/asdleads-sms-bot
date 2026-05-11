@@ -52,7 +52,7 @@ const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
 const HUMAN_REPLY_TIMEOUT_MINUTES = 5;
 const HUMAN_CALL_TIMEOUT_MINUTES = 30;
 const INBOUND_BUFFER_SECONDS = 30;
-const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 60];
+const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
 const NO_SHOW_SAME_DAY_MINUTES = [10, 45, 120, 240, 360];
 const NO_SHOW_DAYS = [2, 3, 4, 5, 6, 7];
 const BOT_SEQUENCE_JOB_TYPES = [
@@ -1765,6 +1765,10 @@ class SmsBot {
   async scheduleColdOutreach(contact) {
     const sentKeys = new Set(contact.sentColdTemplateKeys || []);
     const existingJobs = await this.store.listJobs(contact.id);
+    const pendingFreshTimes = existingJobs
+      .filter((job) => job.status === "pending" && job.type === "fresh_lead_followup")
+      .map((job) => new Date(job.runAt))
+      .filter((date) => !Number.isNaN(date.getTime()));
     const pendingKeys = new Set(
       existingJobs
         .filter((job) => job.status === "pending" && job.type === "send_cold_template")
@@ -1779,6 +1783,12 @@ class SmsBot {
         if (pendingKeys.has(key)) continue;
         const runAt = localSlotDate(contact, this.config, day - 1, slot);
         if (runAt <= new Date()) continue;
+        if (
+          key === "day_1_pm" &&
+          pendingFreshTimes.some((freshRunAt) => Math.abs(freshRunAt.getTime() - runAt.getTime()) <= 60 * 60 * 1000)
+        ) {
+          continue;
+        }
         await this.store.addJob({
           type: "send_cold_template",
           contactId: contact.id,
@@ -1793,12 +1803,22 @@ class SmsBot {
     await this.store.cancelJobsForContact(contact.id, "fresh lead follow-ups replaced", (job) => job.type === "fresh_lead_followup");
     const now = new Date();
     const timeZone = contact.timezone || this.config.texting.defaultTimezone;
+    const localNow = getLocalParts(now, timeZone);
+    const startMinutes = localNow.hour * 60 + localNow.minute;
     const pmSlot = localSlotDate(contact, this.config, 0, "pm");
     for (const [index, minutes] of FRESH_LEAD_FOLLOW_UP_MINUTES.entries()) {
       const runAt = addMinutes(now, minutes);
+      const localRunAt = getLocalParts(runAt, timeZone);
+      const runMinutes = localRunAt.hour * 60 + localRunAt.minute;
+      const allowedByStartTime =
+        startMinutes < 15 * 60 ||
+        (startMinutes < 18 * 60 + 30 && [15, 45].includes(minutes)) ||
+        minutes === 15 ||
+        (minutes === 45 && runMinutes <= 20 * 60 + 30);
+      if (!allowedByStartTime) continue;
       if (!sameLocalDay(now, runAt, timeZone)) continue;
       if (!isWithinTextingWindow(contact, this.config, runAt)) continue;
-      if (Math.abs(runAt.getTime() - pmSlot.getTime()) <= 45 * 60 * 1000) continue;
+      if (Math.abs(runAt.getTime() - pmSlot.getTime()) <= 60 * 60 * 1000) continue;
       await this.store.addJob({
         type: "fresh_lead_followup",
         contactId: contact.id,
@@ -1947,8 +1967,8 @@ class SmsBot {
       currentMessageCountForDay: 1,
       sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || contact.sentColdTemplateKeys || []), "day_1_am"]))
     });
-    await this.scheduleColdOutreach(afterInitial);
     await this.scheduleFreshLeadFollowUps(afterInitial);
+    await this.scheduleColdOutreach(afterInitial);
     await this.store.addJob({
       type: "cold_entry_check",
       contactId: afterInitial.id,
@@ -4223,8 +4243,8 @@ class SmsBot {
         currentMessageCountForDay: 1,
         sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || fresh.sentColdTemplateKeys || []), "day_1_am"]))
       });
-      await this.scheduleColdOutreach(updated);
       if (job.payload?.source !== "backfill") await this.scheduleFreshLeadFollowUps(updated);
+      await this.scheduleColdOutreach(updated);
       await this.store.addJob({
         type: "cold_entry_check",
         contactId: updated.id,
