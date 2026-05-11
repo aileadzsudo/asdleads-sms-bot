@@ -234,6 +234,32 @@ test("long fault answer is saved instead of escalated as detailed information", 
   assert.match(store.getContact("long-fault").lastOutboundMessage, /medical treatment/i);
 });
 
+test("medical yes with paperwork and photos advances instead of escalating", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "medical-paperwork",
+    ghlContactId: "medical-paperwork",
+    name: "Jesus",
+    phone: "+15550000145",
+    timezone: "America/Los_Angeles",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault",
+    lastOutboundMessage: "Have you needed to see any doctors or receive any medical treatment after the accident?"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "medical-paperwork",
+    message: "Yes I have all paperwork, pictures, video footage etc"
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(store.getContact("medical-paperwork").humanEscalationStatus, undefined);
+  assert.equal(store.getContact("medical-paperwork").medicalTreatmentAnswer, "yes");
+  assert.equal(store.getContact("medical-paperwork").qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.match(store.getContact("medical-paperwork").lastOutboundMessage, /open for a call/i);
+});
+
 test("soft human escalation still captures a qualification answer instead of repeating stale question", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

@@ -2077,7 +2077,14 @@ class SmsBot {
       contact = await this.store.upsertContact({ ...contact, accidentDate: dateAnswer.value });
     }
     const answeredColdDateQuestion = Boolean(dateAnswer && canTreatDateAsColdOutreachAnswer(contact));
-    if (!answeredColdDateQuestion && looksPostSignedOrFirmIssue(inbound.lastInboundMessage)) {
+    const expectedAnswerBeforeFirmIssue = parseExpectedAnswer(contact.qualificationProgress, inbound.lastInboundMessage);
+    const currentMedicalAnswerBeatsDocumentSignal =
+      contact.qualificationProgress === QUALIFICATION.NEEDS_MEDICAL && Boolean(expectedAnswerBeforeFirmIssue);
+    if (
+      !answeredColdDateQuestion &&
+      !currentMedicalAnswerBeatsDocumentSignal &&
+      looksPostSignedOrFirmIssue(inbound.lastInboundMessage)
+    ) {
       return this.escalate(contact, "post_intake_or_firm_issue");
     }
 
