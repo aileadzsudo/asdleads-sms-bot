@@ -2158,6 +2158,11 @@ class SmsBot {
     await this.store.cancelJobsForContact(contact.id, "contact replied", (job) =>
       ["fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "cold_entry_check"].includes(job.type)
     );
+    if (contact.humanEscalationStatus) {
+      await this.store.cancelJobsForContact(contact.id, "human escalation active", (job) =>
+        HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type)
+      );
+    }
 
     if (isOptOut(inbound.lastInboundMessage)) {
       contact = await this.store.upsertContact({
