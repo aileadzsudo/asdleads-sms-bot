@@ -68,6 +68,18 @@ const BOT_SEQUENCE_JOB_TYPES = [
   "backup_time_timeout",
   "backup_no_show_reminder"
 ];
+const HUMAN_ESCALATION_BLOCKED_JOB_TYPES = [
+  "initial_sms",
+  "send_message",
+  "fresh_lead_followup",
+  "send_cold_template",
+  "warm_followup",
+  "enter_reengagement",
+  "send_reengagement_template",
+  "missed_call_followup",
+  "backup_time_timeout",
+  "backup_no_show_reminder"
+];
 
 function customValue(payload, key) {
   return payload.customData?.[key] || payload.custom_data?.[key] || "";
@@ -4089,15 +4101,13 @@ class SmsBot {
       contact.automationPauseReason === "nq_tag" ||
       contact.automationPauseReason === "signed_tag" ||
       contact.automationPauseReason === "manual_hold_tag" ||
-      (outboundJobTypes.includes(job.type) &&
-        contact.humanEscalationStatus &&
-        contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) ||
+      (contact.humanEscalationStatus && HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type)) ||
       hasSignedTag(contact) ||
       hasNqTag(contact) ||
       hasManualHumanHoldTag(contact)
     ) {
       const skipReason =
-        contact?.humanEscalationStatus && contact?.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN
+        contact?.humanEscalationStatus && HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type)
           ? "human_escalation_active"
           : "blocked_by_contact_state";
       await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString(), skipReason });

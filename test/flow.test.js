@@ -2193,6 +2193,33 @@ test("warm follow-up jobs are blocked while lead is escalated to human", async (
   assert.equal(store.getContact("human-escalated-job").lastOutboundMessage, undefined);
 });
 
+test("no-show follow-up jobs are blocked while human escalation is active even if engagement status drifted", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-escalated-no-show",
+    ghlContactId: "human-escalated-no-show",
+    name: "Human Escalated No Show",
+    phone: "+15550000080",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "appointment_reply_needs_human_review"
+  });
+  const job = store.addJob({
+    type: "missed_call_followup",
+    contactId: "human-escalated-no-show",
+    runAt: new Date().toISOString(),
+    payload: { templateGroup: "noShowTemplates", templateKey: "sameDay1" }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "human_escalation_active");
+  assert.equal(store.getContact("human-escalated-no-show").lastOutboundMessage, undefined);
+});
+
 test("missing appointment reminder template is skipped instead of crashing scheduler", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
