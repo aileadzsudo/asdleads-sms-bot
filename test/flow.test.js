@@ -1720,7 +1720,7 @@ test("contract set tag prevents no-response outreach from starting", async () =>
   });
 
   assert.equal(contact.automationPaused, true);
-  assert.equal(contact.automationPauseReason, "signed_tag");
+  assert.equal(contact.automationPauseReason, "contract_pending_tag");
   assert.equal(store.data.messages.length, 0);
 });
 
@@ -1736,7 +1736,7 @@ test("plain contract tag prevents no-response outreach from starting", async () 
   });
 
   assert.equal(contact.automationPaused, true);
-  assert.equal(contact.automationPauseReason, "signed_tag");
+  assert.equal(contact.automationPauseReason, "contract_pending_tag");
   assert.equal(store.data.messages.length, 0);
 });
 
@@ -2515,7 +2515,7 @@ test("QR tag blocks bot from resuming during human handoff", async () => {
   assert.equal(contact.lastOutboundMessage, undefined);
 });
 
-test("manual call activity waits 30 minutes before returning to bot", async () => {
+test("manual call activity pauses bot and creates call outcome watchdog", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
     id: "human-call-timeout",
@@ -2528,16 +2528,18 @@ test("manual call activity waits 30 minutes before returning to bot", async () =
   });
   store.addJob({ type: "warm_followup", contactId: "human-call-timeout", runAt: new Date().toISOString(), payload: { step: 1 } });
 
-  const contact = await bot.applyBotControl({ contactId: "human-call-timeout", action: "call_started" });
-  const timeout = Object.values(store.data.jobs).find(
-    (job) => job.contactId === "human-call-timeout" && job.type === "human_reply_timeout" && job.status === "pending"
+  const contact = await bot.applyBotControl({ contactId: "human-call-timeout", action: "call_started", callDurationSeconds: 42 });
+  const watchdog = Object.values(store.data.jobs).find(
+    (job) => job.contactId === "human-call-timeout" && job.type === "call_outcome_required" && job.status === "pending"
   );
 
   assert.equal(contact.automationPaused, true);
-  assert.equal(contact.humanEscalationStage, "human_replied_waiting");
-  assert.equal(timeout.payload.timeoutMinutes, 30);
-  const minutesAway = Math.round((new Date(timeout.runAt).getTime() - Date.now()) / 60000);
-  assert.ok(minutesAway >= 29 && minutesAway <= 30);
+  assert.equal(contact.humanEscalationStage, "human_call_active");
+  assert.equal(contact.automationPauseReason, "human_call_needs_outcome");
+  assert.equal(contact.callOutcomeNeeded, true);
+  assert.equal(watchdog.payload.durationSeconds, 42);
+  const minutesAway = Math.round((new Date(watchdog.runAt).getTime() - Date.now()) / 60000);
+  assert.ok(minutesAway >= 9 && minutesAway <= 10);
   assert.equal(
     Object.values(store.data.jobs).some((job) => job.contactId === "human-call-timeout" && job.type === "warm_followup" && job.status === "pending"),
     false
@@ -2558,8 +2560,136 @@ test("GHL human-active webhook action can pause bot for an active call", async (
   const contact = await bot.applyBotControl({ contactId: "human-active-call", action: "manual_call" });
 
   assert.equal(contact.automationPaused, true);
-  assert.equal(contact.automationPauseReason, "human_working");
+  assert.equal(contact.automationPauseReason, "human_call_needs_outcome");
+  assert.equal(contact.callOutcomeNeeded, true);
   assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+});
+
+test("call outcome watchdog alerts when no disposition is recorded", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "call-outcome-needed",
+    ghlContactId: "call-outcome-needed",
+    name: "Needs Outcome",
+    phone: "+15550000901",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+
+  await bot.applyBotControl({ contactId: "call-outcome-needed", action: "manual_call", callDurationSeconds: 20 });
+  const watchdog = Object.values(store.data.jobs).find((job) => job.type === "call_outcome_required");
+  await bot.runDueJob(watchdog);
+
+  const contact = store.getContact("call-outcome-needed");
+  const errors = store.getSetting("bot_error_log").value;
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "call_outcome_required");
+  assert.equal(contact.humanEscalationStage, "call_outcome_required");
+  assert.equal(errors[0].title, "No call disposition recorded");
+});
+
+test("call_drop tag sends reconnect recovery and cancels call outcome watchdog", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "call-drop",
+    ghlContactId: "call-drop",
+    name: "Drop Lead",
+    phone: "+15550000902",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    humanEscalationStatus: true,
+    automationPaused: true,
+    automationPauseReason: "human_call_needs_outcome"
+  });
+  store.addJob({ type: "call_outcome_required", contactId: "call-drop", runAt: new Date().toISOString(), payload: {} });
+
+  const contact = await bot.applyBotControl({ contactId: "call-drop", action: "call_drop" });
+
+  assert.equal(contact.automationPaused, false);
+  assert.equal(contact.currentSequenceName, "call_dropped_recovery");
+  assert.match(store.getContact("call-drop").lastOutboundMessage, /call may have dropped|missed each other/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "call-drop" && job.type === "call_outcome_required" && job.status === "pending"),
+    false
+  );
+});
+
+test("call_connected_follow_up tag keeps bot paused and resolves call outcome", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "call-connected",
+    ghlContactId: "call-connected",
+    name: "Connected Lead",
+    phone: "+15550000903",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    humanEscalationStatus: true,
+    automationPaused: true,
+    automationPauseReason: "human_call_needs_outcome",
+    callOutcomeNeeded: true
+  });
+  store.addJob({ type: "call_outcome_required", contactId: "call-connected", runAt: new Date().toISOString(), payload: {} });
+
+  const contact = await bot.applyBotControl({ contactId: "call-connected", action: "call_connected_follow_up" });
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "call_connected_follow_up");
+  assert.equal(contact.callOutcomeNeeded, false);
+  assert.equal(contact.callOutcomeStatus, "call_connected_follow_up");
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "call-connected" && job.status === "pending"),
+    false
+  );
+});
+
+test("scheduled lead reschedule request suppresses current reminders and asks for exact time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "reschedule-request",
+    ghlContactId: "reschedule-request",
+    name: "Reschedule Lead",
+    phone: "+15550000904",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    appointmentId: "appt-1",
+    preferredCallTime: "Tue, May 12, 2:00 PM CST",
+    preferredCallTimeIso: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+  });
+  store.addJob({ type: "appointment_reminder", contactId: "reschedule-request", runAt: new Date().toISOString(), payload: { templateKey: "sameDayOneHour" } });
+
+  const contact = await bot.handleInboundSms({ contactId: "reschedule-request", message: "I am not free anymore can we reschedule" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.equal(contact.currentSequenceName, "reschedule_requested");
+  assert.match(contact.lastOutboundMessage, /What new time works best/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "reschedule-request" && job.type === "appointment_reminder" && job.status === "pending"),
+    false
+  );
+});
+
+test("early availability clue asks for exact slot instead of booking immediately", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "availability-clue",
+    ghlContactId: "availability-clue",
+    name: "Available Later",
+    phone: "+15550000905",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "availability-clue", message: "I get off work at 4" });
+
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.equal(Boolean(contact.availabilityClue), true);
+  assert.equal(contact.appointmentId, undefined);
+  assert.match(contact.lastOutboundMessage, /Does .* or .* work/i);
 });
 
 test("manual human SMS timeout stays paused when a human hold tag is present", async () => {
@@ -3242,6 +3372,162 @@ test("manual GHL appointment sync adopts appointment and schedules reminders", a
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "send_cold_template" && job.status === "pending"), false);
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "appointment_reminder" && job.status === "pending"), true);
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "backup_time_timeout" && job.status === "pending"), true);
+});
+
+test("contract-sent contact still syncs manual contract review appointment", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentBooked = slack.sendAppointmentBooked;
+  const alerts = [];
+  slack.sendAppointmentBooked = async (_config, _contact, extra) => {
+    alerts.push(extra);
+    return { ok: true };
+  };
+  try {
+    const startsAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    store.upsertContact({
+      id: "contract-review-sync",
+      ghlContactId: "contract-review-sync",
+      name: "Walter Watson",
+      phone: "+15550000901",
+      timezone: "America/Chicago",
+      tags: ["contract_sent"],
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      automationPaused: true,
+      automationPauseReason: "contract_pending_tag"
+    });
+    store.addJob({
+      type: "send_reengagement_template",
+      contactId: "contract-review-sync",
+      runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      payload: { sequence: "after_call_booking" }
+    });
+
+    const contact = await bot.syncAppointment({
+      contactId: "contract-review-sync",
+      appointmentId: "contract-review-appt",
+      startTime: startsAt,
+      status: "confirmed",
+      title: "ASD Contract Review Call - Walter Watson"
+    });
+    const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "contract-review-sync");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+    assert.equal(contact.appointmentType, "contract_review");
+    assert.equal(contact.appointmentTitle, "ASD Contract Review Call - Walter Watson");
+    assert.equal(contact.automationPaused, false);
+    assert.equal(jobs.some((job) => job.type === "send_reengagement_template" && job.status === "pending"), false);
+    assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending" && job.payload.templateGroup === "contractReviewReminderTemplates"), true);
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].Title, "Contract review booked");
+  } finally {
+    slack.sendAppointmentBooked = originalSendAppointmentBooked;
+  }
+});
+
+test("signed contact stays terminal when appointment sync fires", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentBooked = slack.sendAppointmentBooked;
+  const alerts = [];
+  slack.sendAppointmentBooked = async (_config, _contact, extra) => {
+    alerts.push(extra);
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "signed-appointment-sync",
+      ghlContactId: "signed-appointment-sync",
+      name: "Signed Contact",
+      phone: "+15550000902",
+      timezone: "America/Chicago",
+      tags: ["signed"],
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+    });
+
+    const contact = await bot.syncAppointment({
+      contactId: "signed-appointment-sync",
+      appointmentId: "signed-appt",
+      startTime: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      status: "confirmed",
+      title: "ASD Contract Review Call - Signed Contact"
+    });
+    const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "signed-appointment-sync");
+
+    assert.equal(contact.automationPaused, true);
+    assert.equal(contact.automationPauseReason, "signed_tag");
+    assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), false);
+    assert.equal(alerts.length, 0);
+  } finally {
+    slack.sendAppointmentBooked = originalSendAppointmentBooked;
+  }
+});
+
+test("qualified follow-up title uses qualified reminder templates", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "qualified-follow-up-sync",
+    ghlContactId: "qualified-follow-up-sync",
+    name: "Qualified Follow",
+    phone: "+15550000903",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+
+  const contact = await bot.syncAppointment({
+    contactId: "qualified-follow-up-sync",
+    appointmentId: "qualified-follow-up-appt",
+    startTime: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    status: "confirmed",
+    title: "ASD Qualified Follow-Up Call - Qualified Follow"
+  });
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "qualified-follow-up-sync");
+
+  assert.equal(contact.appointmentType, "qualified_follow_up");
+  assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending" && job.payload.templateGroup === "qualifiedFollowUpReminderTemplates"), true);
+});
+
+test("contract review no-show uses contract recovery and urgent missed notice", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentNotice = slack.sendAppointmentNotice;
+  const notices = [];
+  slack.sendAppointmentNotice = async (_config, _contact, title, extra) => {
+    notices.push({ title, extra });
+    return { ok: true };
+  };
+  try {
+    const primary = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    store.upsertContact({
+      id: "contract-review-no-show",
+      ghlContactId: "contract-review-no-show",
+      name: "Contract No Show",
+      phone: "+15550000904",
+      timezone: "America/Chicago",
+      tags: ["contract_sent"],
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.COMPLETE,
+      appointmentType: "contract_review",
+      appointmentTitle: "ASD Contract Review Call - Contract No Show",
+      preferredCallTime: "Primary time",
+      preferredCallTimeIso: primary,
+      appointmentId: "contract-no-show-appt",
+      automationPaused: true,
+      automationPauseReason: "signed_tag"
+    });
+
+    const contact = await bot.markNoShow({ contactId: "contract-review-no-show", appointmentId: "contract-no-show-appt", status: "no_show" });
+    const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "contract-review-no-show");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
+    assert.equal(contact.appointmentType, "contract_review");
+    assert.equal(contact.automationPaused, false);
+    assert.equal(contact.automationPauseReason, "");
+    assert.equal(jobs.some((job) => job.type === "missed_call_followup" && job.status === "pending" && job.payload.templateGroup === "contractReviewNoShowTemplates"), true);
+    assert.equal(notices.some((notice) => notice.title === "Contract review missed"), true);
+  } finally {
+    slack.sendAppointmentNotice = originalSendAppointmentNotice;
+  }
 });
 
 test("GHL appointment no-show status preserves backup and starts no-show recovery", async () => {

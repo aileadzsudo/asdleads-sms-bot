@@ -11,8 +11,12 @@ const TEMPLATE_GROUPS = {
   persistentReengagementTemplates: "Daily Re-Engagement",
   warmFollowUpTemplates: "Warm Follow-Up",
   reminderTemplates: "Appointment Reminders",
+  qualifiedFollowUpReminderTemplates: "Qualified Follow-Up Reminders",
+  contractReviewReminderTemplates: "Contract Review Reminders",
   missedCallTemplates: "Missed Call",
   noShowTemplates: "No-Show Recovery",
+  qualifiedFollowUpNoShowTemplates: "Qualified Follow-Up No-Show Recovery",
+  contractReviewNoShowTemplates: "Contract Review No-Show Recovery",
   backupReminderTemplates: "Backup Time Reminders"
 };
 

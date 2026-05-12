@@ -217,7 +217,7 @@ function backfillEligibility(contact, tag = "NR") {
   if (!contact.contactId && !contact.phone) return { eligible: false, reason: "missing contact id and phone" };
   if (!contact.phone) return { eligible: false, reason: "missing phone" };
   if (tag && !hasTag(contact.tags, tag)) return { eligible: false, reason: `missing ${tag} tag` };
-  if (hasTag(contact.tags, "NQ") || hasTag(contact.tags, "not_qualified")) return { eligible: false, reason: "NQ tag" };
+  if (hasTag(contact.tags, "NQ")) return { eligible: false, reason: "NQ tag" };
   if (
     hasTag(contact.tags, "signed") ||
     hasTag(contact.tags, "contract") ||
@@ -336,6 +336,9 @@ function stuckStateReasons(contact, jobs = [], messages = [], escalations = []) 
 
   if (contact.humanEscalationStatus && contact.humanEscalationStage === "human_review_pending") {
     reasons.push({ type: "urgent", code: "unacknowledged_escalation", label: "Human escalation not acknowledged", recommendedAction: "Acknowledge in dashboard or return to bot after review." });
+  }
+  if (contact.callOutcomeNeeded || contact.automationPauseReason === "call_outcome_required" || contact.humanEscalationStage === "call_outcome_required") {
+    reasons.push({ type: "urgent", code: "call_outcome_needed", label: "No call disposition recorded", recommendedAction: "Add call_drop, call_no_answer, call_connected_follow_up, return_to_bot, NQ, signed/contract, follow_up/QR/human_hold, or book/update appointment." });
   }
   if (failedJobs.length) {
     reasons.push({ type: "urgent", code: "failed_jobs", label: `${failedJobs.length} failed job(s)`, recommendedAction: "Open contact, inspect failed job, then retry/repair from controls." });

@@ -146,6 +146,10 @@ async function sendSms(config, contact, message) {
   });
 }
 
+function appointmentTitle(contact = {}) {
+  return contact.appointmentTitle || `ASD Initial Specialist Call - ${contact.name || contact.phone || "Lead"}`;
+}
+
 async function createAppointment(config, contact, startsAt, endsAt, notes = "") {
   return ghlRequest(config, "/calendars/events/appointments", {
     calendarId: config.ghl.calendarId,
@@ -153,7 +157,7 @@ async function createAppointment(config, contact, startsAt, endsAt, notes = "") 
     contactId: contact.ghlContactId || contact.id,
     startTime: startsAt,
     endTime: endsAt,
-    title: `Accident Support Desk Specialist call - ${contact.name || contact.phone}`,
+    title: appointmentTitle(contact),
     appointmentStatus: "confirmed",
     source: "asdleads-sms-bot",
     notes
@@ -171,7 +175,7 @@ async function updateAppointment(config, contact, appointmentId, startsAt, endsA
       contactId: contact.ghlContactId || contact.id,
       startTime: startsAt,
       endTime: endsAt,
-      title: `Accident Support Desk Specialist call - ${contact.name || contact.phone}`,
+      title: appointmentTitle(contact),
       appointmentStatus: "confirmed",
       source: "asdleads-sms-bot",
       notes
@@ -187,6 +191,15 @@ async function addTags(config, contact, tags = []) {
     return { ok: true, skipped: true, reason: "contactId or tags missing", contactId, tags: cleanTags };
   }
   return ghlRequest(config, `/contacts/${encodeURIComponent(contactId)}/tags`, { tags: cleanTags });
+}
+
+async function createContactNote(config, contact, body) {
+  const contactId = contact?.ghlContactId || contact?.id;
+  const noteBody = String(body || "").trim();
+  if (!contactId || !noteBody) {
+    return { ok: true, skipped: true, reason: "contactId or note body missing", contactId };
+  }
+  return ghlRequest(config, `/contacts/${encodeURIComponent(contactId)}/notes`, { body: noteBody });
 }
 
 async function deleteAppointment(config, appointmentId) {
@@ -207,6 +220,7 @@ module.exports = {
   createAppointment,
   updateAppointment,
   addTags,
+  createContactNote,
   deleteAppointment,
   getContact,
   searchContactsByTag,

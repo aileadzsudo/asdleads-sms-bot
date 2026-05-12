@@ -52,6 +52,7 @@ const qualificationTemplates = {
   existingRepresentation: "No worries at all 🙏 We're always here to help. If you ever feel unsatisfied or unhappy with your current representation, please feel free to reach back out any time. We'd be happy to give you a second opinion on your case and see if we can help.",
   injuryContextCallAsk: "Got it, that definitely matters 🤕 Even if you have not treated yet, injuries are important. The next step is getting you with a Specialist. What time works best for a quick call today or tomorrow? 📞",
   callNowNoAnswer: "Hey [NAME], looks like we just tried giving you a call but missed you. No worries if you're busy 🙏 What time works best later today or tomorrow so we can reach you? 📞",
+  callDropRecovery: "Hey [NAME], looks like the call may have dropped or we missed each other 📞 No worries, I still want to help. What time should we try you again?",
   callNow: "Perfect! 🔥 I'm connecting you with a Specialist right now, you should be getting a call within the next few minutes. Make sure your phone is on and available. What's the best number to reach you at?",
   delay: "So sorry for the small wait, our Specialist is just finishing up with another client. You're next, should be calling within the next 3-5 minutes! 📞",
   backupAsk: "Perfect, I've got you down for [TIME]! 📅 Just to make sure we don't miss each other, is there a backup time that works too, just in case something comes up on either end?",
@@ -194,6 +195,26 @@ const reminderTemplates = {
   sameDayFiveMinutes: "[NAME], your Specialist is calling in 5 minutes! 📞 Pick up even if the number looks unfamiliar, that's them. Can't wait to get you some clarity on your case 💪"
 };
 
+const qualifiedFollowUpReminderTemplates = {
+  ...reminderTemplates,
+  nextDayEvening: "Hey [NAME]! 👋 Quick reminder, you have a follow-up call with your Accident Support Desk Specialist tomorrow at [TIME]. They'll call from a local number, so keep your phone close 📞",
+  nextDayMorning: "Good morning [NAME]! 👋 Reminder, your follow-up call with your Accident Support Desk Specialist is today at [TIME]. They'll call from a local number, so please keep your phone close.",
+  nextDayOneHour: "Hi [NAME], William here! Your follow-up call with the Specialist is in about an hour at [TIME] ⏰ Please keep your phone close.",
+  nextDayFiveMinutes: "[NAME], your follow-up call is in 5 minutes 📞 Please pick up even if the number looks unfamiliar.",
+  sameDayOneHour: "Hey [NAME]! Your follow-up call with the Specialist is coming up in about an hour at [TIME] ⏰ Please keep your phone close.",
+  sameDayFiveMinutes: "[NAME], your follow-up call is in 5 minutes 📞 Please pick up even if the number looks unfamiliar."
+};
+
+const contractReviewReminderTemplates = {
+  ...reminderTemplates,
+  nextDayEvening: "Hey [NAME]! 👋 Quick reminder, your Accident Support Desk contract review call is tomorrow at [TIME]. This is the next step to finish everything, so please keep your phone close 📞",
+  nextDayMorning: "Good morning [NAME]! 👋 Reminder, your contract review call with Accident Support Desk is today at [TIME]. They'll call from a local number, so please keep your phone close.",
+  nextDayOneHour: "Hi [NAME], William here! Your contract review call is in about an hour at [TIME] ⏰ Please keep your phone close so we can help finish the next step.",
+  nextDayFiveMinutes: "[NAME], your contract review call is in 5 minutes 📞 Please pick up even if the number looks unfamiliar.",
+  sameDayOneHour: "Hey [NAME]! Your contract review call is coming up in about an hour at [TIME] ⏰ Please keep your phone close.",
+  sameDayFiveMinutes: "[NAME], your contract review call is in 5 minutes 📞 Please pick up even if the number looks unfamiliar so we can help finish this up."
+};
+
 const missedCallTemplates = {
   after10Minutes: "Hey [NAME], looks like we just missed each other! Our Specialist tried calling at [TIME] but couldn't get through. No worries at all, can we get you rescheduled? What time works best for you today or tomorrow?",
   after3Hours: "Hi [NAME], William here. Just wanted to make sure you didn't miss out, we had a Specialist standing by for you earlier. It only takes about 10 minutes and could make a real difference for your case. When can we try again?",
@@ -233,6 +254,34 @@ const noShowTemplates = {
   day_13_pm: "[NAME], you may have options you have not been told about yet. Let us give you a free second look. Reply with a time today or tomorrow.",
   day_14_am: "Hey [NAME], last day I’ll keep pushing on this. Do you still want a Specialist to call you about your accident case?",
   day_14_pm: "Last message from me for now, [NAME]. If you want help, send me a call time and we’ll try to get you back on the calendar 📞"
+};
+
+const qualifiedFollowUpNoShowTemplates = {
+  ...noShowTemplates,
+  same_day_now: "Hey [NAME], looks like we just missed your follow-up call at [TIME] 📞 No worries. What time can we try you again today?",
+  same_day_15: "[NAME], I do not want this to stall after you already spoke with us 🙏 Can I get you back on the calendar today?",
+  same_day_60: "Quick check, [NAME]. Our Specialist had time set aside for your follow-up. What time works later today for a quick call?",
+  same_day_120: "[NAME], I want to keep the momentum going on your file. Can we try your follow-up call again today?",
+  same_day_240: "Still here, [NAME]. Reply with a time today or tomorrow and I’ll help get your follow-up call rescheduled 📞",
+  same_day_360: "Last check for today, [NAME]. What time should we call you back to keep this moving?",
+  day_2_am: "Good morning [NAME] 👋 we missed your follow-up call, but I can still help get you back with a Specialist. What time works today?",
+  day_2_pm: "[NAME], just circling back on your follow-up call. What time today or tomorrow should we try you again?",
+  day_3_am: "Hey [NAME], I know life gets busy. We still want to help move this forward. What time can a Specialist call?",
+  day_3_pm: "[NAME], you already made it to the follow-up step. I do not want your file to go cold now. What call time works?"
+};
+
+const contractReviewNoShowTemplates = {
+  ...noShowTemplates,
+  same_day_now: "Hey [NAME], looks like we just missed your contract review call at [TIME] 📞 No worries. What time can we try you again today so we can help finish the next step?",
+  same_day_15: "[NAME], I do not want the agreement review to stall when you are this close 🙏 Can I get you back on the calendar today?",
+  same_day_60: "Quick check, [NAME]. Our Specialist had time set aside to review the agreement with you. What time works later today?",
+  same_day_120: "[NAME], I want to help you finish the contract review so this does not get delayed. Can we try the call again today?",
+  same_day_240: "Still here, [NAME]. You are at the agreement review step, so I do not want this to fall through. Reply with a time today or tomorrow and I’ll help get you rescheduled 📞",
+  same_day_360: "Last check for today, [NAME]. What time should we call you back to review the agreement?",
+  day_2_am: "Good morning [NAME] 👋 we missed your contract review call, but I can still help get you back on the calendar. What time works today?",
+  day_2_pm: "[NAME], just following up on the agreement review. I do not want this delayed if you still want help. What time today or tomorrow works?",
+  day_3_am: "Hey [NAME], I know reviewing paperwork can feel like a lot. We can walk you through it quickly. What time can a Specialist call?",
+  day_3_pm: "[NAME], you are already at the contract review step. Let me help get this finished. What call time works?"
 };
 
 const backupReminderTemplates = {
@@ -295,6 +344,7 @@ const spanishTemplates = {
     existingRepresentation: "No hay problema 🙏 Siempre estamos aquí para ayudar. Si en algún momento no estás satisfecho con tu representación actual, puedes escribirnos cuando quieras. Con gusto te damos una segunda opinión sobre tu caso para ver si podemos ayudar.",
     injuryContextCallAsk: "Entiendo, eso definitivamente importa 🤕 Incluso si todavía no has recibido tratamiento, las lesiones son importantes. El siguiente paso es conectarte con un Especialista. ¿Qué hora te queda mejor para una llamada rápida hoy o mañana? 📞",
     callNowNoAnswer: "Hola [NAME], parece que acabamos de llamarte pero no pudimos comunicarnos. No hay problema si estás ocupado 🙏 ¿Qué hora te queda mejor más tarde hoy o mañana para poder llamarte? 📞",
+    callDropRecovery: "Hola [NAME], parece que la llamada se cortó o no pudimos conectar 📞 No hay problema, todavía quiero ayudarte. ¿A qué hora intentamos otra vez?",
     callNow: "Perfecto! 🔥 Te estoy conectando con un Especialista ahora mismo. Deberías recibir una llamada en los próximos minutos. Mantén tu teléfono disponible. ¿Cuál es el mejor número para llamarte?",
     delay: "Perdón por la pequeña espera, nuestro Especialista está terminando con otro cliente. Sigues tú, debería llamarte en unos 3 a 5 minutos! 📞",
     backupAsk: "Perfecto, te tengo anotado para [TIME]! 📅 Para asegurarnos de no perdernos, ¿hay una hora de respaldo que también te funcione por si algo pasa?",
@@ -476,6 +526,54 @@ const spanishTemplates = {
   }
 };
 
+spanishTemplates.qualifiedFollowUpReminderTemplates = {
+  ...spanishTemplates.reminderTemplates,
+  nextDayEvening: "Hola [NAME]! 👋 Recordatorio rápido: tienes una llamada de seguimiento con tu Especialista de Accident Support Desk mañana a las [TIME]. Te llamarán desde un número local, así que mantén tu teléfono cerca 📞",
+  nextDayMorning: "Buenos días [NAME]! 👋 Recordatorio: tu llamada de seguimiento con el Especialista es hoy a las [TIME]. Te llamarán desde un número local, así que mantén tu teléfono cerca.",
+  nextDayOneHour: "Hola [NAME], soy William! Tu llamada de seguimiento con el Especialista es en aproximadamente una hora a las [TIME] ⏰ Mantén tu teléfono cerca.",
+  nextDayFiveMinutes: "[NAME], tu llamada de seguimiento es en 5 minutos 📞 Contesta aunque el número no te parezca familiar.",
+  sameDayOneHour: "Hola [NAME]! Tu llamada de seguimiento con el Especialista es en aproximadamente una hora a las [TIME] ⏰ Mantén tu teléfono cerca.",
+  sameDayFiveMinutes: "[NAME], tu llamada de seguimiento es en 5 minutos 📞 Contesta aunque el número no te parezca familiar."
+};
+
+spanishTemplates.contractReviewReminderTemplates = {
+  ...spanishTemplates.reminderTemplates,
+  nextDayEvening: "Hola [NAME]! 👋 Recordatorio rápido: tu llamada para revisar el contrato con Accident Support Desk es mañana a las [TIME]. Este es el siguiente paso para terminar todo, así que mantén tu teléfono cerca 📞",
+  nextDayMorning: "Buenos días [NAME]! 👋 Recordatorio: tu llamada para revisar el contrato con Accident Support Desk es hoy a las [TIME]. Te llamarán desde un número local, así que mantén tu teléfono cerca.",
+  nextDayOneHour: "Hola [NAME], soy William! Tu llamada para revisar el contrato es en aproximadamente una hora a las [TIME] ⏰ Mantén tu teléfono cerca para que podamos ayudarte a terminar el siguiente paso.",
+  nextDayFiveMinutes: "[NAME], tu llamada para revisar el contrato es en 5 minutos 📞 Contesta aunque el número no te parezca familiar.",
+  sameDayOneHour: "Hola [NAME]! Tu llamada para revisar el contrato es en aproximadamente una hora a las [TIME] ⏰ Mantén tu teléfono cerca.",
+  sameDayFiveMinutes: "[NAME], tu llamada para revisar el contrato es en 5 minutos 📞 Contesta aunque el número no te parezca familiar para que podamos ayudarte a terminar esto."
+};
+
+spanishTemplates.qualifiedFollowUpNoShowTemplates = {
+  ...spanishTemplates.noShowTemplates,
+  same_day_now: "Hola [NAME], parece que no pudimos hablar en tu llamada de seguimiento a las [TIME] 📞 No hay problema. ¿Qué hora podemos intentar hoy?",
+  same_day_15: "[NAME], no quiero que esto se detenga después de que ya hablaste con nosotros 🙏 ¿Te puedo poner de nuevo en el calendario hoy?",
+  same_day_60: "Pregunta rápida, [NAME]. Nuestro Especialista apartó tiempo para tu seguimiento. ¿Qué hora más tarde hoy funciona para una llamada rápida?",
+  same_day_120: "[NAME], quiero mantener el avance de tu archivo. ¿Podemos intentar la llamada de seguimiento otra vez hoy?",
+  same_day_240: "Sigo aquí, [NAME]. Responde con una hora hoy o mañana y te ayudo a reagendar tu llamada de seguimiento 📞",
+  same_day_360: "Última revisión por hoy, [NAME]. ¿A qué hora debemos llamarte para seguir avanzando?",
+  day_2_am: "Buenos días [NAME] 👋 no pudimos hablar en tu llamada de seguimiento, pero todavía puedo conectarte con un Especialista. ¿Qué hora funciona hoy?",
+  day_2_pm: "[NAME], seguimiento rápido sobre tu llamada. ¿Qué hora hoy o mañana debemos intentar otra vez?",
+  day_3_am: "Hola [NAME], sé que la vida se ocupa. Todavía queremos ayudarte a avanzar. ¿A qué hora puede llamar un Especialista?",
+  day_3_pm: "[NAME], ya llegaste al paso de seguimiento. No quiero que tu archivo se enfríe ahora. ¿Qué hora funciona?"
+};
+
+spanishTemplates.contractReviewNoShowTemplates = {
+  ...spanishTemplates.noShowTemplates,
+  same_day_now: "Hola [NAME], parece que no pudimos hablar en tu llamada para revisar el contrato a las [TIME] 📞 No hay problema. ¿Qué hora podemos intentar hoy para ayudarte a terminar el siguiente paso?",
+  same_day_15: "[NAME], no quiero que la revisión del acuerdo se detenga cuando estás tan cerca 🙏 ¿Te puedo poner de nuevo en el calendario hoy?",
+  same_day_60: "Pregunta rápida, [NAME]. Nuestro Especialista apartó tiempo para revisar el acuerdo contigo. ¿Qué hora más tarde hoy funciona?",
+  same_day_120: "[NAME], quiero ayudarte a terminar la revisión del contrato para que esto no se retrase. ¿Podemos intentar la llamada otra vez hoy?",
+  same_day_240: "Sigo aquí, [NAME]. Estás en el paso de revisar el acuerdo, así que no quiero que esto se pierda. Responde con una hora hoy o mañana y te ayudo a reagendar 📞",
+  same_day_360: "Última revisión por hoy, [NAME]. ¿A qué hora debemos llamarte para revisar el acuerdo?",
+  day_2_am: "Buenos días [NAME] 👋 no pudimos hablar en tu llamada para revisar el contrato, pero todavía puedo ayudarte a volver al calendario. ¿Qué hora funciona hoy?",
+  day_2_pm: "[NAME], seguimiento rápido sobre la revisión del acuerdo. No quiero que esto se retrase si todavía quieres ayuda. ¿Qué hora hoy o mañana funciona?",
+  day_3_am: "Hola [NAME], sé que revisar documentos puede sentirse pesado. Podemos explicártelo rápido. ¿A qué hora puede llamar un Especialista?",
+  day_3_pm: "[NAME], ya estás en el paso de revisión del contrato. Déjame ayudarte a terminarlo. ¿Qué hora funciona?"
+};
+
 Object.assign(noShowTemplates, {
   sameDay10: noShowTemplates.same_day_now,
   sameDay45: noShowTemplates.same_day_60,
@@ -604,8 +702,12 @@ addExactTranslations(reengagementTemplates, spanishTemplates.reengagementTemplat
 addExactTranslations(persistentReengagementTemplates, spanishTemplates.persistentReengagementTemplates);
 addExactTranslations(warmFollowUpTemplates, spanishTemplates.warmFollowUpTemplates);
 addExactTranslations(reminderTemplates, spanishTemplates.reminderTemplates);
+addExactTranslations(qualifiedFollowUpReminderTemplates, spanishTemplates.qualifiedFollowUpReminderTemplates);
+addExactTranslations(contractReviewReminderTemplates, spanishTemplates.contractReviewReminderTemplates);
 addExactTranslations(missedCallTemplates, spanishTemplates.missedCallTemplates);
 addExactTranslations(noShowTemplates, spanishTemplates.noShowTemplates);
+addExactTranslations(qualifiedFollowUpNoShowTemplates, spanishTemplates.qualifiedFollowUpNoShowTemplates);
+addExactTranslations(contractReviewNoShowTemplates, spanishTemplates.contractReviewNoShowTemplates);
 addExactTranslations(backupReminderTemplates, spanishTemplates.backupReminderTemplates);
 
 function firstName(contact = {}) {
@@ -641,8 +743,12 @@ module.exports = {
   persistentReengagementTemplates,
   warmFollowUpTemplates,
   reminderTemplates,
+  qualifiedFollowUpReminderTemplates,
+  contractReviewReminderTemplates,
   missedCallTemplates,
   noShowTemplates,
+  qualifiedFollowUpNoShowTemplates,
+  contractReviewNoShowTemplates,
   backupReminderTemplates,
   spanishTemplates,
   isSpanishContact,

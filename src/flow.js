@@ -8,8 +8,12 @@ const {
   persistentReengagementTemplates,
   warmFollowUpTemplates,
   reminderTemplates,
+  qualifiedFollowUpReminderTemplates,
+  contractReviewReminderTemplates,
   missedCallTemplates,
   noShowTemplates,
+  qualifiedFollowUpNoShowTemplates,
+  contractReviewNoShowTemplates,
   backupReminderTemplates,
   isSpanishContact,
   localizeMessage,
@@ -51,6 +55,8 @@ const REENGAGEMENT_SLOTS = ["am", "pm"];
 const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
 const HUMAN_REPLY_TIMEOUT_MINUTES = 5;
 const HUMAN_CALL_TIMEOUT_MINUTES = 30;
+const CALL_OUTCOME_WATCHDOG_MINUTES = 10;
+const CALL_DURATION_SUCCESS_SECONDS = 60;
 const INBOUND_BUFFER_SECONDS = 30;
 const URGENT_CALL_NOW_FASTLANE_WINDOW_MINUTES = 10;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
@@ -243,26 +249,66 @@ function normalizeTags(tags) {
   return parts.length > 1 ? [raw, ...parts] : [raw];
 }
 
-function hasSignedTag(contact) {
-  return hasAnyTag(contact, ["signed", "contract", "contract_set", "contract_sent", "contract_signed"]);
+function hasNqTag(contact) {
+  return normalizeTags(contact.tags).some((tag) => tag === "nq" || tag === "#nq");
 }
 
-function hasNqTag(contact) {
-  return normalizeTags(contact.tags).some((tag) => tag === "nq" || tag === "#nq" || tag === "notqualified" || tag === "not_qualified");
+function hasSignedTag(contact) {
+  return hasAnyTag(contact, ["signed", "contract_signed"]);
+}
+
+function hasContractPendingTag(contact) {
+  return hasAnyTag(contact, ["contract", "contract_set", "contract_sent"]);
+}
+
+function hasContractStopTag(contact) {
+  return hasSignedTag(contact) || hasContractPendingTag(contact);
+}
+
+function isAppointmentSupportJobType(type = "") {
+  return ["appointment_reminder", "missed_call_followup", "backup_no_show_reminder", "backup_time_timeout"].includes(type);
+}
+
+function isAppointmentSupportContext(contact = {}) {
+  return Boolean(
+    contact.appointmentType ||
+      contact.appointmentId ||
+      contact.preferredCallTimeIso ||
+      contact.preferredCallTime ||
+      contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
+      contact.engagementStatus === ENGAGEMENT.MISSED_CALL ||
+      contact.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
+      contact.currentSequenceName === "appointment_synced" ||
+      contact.currentSequenceName === "appointment_no_show" ||
+      contact.currentSequenceName === "no_show_rebooked"
+  );
 }
 
 function actionFromTags(tags) {
   const normalizedTags = normalizeTags(tags).map((tag) => tag.replace(/^#/, "").replace(/[-\s]+/g, "_"));
+  if (normalizedTags.some((tag) => ["call_drop", "call_dropped", "dropped_call"].includes(tag))) {
+    return "call_drop";
+  }
+  if (normalizedTags.some((tag) => ["call_no_answer", "no_answer", "call_missed", "missed_call_now"].includes(tag))) {
+    return "call_no_answer";
+  }
+  if (normalizedTags.some((tag) => ["call_connected_follow_up", "connected_follow_up", "call_follow_up"].includes(tag))) {
+    return "call_connected_follow_up";
+  }
   if (normalizedTags.some((tag) => ["return_to_bot", "returntobot", "resume_bot", "bot_resume"].includes(tag))) {
     return "return_to_bot";
+  }
+  if (normalizedTags.some((tag) => ["follow_up", "qr", "human_hold", "manual_hold"].includes(tag))) {
+    return "human_hold";
   }
   if (normalizedTags.some((tag) => ["human_acknowledged", "human_ack", "human_working"].includes(tag))) {
     return "human_acknowledged";
   }
-  if (normalizedTags.some((tag) => ["nq", "notqualified", "not_qualified"].includes(tag))) return "nq";
-  if (normalizedTags.some((tag) => ["signed", "contract", "contract_set", "contract_sent", "contract_signed"].includes(tag))) {
+  if (normalizedTags.some((tag) => ["nq"].includes(tag))) return "nq";
+  if (normalizedTags.some((tag) => ["signed", "contract_signed"].includes(tag))) {
     return "signed";
   }
+  if (normalizedTags.some((tag) => ["contract", "contract_set", "contract_sent"].includes(tag))) return "contract_pending";
   if (normalizedTags.some((tag) => ["do_not_contact", "dnc", "opt_out"].includes(tag))) return "do_not_contact";
   return "";
 }
@@ -281,7 +327,8 @@ function hasManualHumanHoldTag(contact) {
     "manual_follow_up",
     "follow_up",
     "missed_follow_up",
-    "qr"
+    "qr",
+    "call_connected_follow_up"
   ]);
 }
 
@@ -369,6 +416,10 @@ function looksPostSignedOrFirmIssue(text) {
 }
 
 function callAskTemplateForTime(contact, config, now = new Date()) {
+  if (contact.availabilityClue && (contact.availabilitySuggestedPrimaryText || contact.availabilitySuggestedSecondaryText)) {
+    const options = [contact.availabilitySuggestedPrimaryText, contact.availabilitySuggestedSecondaryText].filter(Boolean).join(" or ");
+    return `Based on what you shared, we can definitely help you out! 💰 You mentioned ${contact.availabilityClue}. Does ${options || "that time"} work for a quick Specialist call? 📞`;
+  }
   const timeZone = contact.timezone || config.texting.defaultTimezone;
   const local = getLocalParts(now, timeZone);
   const lateEvening = local.hour >= 20;
@@ -520,6 +571,7 @@ function canAutoReturnUnacknowledgedEscalation(contact, job = {}) {
   if (
     contact.optOutStatus ||
     hasSignedTag(contact) ||
+    hasContractPendingTag(contact) ||
     hasNqTag(contact) ||
     hasManualHumanHoldTag(contact) ||
     contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
@@ -714,7 +766,112 @@ function anchorScheduledTimeToClarifiedDay(parsed, text, contact, config) {
 
 function isRescheduleRequest(text) {
   const t = normalize(text);
-  return /\b(reschedule|re-schedule|move it|move the call|change the time|change my time|different time|another time|another day|instead|push it back|push back|can't make it|cant make it|need to move|need a new time)\b/.test(t);
+  return /\b(reschedule|re-schedule|move it|move the call|change the time|change my time|different time|another time|another day|instead|push it back|push back|can't make it|cant make it|cannot make it|won't make it|wont make it|can't do that|cant do that|can't do it|cant do it|not free|not available|unavailable|need to move|need a new time)\b/.test(t);
+}
+
+function isUnavailableForImmediateCall(text) {
+  const t = normalize(text);
+  return /\b(not right now|not now|not at the moment|not this moment|can't right now|cant right now|cannot right now|can't talk right now|cant talk right now|busy right now|currently busy|not free|not available|unavailable|can't talk|cant talk|cannot talk)\b/.test(t);
+}
+
+function isAvailabilityClueWithoutCommitment(text) {
+  const t = normalize(text);
+  if (!/\b(get off|off work|off at|available after|free after|anytime after|any time after|after work|after \d{1,2})\b/.test(t)) {
+    return false;
+  }
+  return !/\b(call me|you can call|u can call|go ahead and call|let's say|lets say|book|schedule|appointment|put me down|lock me in)\b/.test(t);
+}
+
+function isReschedulePending(contact) {
+  return (
+    contact?.currentSequenceName === "reschedule_requested" ||
+    contact?.callTimeClarificationMode === "reschedule" ||
+    Boolean(contact?.appointmentSuppressedAt && contact?.appointmentSuppressionReason === "contact_requested_reschedule")
+  );
+}
+
+function callDurationSeconds(payload = {}) {
+  const raw = textValue(
+    payload.callDurationSeconds ||
+      payload.call_duration_seconds ||
+      payload.durationSeconds ||
+      payload.duration_seconds ||
+      payload.callDuration ||
+      payload.call_duration ||
+      payload.duration ||
+      payload.call?.duration ||
+      payload.call?.durationSeconds ||
+      payload.activity?.duration ||
+      payload.activity?.durationSeconds
+  );
+  if (!raw) return null;
+  const minuteParts = String(raw).match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (minuteParts) {
+    const first = Number(minuteParts[1]);
+    const second = Number(minuteParts[2]);
+    const third = minuteParts[3] ? Number(minuteParts[3]) : null;
+    return third === null ? first * 60 + second : first * 3600 + second * 60 + third;
+  }
+  const numeric = Number(String(raw).replace(/[^\d.]/g, ""));
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function callStatusFromPayload(payload = {}) {
+  return normalize(
+    textValue(
+      payload.callStatus ||
+        payload.call_status ||
+        payload.status ||
+        payload.call?.status ||
+        payload.activity?.status ||
+        payload.disposition ||
+        payload.callDisposition
+    )
+  );
+}
+
+function callDirectionFromPayload(payload = {}) {
+  return normalize(
+    textValue(
+      payload.callDirection ||
+        payload.call_direction ||
+        payload.direction ||
+        payload.call?.direction ||
+        payload.activity?.direction
+    )
+  );
+}
+
+function clearAvailabilityCluePatch() {
+  return {
+    availabilityClue: "",
+    availabilityClueIso: "",
+    availabilitySuggestedPrimaryIso: "",
+    availabilitySuggestedPrimaryText: "",
+    availabilitySuggestedSecondaryIso: "",
+    availabilitySuggestedSecondaryText: "",
+    availabilityClueAskedAt: ""
+  };
+}
+
+function hasResolvedCallOutcome(contact = {}) {
+  return Boolean(
+    contact.callOutcomeStatus ||
+      contact.appointmentId ||
+      contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
+      contact.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
+      contact.qualificationProgress === QUALIFICATION.COMPLETE ||
+      contact.automationPauseReason === "call_connected_follow_up" ||
+      contact.automationPauseReason === "manual_hold_tag" ||
+      contact.automationPauseReason === "nq_tag" ||
+      contact.automationPauseReason === "signed_tag" ||
+      contact.automationPauseReason === "contract_pending_tag" ||
+      contact.automationPauseReason === "contract_pending_appointment_support" ||
+      hasSignedTag(contact) ||
+      hasContractPendingTag(contact) ||
+      hasNqTag(contact) ||
+      hasManualHumanHoldTag(contact)
+  );
 }
 
 function isPrimaryCallCorrectionWhileAwaitingBackup(text, contact, config) {
@@ -920,6 +1077,8 @@ function shouldTreatNoResponseAsCallNoAnswer(existing = {}) {
   if (!existing || existing.optOutStatus || existing.automationPaused) return false;
   if (existing.engagementStatus === ENGAGEMENT.READY_FOR_CALL) return true;
   if (isCallNow(existing.lastInboundMessage || "")) return true;
+  if (["call_dropped_recovery", "call_now_no_answer"].includes(existing.currentSequenceName)) return true;
+  if (["call_dropped_recovery", "call_now_no_answer"].includes(existing.humanEscalationStage)) return true;
   if (existing.humanEscalationStatus && /call_now|ready_for_call/i.test(existing.escalationReason || existing.humanEscalationStage || "")) {
     return true;
   }
@@ -1109,6 +1268,101 @@ function appointmentStatusFromPayload(payload = {}) {
       "event.status"
     ])
   ).toLowerCase();
+}
+
+function appointmentTitleFromPayload(payload = {}) {
+  return textValue(
+    appointmentField(payload, [
+      "title",
+      "appointmentTitle",
+      "appointment_title",
+      "eventTitle",
+      "event_title",
+      "appointment.title",
+      "event.title",
+      "calendarEvent.title"
+    ])
+  );
+}
+
+function normalizeAppointmentType(value = "") {
+  const t = normalize(value).replace(/\s+/g, "_");
+  if (!t) return "";
+  if (/contract|agreement|review|sign/.test(t)) return "contract_review";
+  if (/qualified|follow[_-]?up|callback|call[_-]?back/.test(t)) return "qualified_follow_up";
+  if (/initial|specialist|intake/.test(t)) return "initial";
+  if (["0", "type_0", "appointment_0"].includes(t)) return "initial";
+  if (["1", "type_1", "appointment_1"].includes(t)) return "qualified_follow_up";
+  if (["2", "3", "type_2", "type_3", "appointment_2", "appointment_3"].includes(t)) return "contract_review";
+  return "";
+}
+
+function appointmentTitleForType(type = "initial", contact = {}) {
+  const name = contact.name || contact.phone || "Lead";
+  if (type === "contract_review") return `ASD Contract Review Call - ${name}`;
+  if (type === "qualified_follow_up") return `ASD Qualified Follow-Up Call - ${name}`;
+  return `ASD Initial Specialist Call - ${name}`;
+}
+
+function appointmentNoticeTitle(type = "initial", action = "booked") {
+  if (action === "missed" && type === "contract_review") return "Contract review missed";
+  if (action === "rebooked" && type === "contract_review") return "Contract review rebooked";
+  if (action === "rebooked" && type === "qualified_follow_up") return "Qualified follow-up rebooked";
+  if (action === "booked" && type === "contract_review") return "Contract review booked";
+  if (action === "booked" && type === "qualified_follow_up") return "Qualified follow-up booked";
+  return action === "rebooked" ? "Call rebooked after no-show" : "Initial appointment booked";
+}
+
+function reminderTemplateGroupForAppointment(contact = {}) {
+  if (contact.appointmentType === "contract_review") return "contractReviewReminderTemplates";
+  if (contact.appointmentType === "qualified_follow_up") return "qualifiedFollowUpReminderTemplates";
+  return "reminderTemplates";
+}
+
+function reminderTemplatesForGroup(group = "reminderTemplates") {
+  if (group === "contractReviewReminderTemplates") return contractReviewReminderTemplates;
+  if (group === "qualifiedFollowUpReminderTemplates") return qualifiedFollowUpReminderTemplates;
+  return reminderTemplates;
+}
+
+function noShowTemplateGroupForAppointment(contact = {}) {
+  if (contact.appointmentType === "contract_review") return "contractReviewNoShowTemplates";
+  if (contact.appointmentType === "qualified_follow_up") return "qualifiedFollowUpNoShowTemplates";
+  return "noShowTemplates";
+}
+
+function noShowTemplatesForGroup(group = "noShowTemplates") {
+  if (group === "contractReviewNoShowTemplates") return contractReviewNoShowTemplates;
+  if (group === "qualifiedFollowUpNoShowTemplates") return qualifiedFollowUpNoShowTemplates;
+  if (group === "noShowTemplates") return noShowTemplates;
+  return missedCallTemplates;
+}
+
+function appointmentTypeFromPayload(payload = {}, contact = {}) {
+  const title = appointmentTitleFromPayload(payload);
+  const explicit = textValue(
+    appointmentField(payload, [
+      "appointmentType",
+      "appointment_type",
+      "appointmentStage",
+      "appointment_stage",
+      "stage",
+      "type",
+      "appointment.appointmentType",
+      "appointment.appointment_type",
+      "appointment.stage",
+      "event.appointmentType",
+      "event.appointment_type",
+      "event.stage"
+    ])
+  );
+  return (
+    normalizeAppointmentType(title) ||
+    normalizeAppointmentType(explicit) ||
+    (hasContractPendingTag(contact) ? "contract_review" : "") ||
+    contact.appointmentType ||
+    "initial"
+  );
 }
 
 function appointmentStartRawFromPayload(payload = {}) {
@@ -1323,6 +1577,31 @@ class SmsBot {
         "Appointment ID": contact.appointmentId || "unknown",
         Error: error.message
       });
+      return false;
+    }
+  }
+
+  async writeGhlNote(contact, title, details = {}) {
+    if (!contact || !title) return false;
+    const lines = [`${title}`];
+    for (const [key, value] of Object.entries(details)) {
+      if (value !== undefined && value !== null && value !== "") lines.push(`${key}: ${value}`);
+    }
+    try {
+      await ghl.createContactNote(this.config, contact, lines.join("\n"));
+      return true;
+    } catch (error) {
+      await this.notifyBotError(
+        "GHL contact note write failed",
+        {
+          Name: contact.name || "unknown",
+          Phone: contact.phone || "unknown",
+          "GHL contact": contact.ghlContactId || contact.id,
+          Note: title,
+          Error: error.message
+        },
+        { operationalOnly: true, slack: false, level: "warn" }
+      );
       return false;
     }
   }
@@ -1606,6 +1885,11 @@ class SmsBot {
         await this.recordDecision(contact, "skipped", "signed_tag", { message });
         return null;
       }
+      if (hasContractPendingTag(contact) && !isAppointmentSupportContext(contact)) {
+        await this.stopForContractPendingTag(contact);
+        await this.recordDecision(contact, "skipped", "contract_pending_tag", { message });
+        return null;
+      }
       if (hasNqTag(contact)) {
         await this.stopForNqTag(contact);
         await this.recordDecision(contact, "skipped", "nq_tag", { message });
@@ -1730,9 +2014,17 @@ class SmsBot {
       ...contact,
       automationPaused: true,
       automationPauseReason: "nq_tag",
-      currentSequenceName: ""
+      currentSequenceName: "",
+      nqStoppedAt: contact.nqStoppedAt || new Date().toISOString()
     });
     await this.store.cancelJobsForContact(updated.id, "NQ tag");
+    if (!contact.nqStoppedNoteAt) {
+      await this.writeGhlNote(updated, "SMS bot stopped: NQ", {
+        Status: updated.engagementStatus || "unknown",
+        "Last inbound": updated.lastInboundMessage || "none"
+      });
+      return this.store.upsertContact({ ...updated, nqStoppedNoteAt: new Date().toISOString() });
+    }
     return updated;
   }
 
@@ -1741,9 +2033,17 @@ class SmsBot {
       ...contact,
       automationPaused: true,
       automationPauseReason: "signed_tag",
-      currentSequenceName: ""
+      currentSequenceName: "",
+      signedStoppedAt: contact.signedStoppedAt || new Date().toISOString()
     });
     await this.store.cancelJobsForContact(updated.id, "signed tag");
+    if (!contact.signedStoppedNoteAt) {
+      await this.writeGhlNote(updated, "SMS bot stopped: signed/contract", {
+        Tags: normalizeTags(updated.tags).join(", "),
+        "Last inbound": updated.lastInboundMessage || "none"
+      });
+      await this.store.upsertContact({ ...updated, signedStoppedNoteAt: new Date().toISOString() });
+    }
     await this.notifyBotError("Signed contact paused SMS bot", {
       Name: updated.name || "unknown",
       Phone: updated.phone || "unknown",
@@ -1751,6 +2051,39 @@ class SmsBot {
       Tags: normalizeTags(updated.tags).join(", "),
       "Last inbound": updated.lastInboundMessage || "none"
     });
+    return updated;
+  }
+
+  async stopForContractPendingTag(contact) {
+    const preserveAppointmentSupport = isAppointmentSupportContext(contact);
+    const updated = await this.store.upsertContact({
+      ...contact,
+      automationPaused: preserveAppointmentSupport ? false : true,
+      automationPauseReason: preserveAppointmentSupport ? "contract_pending_appointment_support" : "contract_pending_tag",
+      currentSequenceName: preserveAppointmentSupport ? contact.currentSequenceName || "appointment_synced" : "",
+      contractPendingStoppedAt: contact.contractPendingStoppedAt || new Date().toISOString()
+    });
+    await this.store.cancelJobsForContact(updated.id, "contract pending tag", (job) =>
+      preserveAppointmentSupport
+        ? [
+            "initial_sms",
+            "cold_entry_check",
+            "send_cold_template",
+            "fresh_lead_followup",
+            "warm_followup",
+            "enter_reengagement",
+            "send_reengagement_template"
+          ].includes(job.type)
+        : BOT_SEQUENCE_JOB_TYPES.includes(job.type)
+    );
+    if (!contact.contractPendingNoteAt) {
+      await this.writeGhlNote(updated, "SMS bot intake paused: contract in progress", {
+        Tags: normalizeTags(updated.tags).join(", "),
+        "Appointment support": preserveAppointmentSupport ? "active" : "none",
+        "Last inbound": updated.lastInboundMessage || "none"
+      });
+      return this.store.upsertContact({ ...updated, contractPendingNoteAt: new Date().toISOString() });
+    }
     return updated;
   }
 
@@ -1762,9 +2095,17 @@ class SmsBot {
       humanEscalationStatus: true,
       humanEscalationStage: "manual_hold_tag",
       engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
-      currentSequenceName: ""
+      currentSequenceName: "",
+      manualHoldStartedAt: contact.manualHoldStartedAt || new Date().toISOString()
     });
     await this.store.cancelJobsForContact(updated.id, "manual hold tag");
+    if (!contact.manualHoldNoteAt) {
+      await this.writeGhlNote(updated, "SMS bot paused: manual hold", {
+        Tags: normalizeTags(updated.tags).join(", "),
+        "Last inbound": updated.lastInboundMessage || "none"
+      });
+      return this.store.upsertContact({ ...updated, manualHoldNoteAt: new Date().toISOString() });
+    }
     return updated;
   }
 
@@ -2012,6 +2353,7 @@ class SmsBot {
         });
         contact = await this.hydrateContactTags(contact);
         if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
+        if (hasContractPendingTag(contact)) return this.stopForContractPendingTag(contact);
         if (hasNqTag(contact)) return this.stopForNqTag(contact);
         if (hasManualHumanHoldTag(contact)) return this.stopForManualHoldTag(contact);
         await this.recordDecision(contact, "skipped", "repeat_no_response_already_enrolled", {
@@ -2046,6 +2388,7 @@ class SmsBot {
       );
       const hydrated = await this.hydrateContactTags(contact);
       if (hasSignedTag(hydrated)) return this.stopForSignedTag(hydrated);
+      if (hasContractPendingTag(hydrated)) return this.stopForContractPendingTag(hydrated);
       if (hasNqTag(hydrated)) return this.stopForNqTag(hydrated);
       if (hasManualHumanHoldTag(hydrated)) return this.stopForManualHoldTag(hydrated);
       const initial = render(coldOutreachTemplates.day_1_am, contact);
@@ -2061,6 +2404,7 @@ class SmsBot {
           latest.automationPaused ||
           latest.engagementStatus === ENGAGEMENT.OPTED_OUT ||
           hasSignedTag(latest) ||
+          hasContractPendingTag(latest) ||
           hasNqTag(latest) ||
           hasManualHumanHoldTag(latest)
         ) {
@@ -2089,6 +2433,11 @@ class SmsBot {
         currentMessageCountForDay: 1,
         sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || contact.sentColdTemplateKeys || []), "day_1_am"]))
       });
+      await this.writeGhlNote(afterInitial, "SMS bot enrolled: NR/no response", {
+        Sequence: "initial_sms",
+        "Initial SMS": "sent",
+        Timezone: afterInitial.timezone || "unknown"
+      });
       await this.scheduleFreshLeadFollowUps(afterInitial);
       await this.scheduleColdOutreach(afterInitial);
       await this.store.addJob({
@@ -2114,15 +2463,20 @@ class SmsBot {
       humanEscalationStage: "call_now_no_answer",
       automationPaused: false,
       automationPauseReason: "",
+      callOutcomeNeeded: false,
+      callOutcomeStatus: "call_no_answer",
+      callOutcomeRecordedAt: new Date().toISOString(),
       awaitingSpecificCallTime: true,
       awaitingBackupTime: false,
       currentSequenceName: "call_now_no_answer"
     });
     await this.store.cancelJobsForContact(contact.id, "call-now no-answer recovery", (job) =>
-      BOT_SEQUENCE_JOB_TYPES.includes(job.type) || job.type === "human_escalation_sla" || job.type === "human_reply_timeout"
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type) ||
+      ["human_escalation_sla", "human_reply_timeout", "call_outcome_required"].includes(job.type)
     );
     contact = await this.hydrateContactTags(contact);
     if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
+    if (hasContractPendingTag(contact) && !isAppointmentSupportContext(contact)) return this.stopForContractPendingTag(contact);
     if (hasNqTag(contact)) return this.stopForNqTag(contact);
     if (hasManualHumanHoldTag(contact)) return this.stopForManualHoldTag(contact);
     const sent = await this.sendBotMessage(contact, render(qualificationTemplates.callNowNoAnswer, contact), {
@@ -2133,6 +2487,10 @@ class SmsBot {
     const latest = sent || (await this.store.getContact(contact.id)) || contact;
     await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
     await this.recordDecision(latest, "sent", "call_now_no_answer_recovery", { trigger });
+    await this.writeGhlNote(latest, "SMS bot recovery: human call no answer", {
+      Trigger: trigger,
+      "Last inbound": latest.lastInboundMessage || "none"
+    });
     return latest;
   }
 
@@ -2160,6 +2518,7 @@ class SmsBot {
     });
     contact = await this.hydrateContactTags(contact);
     if (hasSignedTag(contact)) return { contact: await this.stopForSignedTag(contact), status: "skipped", reason: "signed tag" };
+    if (hasContractPendingTag(contact)) return { contact: await this.stopForContractPendingTag(contact), status: "skipped", reason: "contract pending tag" };
     if (hasNqTag(contact)) return { contact: await this.stopForNqTag(contact), status: "skipped", reason: "NQ tag" };
     if (hasManualHumanHoldTag(contact)) return { contact: await this.stopForManualHoldTag(contact), status: "skipped", reason: "manual hold tag" };
     if (hasAnyTag(contact, ["DNC", "do_not_contact", "opt_out", "opted_out"])) {
@@ -2379,6 +2738,9 @@ class SmsBot {
     if (hasSignedTag(contact)) {
       return this.stopForSignedTag(contact);
     }
+    if (hasContractPendingTag(contact) && !isAppointmentSupportContext(contact)) {
+      return this.stopForContractPendingTag(contact);
+    }
     if (hasManualHumanHoldTag(contact)) {
       return this.stopForManualHoldTag(contact);
     }
@@ -2542,6 +2904,10 @@ class SmsBot {
       return this.handleCallTime(contact, inbound.lastInboundMessage);
     }
 
+    if (isReschedulePending(contact)) {
+      return this.handleReschedule(contact, inbound.lastInboundMessage);
+    }
+
     dateAnswer = dateAnswer || parseAccidentDate(inbound.lastInboundMessage);
     if (dateAnswer && !contact.accidentDate) {
       contact = await this.store.upsertContact({ ...contact, accidentDate: dateAnswer.value });
@@ -2650,7 +3016,33 @@ class SmsBot {
 
     if (["call_started", "call_answered", "manual_call", "manual_call_started", "human_call"].includes(action)) {
       await this.recordDecision(contact, "paused", "human_call", { trigger: "bot_control", message: payload.message || "" });
-      return this.handleHumanOutbound({ ...payload, action, message: payload.message || "Manual human call started", timeoutMinutes: HUMAN_CALL_TIMEOUT_MINUTES });
+      return this.handleHumanCallActivity({ ...payload, action, message: payload.message || "Manual human call started" });
+    }
+
+    if (["call_drop", "call_dropped", "dropped_call"].includes(action)) {
+      return this.handleCallDrop(contact, { ...payload, meta: controlMeta });
+    }
+
+    if (["call_no_answer", "no_answer", "call_missed"].includes(action)) {
+      await this.recordDecision(contact, "repaired", "call_no_answer_recorded", {
+        trigger: "bot_control",
+        message: payload.message || "",
+        meta: controlMeta
+      });
+      return this.sendCallNowNoAnswerRecovery(contact, payload, "call_no_answer_tag");
+    }
+
+    if (["call_connected_follow_up"].includes(action)) {
+      return this.handleCallConnectedFollowUp(contact, { ...payload, meta: controlMeta });
+    }
+
+    if (["human_hold", "follow_up", "qr", "manual_hold"].includes(action)) {
+      await this.recordDecision(contact, "paused", "manual_hold_tag", {
+        trigger: "bot_control",
+        message: payload.message || "",
+        meta: controlMeta
+      });
+      return this.stopForManualHoldTag({ ...contact, tags: [...normalizeTags(contact.tags), action] });
     }
 
     if (["human_acknowledged", "acknowledged", "human_working", "working"].includes(action)) {
@@ -2676,14 +3068,22 @@ class SmsBot {
 
     if (["return_to_bot", "resume_bot", "bot_resume"].includes(action)) {
       await this.cancelHumanEscalationWatchdog(contact.id, "returned to bot");
+      await this.store.cancelJobsForContact(contact.id, "returned to bot", (job) =>
+        ["call_outcome_required", "human_reply_timeout"].includes(job.type)
+      );
       const updated = await this.store.upsertContact({
         ...contact,
         humanEscalationStatus: false,
         humanEscalationStage: "returned_to_bot",
         automationPaused: false,
         automationPauseReason: "",
+        callOutcomeNeeded: false,
         engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
         qualificationProgress: contact.qualificationProgress || QUALIFICATION.NEEDS_FAULT
+      });
+      await this.writeGhlNote(updated, "SMS bot returned to automation", {
+        "Previous pause": contact.automationPauseReason || contact.humanEscalationStage || "unknown",
+        "Next needed": updated.qualificationProgress || "unknown"
       });
       await this.recordDecision(updated, "repaired", "returned_to_bot", {
         trigger: "admin_action",
@@ -2927,12 +3327,16 @@ class SmsBot {
       return this.repairPrimaryCallTimeFromLastInbound(contact);
     }
 
-    if (["nq", "not_qualified"].includes(action)) {
+    if (["nq"].includes(action)) {
       return this.stopForNqTag({ ...contact, tags: [...normalizeTags(contact.tags), "NQ"] });
     }
 
-    if (["signed", "#signed"].includes(action)) {
+    if (["signed", "#signed", "contract_signed"].includes(action)) {
       return this.stopForSignedTag({ ...contact, tags: [...normalizeTags(contact.tags), "signed"] });
+    }
+
+    if (["contract", "contract_sent", "contract_set", "contract_pending"].includes(action)) {
+      return this.stopForContractPendingTag({ ...contact, tags: [...normalizeTags(contact.tags), action] });
     }
 
     if (["do_not_contact", "dnc", "opt_out"].includes(action)) {
@@ -2987,6 +3391,185 @@ class SmsBot {
       contactId: updated.id,
       runAt: addMinutes(new Date(), timeoutMinutes).toISOString(),
       payload: { lastHumanOutboundAt: now, timeoutMinutes, sourceAction: payload.action || "" }
+    });
+    return updated;
+  }
+
+  async handleHumanCallActivity(payload) {
+    const normalized = normalizePayload(payload, this.config);
+    const contact = await this.store.getContact(normalized.id);
+    if (!contact) return null;
+
+    const now = new Date();
+    const durationSeconds = callDurationSeconds(payload);
+    const callStatus = callStatusFromPayload(payload);
+    const callDirection = callDirectionFromPayload(payload) || "outbound";
+    const shortOrUnknown = durationSeconds === null || durationSeconds < CALL_DURATION_SUCCESS_SECONDS;
+    await this.cancelHumanEscalationWatchdog(contact.id, "human call started");
+    await this.store.cancelJobsForContact(contact.id, "human call started", (job) =>
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type) || job.type === "human_escalation_sla" || job.type === "human_reply_timeout"
+    );
+    const updated = await this.store.upsertContact({
+      ...contact,
+      humanEscalationStatus: true,
+      humanEscalationStage: "human_call_active",
+      humanAcknowledgedAt: contact.humanAcknowledgedAt || now.toISOString(),
+      lastHumanOutboundMessage: normalized.lastInboundMessage || payload.message || "Manual human call started",
+      lastHumanOutboundAt: now.toISOString(),
+      lastHumanCallAt: now.toISOString(),
+      lastHumanCallDurationSeconds: durationSeconds,
+      lastHumanCallStatus: callStatus,
+      lastHumanCallDirection: callDirection,
+      callOutcomeNeeded: true,
+      callOutcomeNeededAt: now.toISOString(),
+      callOutcomeRequiredAt: addMinutes(now, CALL_OUTCOME_WATCHDOG_MINUTES).toISOString(),
+      callOutcomeStatus: "",
+      automationPaused: true,
+      automationPauseReason: shortOrUnknown ? "human_call_needs_outcome" : "human_call_active",
+      humanCallPauseUntil: addMinutes(now, HUMAN_CALL_TIMEOUT_MINUTES).toISOString(),
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN
+    });
+    await this.store.addJob({
+      type: "call_outcome_required",
+      contactId: updated.id,
+      runAt: updated.callOutcomeRequiredAt,
+      payload: {
+        lastHumanCallAt: updated.lastHumanCallAt,
+        durationSeconds,
+        callStatus,
+        callDirection,
+        shortOrUnknown
+      }
+    });
+    await this.recordDecision(updated, "paused", shortOrUnknown ? "human_call_needs_outcome" : "human_call_started", {
+      trigger: "human_active_webhook",
+      beforeStatus: contact.engagementStatus || "",
+      afterStatus: updated.engagementStatus || "",
+      meta: { durationSeconds, callStatus, callDirection, shortOrUnknown }
+    });
+    await this.writeGhlNote(updated, "SMS bot paused: human call activity", {
+      "Call status": callStatus || "unknown",
+      "Call duration seconds": durationSeconds === null ? "unknown" : durationSeconds,
+      Direction: callDirection || "unknown",
+      "Outcome needed": "yes"
+    });
+    return updated;
+  }
+
+  async handleCallOutcomeRequired(job, contact) {
+    let fresh = contact || (await this.store.getContact(job.contactId));
+    if (!fresh) return null;
+    fresh = await this.hydrateContactTags(fresh, { force: true });
+    if (hasResolvedCallOutcome(fresh)) {
+      const resolved = await this.store.upsertContact({
+        ...fresh,
+        callOutcomeNeeded: false,
+        callOutcomeResolvedAt: new Date().toISOString()
+      });
+      await this.recordDecision(resolved, "skipped", "call_outcome_already_resolved", {
+        jobId: job.id,
+        jobType: job.type,
+        meta: { callOutcomeStatus: resolved.callOutcomeStatus || "", automationPauseReason: resolved.automationPauseReason || "" }
+      });
+      return resolved;
+    }
+    const updated = await this.store.upsertContact({
+      ...fresh,
+      callOutcomeNeeded: true,
+      callOutcomeRequiredAt: fresh.callOutcomeRequiredAt || new Date().toISOString(),
+      lastCallOutcomeAlertAt: new Date().toISOString(),
+      automationPaused: true,
+      automationPauseReason: "call_outcome_required",
+      humanEscalationStatus: true,
+      humanEscalationStage: "call_outcome_required",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN
+    });
+    await this.recordDecision(updated, "escalated", "call_outcome_required", {
+      jobId: job.id,
+      jobType: job.type,
+      meta: {
+        durationSeconds: job.payload?.durationSeconds ?? updated.lastHumanCallDurationSeconds ?? "",
+        callStatus: job.payload?.callStatus || updated.lastHumanCallStatus || "",
+        callDirection: job.payload?.callDirection || updated.lastHumanCallDirection || ""
+      }
+    });
+    await this.notifyBotError("No call disposition recorded", {
+      Name: updated.name || "unknown",
+      Phone: updated.phone || "unknown",
+      "GHL contact": updated.ghlContactId || updated.id,
+      "Last human call": updated.lastHumanCallAt || "unknown",
+      "Call duration seconds": updated.lastHumanCallDurationSeconds ?? "unknown",
+      Needed: "Add call_drop, call_no_answer, call_connected_follow_up, return_to_bot, NQ, signed, contract_sent, follow_up, QR, or book/update appointment."
+    });
+    await this.writeGhlNote(updated, "SMS bot alert: no call disposition recorded", {
+      "Last human call": updated.lastHumanCallAt || "unknown",
+      "Call duration seconds": updated.lastHumanCallDurationSeconds ?? "unknown",
+      Action: "Team needs to add a call outcome tag or appointment/signature/NQ signal."
+    });
+    return updated;
+  }
+
+  async handleCallDrop(contact, payload = {}) {
+    let updated = await this.store.upsertContact({
+      ...contact,
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      humanEscalationStatus: false,
+      humanEscalationStage: "call_dropped_recovery",
+      automationPaused: false,
+      automationPauseReason: "",
+      callOutcomeNeeded: false,
+      callOutcomeStatus: "call_drop",
+      callOutcomeRecordedAt: new Date().toISOString(),
+      awaitingSpecificCallTime: true,
+      awaitingBackupTime: false,
+      currentSequenceName: "call_dropped_recovery"
+    });
+    await this.store.cancelJobsForContact(updated.id, "call drop recovery", (job) =>
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type) || ["human_escalation_sla", "human_reply_timeout", "call_outcome_required"].includes(job.type)
+    );
+    const sent = await this.sendBotMessage(updated, render(qualificationTemplates.callDropRecovery, updated), {
+      bypassQuietHours: true,
+      templateGroup: "qualificationTemplates",
+      templateKey: "callDropRecovery"
+    });
+    updated = sent || (await this.store.getContact(updated.id)) || updated;
+    await this.scheduleWarmFollowUps(updated, !isWithinTextingWindow(updated, this.config));
+    await this.recordDecision(updated, "sent", "call_drop_recovery", {
+      trigger: "bot_control",
+      message: payload.message || "",
+      meta: payload.meta || {}
+    });
+    await this.writeGhlNote(updated, "Call outcome recorded: call dropped", {
+      "Bot action": "Sent reconnect text and scheduled hot follow-up",
+      "Last inbound": updated.lastInboundMessage || "none"
+    });
+    return updated;
+  }
+
+  async handleCallConnectedFollowUp(contact, payload = {}) {
+    const updated = await this.store.upsertContact({
+      ...contact,
+      automationPaused: true,
+      automationPauseReason: "call_connected_follow_up",
+      humanEscalationStatus: true,
+      humanEscalationStage: "call_connected_follow_up",
+      callOutcomeNeeded: false,
+      callOutcomeStatus: "call_connected_follow_up",
+      callOutcomeRecordedAt: new Date().toISOString(),
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      currentSequenceName: ""
+    });
+    await this.store.cancelJobsForContact(updated.id, "call connected follow-up", (job) =>
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type) || ["human_escalation_sla", "human_reply_timeout", "call_outcome_required"].includes(job.type)
+    );
+    await this.recordDecision(updated, "paused", "call_connected_follow_up", {
+      trigger: "bot_control",
+      message: payload.message || "",
+      meta: payload.meta || {}
+    });
+    await this.writeGhlNote(updated, "Call outcome recorded: human connected and owns follow-up", {
+      "Bot action": "Paused until return_to_bot, appointment, signed/contract, NQ, follow_up, QR, or human_hold changes state."
     });
     return updated;
   }
@@ -3237,6 +3820,28 @@ class SmsBot {
       }
       return this.store.getContact(contact.id) || contact;
     }
+    if (contact.availabilitySuggestedPrimaryIso && isAffirmativeConfirmation(text)) {
+      const withClearedClue = await this.store.upsertContact({
+        ...contact,
+        ...clearAvailabilityCluePatch()
+      });
+      return this.handleCallTime(withClearedClue, contact.availabilitySuggestedPrimaryText || contact.availabilityClue || "later today");
+    }
+    if (isUnavailableForImmediateCall(text) && !hasClockTimeSignal(text) && !/\btomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday\b/i.test(text)) {
+      const updated = await this.store.upsertContact({
+        ...contact,
+        awaitingSpecificCallTime: true,
+        ...callTimeClarificationPatch(contact, { type: "needs_specific_time" }, text, "booking")
+      });
+      const sent = await this.sendBotMessage(
+        updated,
+        "No worries, I understand you are not free right now 🙏 What time later today or tomorrow works best for a quick Specialist call?",
+        { bypassQuietHours: true }
+      );
+      const latest = sent || (await this.store.getContact(updated.id)) || updated;
+      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+      return latest;
+    }
     const resolvedTimezone = resolveContactTimezone(contact, this.config);
     if (resolvedTimezone && resolvedTimezone !== contact.timezone) {
       contact = await this.store.upsertContact({ ...contact, timezone: resolvedTimezone });
@@ -3302,6 +3907,42 @@ class SmsBot {
       await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
       return latest;
     }
+    if (parsed.type === "scheduled" && isAvailabilityClueWithoutCommitment(text)) {
+      const clueStart = new Date(parsed.startsAt);
+      const firstOption = addMinutes(clueStart, 30);
+      const secondOption = addMinutes(clueStart, 60);
+      const firstText = formatTimeOnly(firstOption, contact, this.config);
+      const secondText = formatTimeOnly(secondOption, contact, this.config);
+      const updated = await this.store.upsertContact({
+        ...contact,
+        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+        awaitingSpecificCallTime: true,
+        availabilityClue: text,
+        availabilityClueIso: parsed.startsAt,
+        availabilitySuggestedPrimaryIso: firstOption.toISOString(),
+        availabilitySuggestedPrimaryText: firstText,
+        availabilitySuggestedSecondaryIso: secondOption.toISOString(),
+        availabilitySuggestedSecondaryText: secondText,
+        availabilityClueAskedAt: new Date().toISOString()
+      });
+      const sent = await this.sendBotMessage(
+        updated,
+        `Got it 🙌 Does ${firstText} or ${secondText} work for the Specialist call?`,
+        { bypassQuietHours: true }
+      );
+      const latest = sent || (await this.store.getContact(updated.id)) || updated;
+      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+      await this.recordDecision(latest, "queued", "early_availability_exact_slot_requested", {
+        trigger: "inbound_sms",
+        message: text,
+        meta: {
+          clueIso: parsed.startsAt,
+          primaryOption: firstOption.toISOString(),
+          secondaryOption: secondOption.toISOString()
+        }
+      });
+      return latest;
+    }
     if (parsed.type === "now") {
       const updated = await this.store.upsertContact({
       ...contact,
@@ -3344,6 +3985,11 @@ class SmsBot {
           urgentCallNowAlertMessage: text
         });
       }
+      await this.writeGhlNote(updated, "Call-now alert sent", {
+        "Lead message": text,
+        "Slack channel": "#leads",
+        "Bot action": "Paused automation and requested immediate human call"
+      });
       const sentResult = results[1];
       return sentResult.status === "fulfilled" && sentResult.value ? sentResult.value : updated;
     }
@@ -3353,11 +3999,15 @@ class SmsBot {
     const inlineBackup = extractInlineBackupTime(text, { ...contact, preferredCallTimeIso: startsAt }, this.config, startsAt);
     if (isNoShowRecoveryContact(contact)) {
       let appointment = null;
+      const appointmentType = contact.appointmentType || "initial";
+      const appointmentTitle = appointmentTitleForType(appointmentType, contact);
       const appointmentPayload = {
         ...contact,
         preferredCallTime: display,
         preferredCallTimeIso: startsAt,
         ...(inlineBackup || {}),
+        appointmentType,
+        appointmentTitle,
         appointmentSource: "no_show_recovery",
         previousAppointmentMissed: true
       };
@@ -3392,6 +4042,8 @@ class SmsBot {
         currentSequenceDay: "",
         currentSequenceSlot: "",
         appointmentId: appointment.id || appointment.appointment?.id || contact.appointmentId || "",
+        appointmentType,
+        appointmentTitle,
         appointmentSource: "no_show_recovery",
         previousAppointmentMissed: true,
         rebookedAfterNoShowAt: new Date().toISOString(),
@@ -3425,7 +4077,7 @@ class SmsBot {
         })) || updated;
       updated = sent || (await this.store.getContact(updated.id)) || updated;
       await this.notifyAppointmentBooked(updated, {
-        Title: "Call rebooked after no-show",
+        Title: appointmentNoticeTitle(updated.appointmentType || "initial", "rebooked"),
         "Primary call time": updated.preferredCallTime,
         "Backup time": updated.backupCallTime || "none",
         Timezone: updated.timezone,
@@ -3438,9 +4090,16 @@ class SmsBot {
         message: text,
         meta: { startsAt, appointmentId: updated.appointmentId || "" }
       });
+      await this.writeGhlNote(updated, "Call rebooked after no-show", {
+        "New time": updated.preferredCallTime || display,
+        "Backup time": updated.backupCallTime || "none",
+        "Appointment ID": updated.appointmentId || "unknown"
+      });
       return this.store.getContact(updated.id) || updated;
     }
     let appointment = null;
+    const appointmentType = contact.appointmentType || "initial";
+    const appointmentTitle = appointmentTitleForType(appointmentType, contact);
     try {
       appointment = await ghl.createAppointment(
         this.config,
@@ -3448,6 +4107,8 @@ class SmsBot {
           ...contact,
           preferredCallTime: display,
           preferredCallTimeIso: startsAt,
+          appointmentType,
+          appointmentTitle,
           ...(inlineBackup || {})
         },
         startsAt,
@@ -3456,6 +4117,8 @@ class SmsBot {
           ...contact,
           preferredCallTime: display,
           preferredCallTimeIso: startsAt,
+          appointmentType,
+          appointmentTitle,
           ...(inlineBackup || {})
         })
       );
@@ -3485,6 +4148,8 @@ class SmsBot {
       preferredCallTime: display,
       preferredCallTimeIso: startsAt,
       appointmentId: appointment.id || appointment.appointment?.id || "",
+      appointmentType,
+      appointmentTitle,
       ...(inlineBackup || {}),
       awaitingBackupTime: !inlineBackup,
       awaitingSpecificCallTime: false,
@@ -3518,6 +4183,11 @@ class SmsBot {
         }
       }
       await this.scheduleAppointmentReminders(latest);
+      await this.writeGhlNote(latest, "Appointment booked by SMS bot", {
+        "Primary time": latest.preferredCallTime || display,
+        "Backup time": latest.backupCallTime || "none",
+        "Appointment ID": latest.appointmentId || "unknown"
+      });
       return this.store.getContact(latest.id) || latest;
     }
     const afterBackupAsk =
@@ -3531,6 +4201,11 @@ class SmsBot {
       runAt: addMinutes(new Date(), 15).toISOString(),
       payload: {}
     });
+    await this.writeGhlNote(afterBackupAsk, "Appointment booked by SMS bot", {
+      "Primary time": afterBackupAsk.preferredCallTime || display,
+      "Backup time": "pending",
+      "Appointment ID": afterBackupAsk.appointmentId || "unknown"
+    });
     return afterBackupAsk;
   }
 
@@ -3538,12 +4213,45 @@ class SmsBot {
     let parsed = parseCallTime(text, contact, this.config);
     parsed = anchorScheduledTimeToClarifiedDay(parsed, text, contact, this.config);
     if (!parsed || parsed.type === "now") {
-      const sent = await this.sendBotMessage(contact, qualificationTemplates.rescheduleAsk, { bypassQuietHours: true });
-      return sent || (await this.store.getContact(contact.id)) || contact;
+      await this.store.cancelJobsForContact(contact.id, "reschedule requested", (job) =>
+        ["appointment_reminder", "backup_time_timeout", "backup_no_show_reminder"].includes(job.type)
+      );
+      const updated = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+        awaitingSpecificCallTime: true,
+        awaitingBackupTime: false,
+        currentSequenceName: "reschedule_requested",
+        appointmentSuppressedAt: new Date().toISOString(),
+        appointmentSuppressionReason: "contact_requested_reschedule",
+        ...callTimeClarificationPatch(contact, { type: "needs_specific_time" }, text, "reschedule")
+      });
+      await this.writeGhlNote(updated, "Appointment reminders suppressed: reschedule requested", {
+        "Current appointment": updated.preferredCallTime || "unknown",
+        "Lead message": text
+      });
+      const sent = await this.sendBotMessage(updated, qualificationTemplates.rescheduleAsk, { bypassQuietHours: true });
+      const latest = sent || (await this.store.getContact(updated.id)) || updated;
+      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+      return latest;
     }
     if (parsed.type === "needs_specific_time") {
       const contextPatch = callTimeClarificationPatch(contact, parsed, text, "reschedule");
-      const updated = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true, ...contextPatch });
+      await this.store.cancelJobsForContact(contact.id, "reschedule requested", (job) =>
+        ["appointment_reminder", "backup_time_timeout", "backup_no_show_reminder"].includes(job.type)
+      );
+      const updated = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+        awaitingSpecificCallTime: true,
+        awaitingBackupTime: false,
+        currentSequenceName: "reschedule_requested",
+        appointmentSuppressedAt: new Date().toISOString(),
+        appointmentSuppressionReason: "contact_requested_reschedule",
+        ...contextPatch
+      });
       const inheritedDay = contextPatch.callTimeClarificationDay || contact.callTimeClarificationDay;
       const inheritedDayLabel = contextPatch.callTimeClarificationDayLabel || contact.callTimeClarificationDayLabel;
       const part = daypartFromText(text);
@@ -3555,8 +4263,14 @@ class SmsBot {
       } else if (inheritedDay === "weekday" && inheritedDayLabel) {
         question = `No problem 👍 What exact time ${titleCaseWord(inheritedDayLabel)} should I move your call to?`;
       }
+      await this.writeGhlNote(updated, "Appointment reminders suppressed: reschedule requested", {
+        "Current appointment": updated.preferredCallTime || "unknown",
+        "Lead message": text
+      });
       const sent = await this.sendBotMessage(updated, question, { bypassQuietHours: true });
-      return sent || (await this.store.getContact(contact.id)) || contact;
+      const latest = sent || (await this.store.getContact(contact.id)) || contact;
+      await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+      return latest;
     }
 
     const startsAt = parsed.startsAt;
@@ -3609,6 +4323,11 @@ class SmsBot {
       { bypassQuietHours: true }
     );
     const latest = sent || (await this.store.getContact(updated.id)) || updated;
+    await this.writeGhlNote(latest, "Appointment rescheduled by SMS bot", {
+      "New time": latest.preferredCallTime || display,
+      "Lead message": text,
+      "Appointment ID": latest.appointmentId || "unknown"
+    });
     await this.notifyAppointmentBooked(latest, {
       "Primary call time": latest.preferredCallTime,
       "Backup time": latest.backupCallTime || "none",
@@ -3732,6 +4451,11 @@ class SmsBot {
         }
       }
       await this.scheduleAppointmentReminders(updated);
+      await this.writeGhlNote(updated, "Backup call window saved", {
+        "Primary time": updated.preferredCallTime || "unknown",
+        "Backup window": backupWindow.value,
+        "Appointment ID": updated.appointmentId || "unknown"
+      });
       return updated;
     }
     let parsed = parseCallTime(text, contact, this.config);
@@ -3788,12 +4512,20 @@ class SmsBot {
       }
     }
     await this.scheduleAppointmentReminders(updated);
+    await this.writeGhlNote(updated, parsed?.type === "scheduled" ? "Backup call time saved" : "Appointment backup declined/timed out", {
+      "Primary time": updated.preferredCallTime || "unknown",
+      "Backup time": updated.backupCallTime || "none",
+      "Appointment ID": updated.appointmentId || "unknown"
+    });
     return updated;
   }
 
   async notifyAppointmentBooked(contact, extra = {}) {
     try {
-      await slack.sendAppointmentBooked(this.config, contact, extra);
+      await slack.sendAppointmentBooked(this.config, contact, {
+        Title: extra.Title || appointmentNoticeTitle(contact.appointmentType || "initial", "booked"),
+        ...extra
+      });
       return true;
     } catch (error) {
       await this.notifyBotError("Slack appointment booking alert failed", {
@@ -3858,6 +4590,7 @@ class SmsBot {
     const appointment = new Date(contact.preferredCallTimeIso);
     const now = new Date();
     const timeZone = contact.timezone || this.config.texting.defaultTimezone;
+    const templateGroup = reminderTemplateGroupForAppointment(contact);
     const sameDay = sameLocalDay(now, appointment, timeZone);
     const oneHour = addMinutes(appointment, -60);
     const fiveMinutes = addMinutes(appointment, -5);
@@ -3880,7 +4613,7 @@ class SmsBot {
           type: "appointment_reminder",
           contactId: contact.id,
           runAt: morningReminder.toISOString(),
-          payload: { templateKey: "nextDayMorning", appointmentIso: contact.preferredCallTimeIso }
+          payload: { templateGroup, templateKey: "nextDayMorning", appointmentIso: contact.preferredCallTimeIso }
         });
       }
     }
@@ -3889,7 +4622,7 @@ class SmsBot {
         type: "appointment_reminder",
         contactId: contact.id,
         runAt: oneHour.toISOString(),
-        payload: { templateKey: sameDay ? "sameDayOneHour" : "nextDayOneHour", appointmentIso: contact.preferredCallTimeIso }
+        payload: { templateGroup, templateKey: sameDay ? "sameDayOneHour" : "nextDayOneHour", appointmentIso: contact.preferredCallTimeIso }
       });
     }
     if (fiveMinutes > now) {
@@ -3897,12 +4630,17 @@ class SmsBot {
         type: "appointment_reminder",
         contactId: contact.id,
         runAt: fiveMinutes.toISOString(),
-        payload: { templateKey: sameDay ? "sameDayFiveMinutes" : "nextDayFiveMinutes", appointmentIso: contact.preferredCallTimeIso }
+        payload: { templateGroup, templateKey: sameDay ? "sameDayFiveMinutes" : "nextDayFiveMinutes", appointmentIso: contact.preferredCallTimeIso }
       });
     }
     await this.recordDecision(contact, "reminded", "appointment_reminders_scheduled", {
       trigger: "schedule_appointment_reminders",
-      meta: { preferredCallTime: contact.preferredCallTime || "", preferredCallTimeIso: contact.preferredCallTimeIso || "" }
+      meta: {
+        appointmentType: contact.appointmentType || "initial",
+        templateGroup,
+        preferredCallTime: contact.preferredCallTime || "",
+        preferredCallTimeIso: contact.preferredCallTimeIso || ""
+      }
     });
   }
 
@@ -3948,6 +4686,8 @@ class SmsBot {
   async scheduleNoShowFollowUps(contact, options = {}) {
     await this.store.cancelJobsForContact(contact.id, "no-show follow-ups replaced", (job) => job.type === "missed_call_followup");
     const now = new Date();
+    const templateGroup = noShowTemplateGroupForAppointment(contact);
+    const templates = noShowTemplatesForGroup(templateGroup);
     for (const [index, minutes] of NO_SHOW_SAME_DAY_MINUTES.entries()) {
       if (options.skipEarlySameDay && index < 2) continue;
       const runAt = addMinutes(now, minutes);
@@ -3957,20 +4697,20 @@ class SmsBot {
         type: "missed_call_followup",
         contactId: contact.id,
         runAt: runAt.toISOString(),
-        payload: { templateGroup: "noShowTemplates", templateKey: NO_SHOW_SAME_DAY_TEMPLATE_KEYS[index], sequence: "appointment_no_show" }
+        payload: { templateGroup, templateKey: NO_SHOW_SAME_DAY_TEMPLATE_KEYS[index], sequence: "appointment_no_show" }
       });
     }
     for (const day of NO_SHOW_DAYS) {
       for (const slot of ["am", "pm"]) {
         const templateKey = `day_${day}_${slot}`;
-        if (!noShowTemplates[templateKey]) continue;
+        if (!templates[templateKey]) continue;
         const runAt = localSlotDate(contact, this.config, day - 1, slot);
         if (runAt <= now) continue;
         await this.store.addJob({
           type: "missed_call_followup",
           contactId: contact.id,
           runAt: runAt.toISOString(),
-          payload: { templateGroup: "noShowTemplates", templateKey, sequence: "appointment_no_show" }
+          payload: { templateGroup, templateKey, sequence: "appointment_no_show" }
         });
       }
     }
@@ -4058,6 +4798,8 @@ class SmsBot {
       payload.scheduledTime ||
       base.preferredCallTime ||
       (preferredCallTimeIso ? formatForContact(new Date(preferredCallTimeIso), base, this.config) : "");
+    const appointmentType = appointmentTypeFromPayload(payload, contact);
+    const appointmentTitle = appointmentTitleFromPayload(payload) || appointmentTitleForType(appointmentType, contact);
     const noShowCount = Number(contact.noShowCount || 0) + 1;
     contact = await this.store.upsertContact({
       ...contact,
@@ -4070,6 +4812,13 @@ class SmsBot {
       preferredCallTime,
       preferredCallTimeIso,
       appointmentId,
+      appointmentType,
+      appointmentTitle,
+      automationPaused: false,
+      automationPauseReason: "",
+      humanEscalationStatus: false,
+      humanEscalationStage: "appointment_no_show",
+      escalationReason: "",
       currentSequenceName: "appointment_no_show",
       currentSequenceDay: 1,
       currentSequenceSlot: noShowCount >= 2 ? "repeat_no_show" : "no_show"
@@ -4083,6 +4832,11 @@ class SmsBot {
     await this.recordDecision(contact, "missed", noShowCount >= 2 ? "repeat_no_show_started" : "appointment_no_show_started", {
       trigger: "appointment_no_show",
       meta: { appointmentId: contact.appointmentId || "", noShowCount }
+    });
+    await this.writeGhlNote(contact, noShowCount >= 2 ? "Appointment no-show recorded: repeat" : "Appointment no-show recorded", {
+      "Missed appointment": contact.preferredCallTime || "unknown",
+      "Appointment ID": contact.appointmentId || "unknown",
+      "No-show count": noShowCount
     });
     if (noShowCount >= 3) {
       await this.store.cancelJobsForContact(contact.id, "third no-show escalated");
@@ -4116,7 +4870,7 @@ class SmsBot {
     if (hasBackupReminderPlan) {
       const backupAlertKey = `${contact.appointmentId || contact.id}|${contact.backupCallTimeIso || contact.backupCallTime || ""}`;
       if (contact.noShowBackupAlertKey !== backupAlertKey) {
-        const alertSent = await this.notifyAppointmentNotice(contact, "No-show: backup time active", {
+        const alertSent = await this.notifyAppointmentNotice(contact, appointmentNoticeTitle(contact.appointmentType || "initial", "missed"), {
           Primary: contact.preferredCallTime || "unknown",
           Backup: contact.backupCallTime || "unknown",
           Appointment: contact.appointmentId || "unknown",
@@ -4129,6 +4883,19 @@ class SmsBot {
             noShowBackupAlertSentAt: new Date().toISOString()
           });
         }
+      }
+    } else if (contact.appointmentType === "contract_review" && !contact.contractReviewMissedAlertSentAt) {
+      const alertSent = await this.notifyAppointmentNotice(contact, "Contract review missed", {
+        Primary: contact.preferredCallTime || "unknown",
+        Backup: contact.backupCallTime || "none",
+        Appointment: contact.appointmentId || "unknown",
+        Action: "Contract review call was missed. No-show recovery is active and the lead should be rebooked to finish signing."
+      });
+      if (alertSent) {
+        contact = await this.store.upsertContact({
+          ...contact,
+          contractReviewMissedAlertSentAt: new Date().toISOString()
+        });
       }
     }
     await this.recordNoShowWebhook(payload, {
@@ -4198,10 +4965,13 @@ class SmsBot {
     if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
     if (hasNqTag(contact)) return this.stopForNqTag(contact);
 
+    const appointmentType = appointmentTypeFromPayload(payload, contact);
+    const appointmentTitle = appointmentTitleFromPayload(payload) || appointmentTitleForType(appointmentType, contact);
     const display = formatForContact(new Date(startsAt), contact, this.config);
     const oldAppointmentId = contact.appointmentId || "";
     const oldStartsAt = contact.preferredCallTimeIso || "";
     const shouldAskBackupForManualSync =
+      appointmentType === "initial" &&
       !oldAppointmentId &&
       !contact.awaitingBackupTime &&
       !contact.bookingAlertSentAt &&
@@ -4213,6 +4983,8 @@ class SmsBot {
       preferredCallTime: display,
       preferredCallTimeIso: startsAt,
       appointmentId: appointmentId || contact.appointmentId || "",
+      appointmentType,
+      appointmentTitle,
       awaitingBackupTime: Boolean(contact.awaitingBackupTime),
       humanEscalationStatus: false,
       humanEscalationStage: "appointment_synced",
@@ -4251,12 +5023,19 @@ class SmsBot {
       afterProgress: QUALIFICATION.COMPLETE,
       meta: {
         appointmentId: updated.appointmentId || "",
+        appointmentType,
         startsAt,
         oldAppointmentId,
         oldStartsAt,
         rawStartsAt: textValue(rawStartsAt),
         appointmentTimeSource
       }
+    });
+    await this.writeGhlNote(updated, oldAppointmentId ? "Appointment updated from GHL sync" : "Manual GHL appointment synced", {
+      "Primary time": updated.preferredCallTime || display,
+      "Appointment ID": updated.appointmentId || "unknown",
+      "Appointment type": updated.appointmentType || "initial",
+      "Time source": appointmentTimeSource
     });
 
     if (shouldAskBackupForManualSync) {
@@ -4283,11 +5062,13 @@ class SmsBot {
       this.bookingAlertLocks.add(bookingAlertKey);
       try {
         const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
+          Title: appointmentNoticeTitle(updated.appointmentType || "initial", "booked"),
           "Primary call time": updated.preferredCallTime,
           "Backup time": updated.backupCallTime || "none",
           Timezone: updated.timezone,
           "GHL appointment": updated.appointmentId || "manual appointment",
-          Source: "GHL manual appointment sync"
+          Source: "GHL manual appointment sync",
+          "Appointment type": updated.appointmentType || "initial"
         });
         if (bookingAlertSent) {
           return this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() });
@@ -4587,9 +5368,22 @@ class SmsBot {
         return;
       }
     }
+    const appointmentSupportJob = isAppointmentSupportJobType(job.type);
+    const manualHoldAppointmentSupport =
+      appointmentSupportJob && isAppointmentSupportContext(contact) && Boolean(contact?.appointmentSyncedAt);
     if (contact && hasSignedTag(contact)) await this.stopForSignedTag(contact);
     if (contact && hasNqTag(contact)) await this.stopForNqTag(contact);
-    if (contact && hasManualHumanHoldTag(contact)) await this.stopForManualHoldTag(contact);
+    if (contact && hasContractPendingTag(contact) && !appointmentSupportJob) {
+      contact = await this.stopForContractPendingTag(contact);
+      await this.store.updateJob(job.id, {
+        status: "skipped",
+        finishedAt: new Date().toISOString(),
+        skipReason: "contract_pending_tag"
+      });
+      await this.recordDecision(contact, "skipped", "contract_pending_tag", { jobId: job.id, jobType: job.type });
+      return;
+    }
+    if (contact && hasManualHumanHoldTag(contact) && !manualHoldAppointmentSupport) await this.stopForManualHoldTag(contact);
     if (job.type === "process_inbound_buffer") {
       await this.handleInboundBuffer(job, contact);
       await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });
@@ -4600,18 +5394,28 @@ class SmsBot {
       await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });
       return;
     }
+    if (job.type === "call_outcome_required") {
+      await this.handleCallOutcomeRequired(job, contact);
+      await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });
+      return;
+    }
     if (
       !contact ||
       contact.optOutStatus ||
-      contact.automationPaused ||
+      (contact.automationPaused &&
+        !(
+          appointmentSupportJob &&
+          isAppointmentSupportContext(contact) &&
+          ["contract_pending_tag", "contract_pending_appointment_support"].includes(contact.automationPauseReason)
+        )) ||
       contact.engagementStatus === ENGAGEMENT.OPTED_OUT ||
       contact.automationPauseReason === "nq_tag" ||
       contact.automationPauseReason === "signed_tag" ||
-      contact.automationPauseReason === "manual_hold_tag" ||
+      (contact.automationPauseReason === "manual_hold_tag" && !manualHoldAppointmentSupport) ||
       (contact.humanEscalationStatus && HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type)) ||
       hasSignedTag(contact) ||
       hasNqTag(contact) ||
-      hasManualHumanHoldTag(contact)
+      (hasManualHumanHoldTag(contact) && !manualHoldAppointmentSupport)
     ) {
       const skipReason =
         contact?.humanEscalationStatus && HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type)
@@ -4877,10 +5681,17 @@ class SmsBot {
           }
         }
         await this.scheduleAppointmentReminders(updated);
+        await this.writeGhlNote(updated, "Appointment backup timed out", {
+          "Primary time": updated.preferredCallTime || "unknown",
+          "Backup time": "none supplied",
+          "Appointment ID": updated.appointmentId || "unknown"
+        });
       }
     }
     if (job.type === "appointment_reminder") {
-      const template = reminderTemplates[job.payload.templateKey];
+      const group = job.payload.templateGroup || reminderTemplateGroupForAppointment(contact);
+      const templates = reminderTemplatesForGroup(group);
+      const template = templates[job.payload.templateKey] || reminderTemplates[job.payload.templateKey];
       if (!template) {
         await this.store.updateJob(job.id, {
           status: "skipped",
@@ -4912,7 +5723,7 @@ class SmsBot {
         });
         return;
       }
-      const rendered = await this.renderManagedTemplate(contact, "reminderTemplates", job.payload.templateKey, template, {
+      const rendered = await this.renderManagedTemplate(contact, group, job.payload.templateKey, template, {
         time: contact.preferredCallTimeIso
           ? formatTimeOnlyWithZone(new Date(contact.preferredCallTimeIso), contact, this.config)
           : contact.preferredCallTime || "your scheduled time"
@@ -4920,13 +5731,27 @@ class SmsBot {
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
     if (job.type === "missed_call_followup") {
-      const group = job.payload.templateGroup === "noShowTemplates" ? "noShowTemplates" : "missedCallTemplates";
-      const templates = group === "noShowTemplates" ? noShowTemplates : missedCallTemplates;
+      const group = job.payload.templateGroup || "missedCallTemplates";
+      const templates = noShowTemplatesForGroup(group);
+      const template = templates[job.payload.templateKey];
+      if (!template) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "missing_missed_call_template"
+        });
+        await this.recordDecision(contact, "skipped", "missing_missed_call_template", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: { templateGroup: group, templateKey: job.payload.templateKey || "" }
+        });
+        return;
+      }
       const rendered = await this.renderManagedTemplate(
         contact,
         group,
         job.payload.templateKey,
-        templates[job.payload.templateKey],
+        template,
         { time: contact.preferredCallTime || "your scheduled time" }
       );
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
