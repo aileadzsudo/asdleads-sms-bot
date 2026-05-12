@@ -53,7 +53,7 @@ const WARM_FOLLOW_UP_MINUTES = [5, 15, 30, 60, 120, 240];
 const REENGAGEMENT_DAYS = [1, 2, 3, 4, 5, 6, 7];
 const REENGAGEMENT_SLOTS = ["am", "pm"];
 const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
-const HUMAN_REPLY_TIMEOUT_MINUTES = 5;
+const HUMAN_REPLY_TIMEOUT_MINUTES = 15;
 const HUMAN_CALL_TIMEOUT_MINUTES = 30;
 const CALL_OUTCOME_WATCHDOG_MINUTES = 10;
 const CALL_DURATION_SUCCESS_SECONDS = 60;
@@ -469,6 +469,21 @@ function isBriefAcknowledgement(text) {
   return /^(ok|okay|k|sure|yes|yeah|yep|thanks|thank you|thank u|sounds good)$/i.test(normalize(text));
 }
 
+function isSoftRefusal(text) {
+  const t = normalize(text);
+  if (!t) return false;
+  if (
+    /^(no thanks|no thank you|nah thanks|not interested|i'm good|im good|i am good|no i'm good|no im good|i'll pass|ill pass|pass)$/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  return /\b(no thanks|no thank you|not interested|i'm good|im good|i am good|i'll pass|ill pass|don't want help|dont want help|do not want help|don't need help|dont need help|not looking for help)\b/.test(
+    t
+  );
+}
+
 function canTreatDateAsColdOutreachAnswer(contact) {
   return (
     contact.qualificationProgress === QUALIFICATION.NEEDS_FAULT &&
@@ -636,6 +651,12 @@ function needsQualificationReply(contact) {
   return [QUALIFICATION.NEEDS_FAULT, QUALIFICATION.NEEDS_MEDICAL, QUALIFICATION.NEEDS_CALL_TIME].includes(
     contact?.qualificationProgress
   );
+}
+
+function latestMessage(messages = [], direction) {
+  return [...messages]
+    .filter((message) => message.direction === direction)
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
 }
 
 function hasPendingJob(jobs, types) {
@@ -1259,13 +1280,32 @@ function appointmentStatusFromPayload(payload = {}) {
     appointmentField(payload, [
       "appointmentStatus",
       "appointment_status",
+      "appointment.status",
+      "appointment.appointmentStatus",
+      "appointment.appointment_status",
+      "appointment.showStatus",
+      "appointment.show_status",
       "status",
       "eventStatus",
       "event_status",
+      "event.appointmentStatus",
+      "event.appointment_status",
       "calendarStatus",
       "calendar_status",
-      "appointment.status",
-      "event.status"
+      "calendarEvent.status",
+      "calendarEvent.appointmentStatus",
+      "calendarEvent.appointment_status",
+      "triggerData.appointmentStatus",
+      "triggerData.appointment_status",
+      "customData.appointmentStatus",
+      "customData.appointment_status",
+      "outcome",
+      "appointment.outcome",
+      "event.outcome",
+      "disposition",
+      "appointment.disposition",
+      "event.disposition",
+      "result"
     ])
   ).toLowerCase();
 }
@@ -1471,7 +1511,78 @@ function suppressAppointmentAlertFromPayload(payload = {}) {
 }
 
 function isNoShowAppointmentStatus(status = "") {
-  return /no[\s_-]?show|noshow|missed/.test(String(status || "").toLowerCase());
+  return /no[\s_-]?show|noshow|missed|did[\s_-]?not[\s_-]?show|didnt[\s_-]?show|not[\s_-]?showed|not[\s_-]?shown/.test(
+    String(status || "").toLowerCase()
+  );
+}
+
+function booleanLike(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return normalize(value);
+}
+
+function isTruthyFlag(value) {
+  return ["true", "1", "yes", "y", "on"].includes(booleanLike(value));
+}
+
+function isFalseyFlag(value) {
+  return ["false", "0", "no", "n", "off"].includes(booleanLike(value));
+}
+
+function isNoShowAppointmentPayload(payload = {}) {
+  const status = appointmentStatusFromPayload(payload);
+  if (isNoShowAppointmentStatus(status)) return true;
+  const noShowFlag = appointmentField(payload, [
+    "noShow",
+    "no_show",
+    "isNoShow",
+    "is_no_show",
+    "markedNoShow",
+    "marked_no_show",
+    "appointment.noShow",
+    "appointment.no_show",
+    "appointment.isNoShow",
+    "appointment.is_no_show",
+    "event.noShow",
+    "event.no_show",
+    "calendarEvent.noShow",
+    "calendarEvent.no_show",
+    "triggerData.noShow",
+    "triggerData.no_show",
+    "customData.noShow",
+    "customData.no_show"
+  ]);
+  if (isTruthyFlag(noShowFlag)) return true;
+  const showedFlag = appointmentField(payload, [
+    "showed",
+    "showedUp",
+    "showed_up",
+    "didShow",
+    "did_show",
+    "attended",
+    "appointment.showed",
+    "appointment.showedUp",
+    "appointment.showed_up",
+    "appointment.didShow",
+    "appointment.did_show",
+    "appointment.attended",
+    "event.showed",
+    "event.didShow",
+    "calendarEvent.showed",
+    "calendarEvent.didShow",
+    "triggerData.showed",
+    "triggerData.didShow",
+    "customData.showed",
+    "customData.didShow"
+  ]);
+  return showedFlag !== "" && isFalseyFlag(showedFlag);
+}
+
+function noShowStatusFromPayload(payload = {}) {
+  const status = appointmentStatusFromPayload(payload);
+  if (status) return status;
+  return isNoShowAppointmentPayload(payload) ? "no_show_flag" : "";
 }
 
 function isNoShowRecoveryContact(contact = {}) {
@@ -1764,7 +1875,7 @@ class SmsBot {
       payloadKeys: Object.keys(payload || {}).sort(),
       resolvedContactId: patch.resolvedContactId || appointmentContactId(payload) || "",
       appointmentId: patch.appointmentId || appointmentIdFromPayload(payload) || "",
-      status: patch.status || appointmentStatusFromPayload(payload) || "",
+      status: patch.status || noShowStatusFromPayload(payload) || "",
       result: patch.result || "received",
       error: patch.error || "",
       jobCount: patch.jobCount ?? null
@@ -2745,6 +2856,9 @@ class SmsBot {
       return this.stopForManualHoldTag(contact);
     }
     contact = await this.applyTimezoneCorrection(contact, inbound.lastInboundMessage);
+    if (isSoftRefusal(inbound.lastInboundMessage)) {
+      return this.escalate(contact, "soft_refusal");
+    }
     if (isCallNow(inbound.lastInboundMessage)) {
       return this.handleCallTime(contact, "call me now");
     }
@@ -3803,6 +3917,9 @@ class SmsBot {
 
   async handleCallTime(contact, text) {
     contact = await this.hydrateContactTags(contact, { force: true });
+    if (isSoftRefusal(text)) {
+      return this.escalate(contact, "soft_refusal");
+    }
     if (looksLikeAccidentTiming(text) && !hasCallIntentText(text)) {
       const dateAnswer = parseAccidentDate(text);
       if (dateAnswer && !contact.accidentDate) {
@@ -4743,7 +4860,7 @@ class SmsBot {
   async markNoShow(payload) {
     const webhookContactId = appointmentContactId(payload);
     const webhookAppointmentId = appointmentIdFromPayload(payload) || payload.appointmentId || payload.appointment_id || "";
-    const webhookStatus = appointmentStatusFromPayload(payload);
+    const webhookStatus = noShowStatusFromPayload(payload);
     await this.recordNoShowWebhook(payload, {
       resolvedContactId: webhookContactId,
       appointmentId: webhookAppointmentId,
@@ -4910,7 +5027,7 @@ class SmsBot {
 
   async syncAppointment(payload) {
     const status = appointmentStatusFromPayload(payload);
-    if (isNoShowAppointmentStatus(status)) return this.markNoShow(payload);
+    if (isNoShowAppointmentPayload(payload)) return this.markNoShow(payload);
 
     const contactId = appointmentContactId(payload);
     const rawStartsAt = appointmentStartRawFromPayload(payload);
@@ -5176,6 +5293,16 @@ class SmsBot {
     return latest;
   }
 
+  async unansweredHumanOutbound(contact) {
+    if (!this.store.listMessages || !contact?.id) return null;
+    const messages = await this.store.listMessages(contact.id);
+    const lastHuman = latestMessage(messages, "human_outbound");
+    if (!lastHuman?.createdAt) return null;
+    const lastInbound = latestMessage(messages, "inbound");
+    if (lastInbound?.createdAt && new Date(lastInbound.createdAt) > new Date(lastHuman.createdAt)) return null;
+    return lastHuman;
+  }
+
   async handleHumanEscalationSla(job) {
     let fresh = await this.store.getContact(job.contactId);
     if (!fresh) return null;
@@ -5303,6 +5430,48 @@ class SmsBot {
         );
         if (resumed) healed.push({ contactId: contact.id, action: "auto_returned_after_human_timeout" });
         continue;
+      }
+
+      if (
+        contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN &&
+        contact.humanEscalationStatus &&
+        contact.humanEscalationStage === "human_review_pending" &&
+        !hasPendingJob(jobs, ["human_reply_timeout"])
+      ) {
+        const humanMessage = await this.unansweredHumanOutbound(contact);
+        if (humanMessage) {
+          const humanAt = new Date(humanMessage.createdAt);
+          if (!Number.isNaN(humanAt.getTime())) {
+            const repaired = await this.store.upsertContact({
+              ...contact,
+              humanEscalationStage: "human_replied_waiting",
+              humanAcknowledgedAt: contact.humanAcknowledgedAt || humanAt.toISOString(),
+              lastHumanOutboundMessage: humanMessage.body || contact.lastHumanOutboundMessage || "Manual human SMS sent",
+              lastHumanOutboundAt: humanAt.toISOString(),
+              automationPaused: true,
+              automationPauseReason: "human_working"
+            });
+            if (Date.now() - humanAt.getTime() >= HUMAN_REPLY_TIMEOUT_MINUTES * 60 * 1000) {
+              const resumed = await this.handleHumanReplyTimeout(
+                {
+                  contactId: repaired.id,
+                  payload: { lastHumanOutboundAt: humanAt.toISOString(), timeoutMinutes: HUMAN_REPLY_TIMEOUT_MINUTES, healed: true }
+                },
+                repaired
+              );
+              if (resumed) healed.push({ contactId: contact.id, action: "auto_returned_after_human_message_log_timeout" });
+            } else {
+              await this.store.addJob({
+                type: "human_reply_timeout",
+                contactId: repaired.id,
+                runAt: addMinutes(humanAt, HUMAN_REPLY_TIMEOUT_MINUTES).toISOString(),
+                payload: { lastHumanOutboundAt: humanAt.toISOString(), timeoutMinutes: HUMAN_REPLY_TIMEOUT_MINUTES, healed: true }
+              });
+              healed.push({ contactId: contact.id, action: "scheduled_human_reply_timeout_from_message_log" });
+            }
+            continue;
+          }
+        }
       }
 
       if (

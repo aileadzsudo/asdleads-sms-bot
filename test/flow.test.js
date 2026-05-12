@@ -839,6 +839,28 @@ test("backup time reply finalizes scheduled call instead of escalating", async (
   assert.match(store.getContact("c3b").lastOutboundMessage, /backup/i);
 });
 
+test("soft refusal at call-time escalates instead of asking yes/no clarification", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "arthur-refusal",
+    ghlContactId: "arthur-refusal",
+    name: "Arthur Jackson",
+    phone: "+15550000180",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes",
+    lastOutboundMessage: "What time works best for a quick call?"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "arthur-refusal", message: "No thank you" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(contact.humanEscalationStatus, true);
+  assert.equal(contact.escalationReason, "soft_refusal");
+  assert.doesNotMatch(store.getContact("arthur-refusal").lastOutboundMessage || "", /quick yes, no, or not sure/i);
+});
+
 test("primary and backup in the same scheduling reply are both saved", async () => {
   const { bot, store } = makeBot();
   const originalSendAppointmentBooked = slack.sendAppointmentBooked;
@@ -2258,6 +2280,7 @@ test("manual human SMS returns lead to bot after timeout if lead stays quiet", a
 
   assert.equal(acknowledged.humanEscalationStage, "human_replied_waiting");
   assert.ok(timeout);
+  assert.ok(new Date(timeout.runAt).getTime() - Date.now() >= 14 * 60 * 1000);
 
   await bot.runDueJob(timeout);
 
@@ -2296,6 +2319,71 @@ test("human timeout uses a softer re-engagement message", async () => {
 
   assert.match(store.getContact("human-soft-return").lastOutboundMessage, /still here with me/i);
   assert.match(store.getContact("human-soft-return").lastOutboundMessage, /do not lose momentum/i);
+});
+
+test("stuck human review with unanswered human outbound returns to bot after 15 minutes", async () => {
+  const { bot, store } = makeBot();
+  const humanAt = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "human-log-return",
+    ghlContactId: "human-log-return",
+    name: "Human Log",
+    phone: "+15550000184",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes",
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalatedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString()
+  });
+  store.addMessage({
+    contactId: "human-log-return",
+    direction: "human_outbound",
+    body: "Can you talk with us?",
+    createdAt: humanAt
+  });
+
+  const healed = await bot.healStuckContacts();
+  const contact = store.getContact("human-log-return");
+
+  assert.equal(healed.some((item) => item.action === "auto_returned_after_human_message_log_timeout"), true);
+  assert.equal(contact.humanEscalationStatus, false);
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ACTIVE_CONVERSATION);
+  assert.match(contact.lastOutboundMessage, /Specialist call|connected|call/i);
+});
+
+test("recent unanswered human outbound gets a 15-minute return job", async () => {
+  const { bot, store } = makeBot();
+  const humanAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "human-log-schedule",
+    ghlContactId: "human-log-schedule",
+    name: "Human Schedule",
+    phone: "+15550000185",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalatedAt: new Date(Date.now() - 8 * 60 * 1000).toISOString()
+  });
+  store.addMessage({
+    contactId: "human-log-schedule",
+    direction: "human_outbound",
+    body: "Following up manually.",
+    createdAt: humanAt
+  });
+
+  const healed = await bot.healStuckContacts();
+  const contact = store.getContact("human-log-schedule");
+  const job = Object.values(store.data.jobs).find(
+    (item) => item.contactId === "human-log-schedule" && item.type === "human_reply_timeout" && item.status === "pending"
+  );
+
+  assert.equal(healed.some((item) => item.action === "scheduled_human_reply_timeout_from_message_log"), true);
+  assert.equal(contact.humanEscalationStage, "human_replied_waiting");
+  assert.ok(job);
+  assert.ok(new Date(job.runAt).getTime() - new Date(humanAt).getTime() >= 15 * 60 * 1000);
 });
 
 test("lead replies while human is working notify Slack but do not resume bot", async () => {
@@ -3563,6 +3651,60 @@ test("GHL appointment no-show status preserves backup and starts no-show recover
   assert.equal(jobs.some((job) => job.contactId === "sync-no-show" && job.type === "backup_no_show_reminder" && job.status === "pending"), true);
   assert.equal(jobs.some((job) => job.contactId === "sync-no-show" && job.type === "missed_call_followup" && job.status === "pending"), true);
   assert.ok(store.getContact("sync-no-show").noShowBackupAlertSentAt);
+});
+
+test("GHL nested appointment no-show status starts no-show recovery without start time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "sync-nested-no-show",
+    ghlContactId: "sync-nested-no-show",
+    name: "Nested No Show",
+    phone: "+15550000182",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Primary time",
+    preferredCallTimeIso: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+    appointmentId: "nested-no-show-event"
+  });
+
+  const contact = await bot.syncAppointment({
+    contact: { id: "sync-nested-no-show" },
+    calendarEvent: {
+      id: "nested-no-show-event",
+      appointmentStatus: "No Show"
+    }
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
+  assert.equal(store.getSetting("last_no_show_webhook").value.result, "jobs_scheduled");
+});
+
+test("GHL boolean didShow false starts no-show recovery", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "sync-boolean-no-show",
+    ghlContactId: "sync-boolean-no-show",
+    name: "Boolean No Show",
+    phone: "+15550000183",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Primary time",
+    preferredCallTimeIso: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+    appointmentId: "boolean-no-show-event"
+  });
+
+  const contact = await bot.syncAppointment({
+    contactId: "sync-boolean-no-show",
+    appointment: {
+      id: "boolean-no-show-event",
+      didShow: false
+    }
+  });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
+  assert.equal(store.getSetting("last_no_show_webhook").value.status, "no_show_flag");
 });
 
 test("no-show webhook with missing contact logs operational issue without crashing", async () => {

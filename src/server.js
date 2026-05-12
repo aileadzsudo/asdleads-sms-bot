@@ -1808,6 +1808,7 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJson(req);
       const auth = requireWebhookSecret(req, payload);
       if (!auth.ok) {
+        await bot.recordNoShowWebhook(payload, { result: "unauthorized", error: auth.reason });
         send(res, 401, { ok: false, error: auth.reason });
         return;
       }
@@ -2140,6 +2141,22 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       send(res, 200, await dashboardMetrics());
+      return;
+    }
+
+    if (req.method === "GET" && req.url.startsWith("/api/admin/no-show-webhooks")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const last = store?.getSetting ? await store.getSetting("last_no_show_webhook") : null;
+      const log = store?.getSetting ? await store.getSetting("no_show_webhook_log") : null;
+      send(res, 200, {
+        ok: true,
+        last: last?.value || null,
+        log: Array.isArray(log?.value) ? log.value : []
+      });
       return;
     }
 
