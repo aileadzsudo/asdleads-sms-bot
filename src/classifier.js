@@ -189,6 +189,13 @@ function hasExpectedAnswerSignal(progress, text) {
     return /\b(doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|emergency|emergency room|neck sprain|whip lash|whiplash|meds|medication|muscle relaxer|muscle relaxers|pain meds|prescription|prescribed|sprain|strain|fracture|concussion|no doctor|no treatment|not seen|haven't|havent|didn't|didnt|medico|clinica|ambulancia|terapia|tratamiento|quiropractico|sin tratamiento|no he ido)\b/.test(t);
   }
   if (progress === QUALIFICATION.NEEDS_CALL_TIME) {
+    if (
+      /\b(not right now|not now|not at the moment|not this moment|can't right now|cant right now|cannot right now|can't talk right now|cant talk right now|not available right now|busy right now|ahora no|no ahora)\b/.test(
+        t
+      )
+    ) {
+      return false;
+    }
     return /\b(now|today|tomorrow|morning|afternoon|evening|tonight|noon|ahora|hoy|manana|tarde|noche|mediodia|\d{1,2}(?::\d{2})?\s*(am|pm)?)\b/.test(t);
   }
   return false;
@@ -199,7 +206,7 @@ function classifyHumanContextIntent(text, progress) {
   if (!t) return null;
 
   const busy =
-    /\b(currently busy|busy right now|i'm busy|im busy|i am busy|busy|at work|working|in a meeting|driving|can't talk|cant talk|cannot talk|not available|occupied|ocupado|estoy ocupado|trabajando|en el trabajo|manejando|no puedo hablar|no disponible)\b/.test(t);
+    /\b(currently busy|busy right now|i'm busy|im busy|i am busy|busy|at work|working|in a meeting|driving|can't talk|cant talk|cannot talk|not available|occupied|not right now|not now|not at the moment|not this moment|can't right now|cant right now|cannot right now|ocupado|estoy ocupado|trabajando|en el trabajo|manejando|no puedo hablar|no disponible|ahora no)\b/.test(t);
   const apology = /\b(sorry|my bad|apologize|apologies|perdon|disculpa|lo siento)\b/.test(t);
   const prefersText = /\b(text me|text is better|can we text|over text|just text|message me|por texto|mandame texto|mensajeame|texto es mejor)\b/.test(t);
 
@@ -214,6 +221,13 @@ function classifyHumanContextIntent(text, progress) {
 
 function isCallNow(text) {
   const t = normalize(text);
+  if (
+    /\b(not right now|not now|not at the moment|not this moment|can't right now|cant right now|cannot right now|can't talk right now|cant talk right now|not available right now|busy right now|ahora no|no ahora)\b/.test(
+      t
+    )
+  ) {
+    return false;
+  }
   return (
     /\b(call me now|call now|right now|now is fine|now is good|now is ok|now is okay|available now|i'm available now|im available now|i can talk now|asap|llamame ahora|llama ahora|ahora esta bien|disponible ahora|puedo hablar ahora)\b/.test(t) ||
     /^(yes|yeah|yep|sure|ok|okay|si|sí)?\s*(now|right now|ahora)\s*$/.test(t)
@@ -275,7 +289,6 @@ function parseCallTime(text, contact, config, now = new Date()) {
     .replace(/\s+/g, " ")
     .trim();
   const clockText = removeNumericDateTokens(t);
-  if (isCallNow(t)) return { type: "now", confidence: 0.95 };
   const timeZone = contact.timezone || config.texting.defaultTimezone;
   const local = getLocalParts(now, timeZone);
   const explicitToday = /\btoday\b/.test(t);
@@ -285,6 +298,10 @@ function parseCallTime(text, contact, config, now = new Date()) {
   if (isNotTodayAvailability(t)) {
     return { type: "needs_specific_time", confidence: 0.88, preferredDay: "tomorrow_or_later" };
   }
+  if (/\b(later today|later|not now|not right now|can't talk|cant talk|cannot talk|not available|at work|working|busy)\b/.test(t) && !/\d/.test(t)) {
+    return { type: "needs_specific_time", confidence: 0.82 };
+  }
+  if (isCallNow(t)) return { type: "now", confidence: 0.95 };
   const weekdayMap = {
     sunday: 0,
     sun: 0,
@@ -309,9 +326,6 @@ function parseCallTime(text, contact, config, now = new Date()) {
   if (weekdayMatch) {
     const targetDow = weekdayMap[weekdayMatch[1]];
     dayOffset = (targetDow - currentLocalDow + 7) % 7;
-  }
-  if (/\b(later today|later|not now|not right now|can't talk|cant talk|at work|working|busy)\b/.test(t) && !/\d/.test(t)) {
-    return { type: "needs_specific_time", confidence: 0.8 };
   }
   if (/\btomorrow\b/.test(t) && !hasClockTimeSignal(clockText)) {
     return { type: "needs_specific_time", confidence: 0.84, preferredDay: "tomorrow" };

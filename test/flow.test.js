@@ -3933,6 +3933,44 @@ test("call-now phrase interrupts qualification and sends urgent call alert", asy
   }
 });
 
+test("not-right-now reply asks for a better time instead of sending call-now alert", async () => {
+  const { bot, store } = makeBot();
+  const originalSendUrgentCallNow = slack.sendUrgentCallNow;
+  let urgentAlerts = 0;
+  slack.sendUrgentCallNow = async () => {
+    urgentAlerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "deandre-not-now",
+      ghlContactId: "deandre-not-now",
+      name: "DeAndre Jackson",
+      phone: "+15550000151",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      faultAnswer: "not_at_fault",
+      medicalTreatmentAnswer: "yes",
+      lastOutboundMessage:
+        "Based on what you’ve shared, we can definitely help you out! Are you open for a call now or later today?"
+    });
+
+    const contact = await bot.handleInboundSms({
+      contactId: "deandre-not-now",
+      message: "Not right now. I'm sorry."
+    });
+
+    assert.equal(urgentAlerts, 0);
+    assert.notEqual(contact.engagementStatus, ENGAGEMENT.READY_FOR_CALL);
+    assert.equal(store.getContact("deandre-not-now").qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+    assert.match(store.getContact("deandre-not-now").lastOutboundMessage, /No worries|What time/i);
+    assert.doesNotMatch(store.getContact("deandre-not-now").lastOutboundMessage, /connecting you with a Specialist/i);
+  } finally {
+    slack.sendUrgentCallNow = originalSendUrgentCallNow;
+  }
+});
+
 test("urgent call-now Slack posts to leads channel id", async () => {
   const originalFetch = global.fetch;
   let postedBody = null;

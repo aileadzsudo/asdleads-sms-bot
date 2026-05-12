@@ -2989,6 +2989,10 @@ class SmsBot {
     }
 
     if (classification.label === "call_now") {
+      const parsedOriginal = parseCallTime(inboundText, contact, this.config);
+      if (parsedOriginal && parsedOriginal.type !== "now") {
+        return this.handleCallTime(contact, inboundText);
+      }
       return this.handleCallTime(contact, "call me now");
     }
 

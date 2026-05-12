@@ -8,6 +8,7 @@ const {
   parseCallTime,
   escalationReason,
   classifyHumanContextIntent,
+  isCallNow,
   isDocumentOrReport
 } = require("../src/classifier");
 
@@ -49,6 +50,8 @@ test("parses call now and simple scheduled time", () => {
   assert.equal(parseCallTime("I can talk now", contact, config).type, "now");
   assert.equal(parseCallTime("Yes now", contact, config).type, "now");
   assert.equal(parseCallTime("Now is ok", contact, config).type, "now");
+  assert.equal(isCallNow("not right now. I'm sorry."), false);
+  assert.equal(parseCallTime("not right now. I'm sorry.", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("anytime", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("can you call back later?", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("tomorrow morning", contact, config, new Date("2026-05-07T15:00:00Z")).type, "needs_specific_time");
