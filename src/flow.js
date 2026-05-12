@@ -2275,11 +2275,12 @@ class SmsBot {
           automationPauseReason: ""
         });
       } else {
-      return this.store.upsertContact({
-        ...contact,
-        lastHumanManagedInboundAt: new Date().toISOString(),
-        lastHumanManagedInboundMessage: inbound.lastInboundMessage
-      });
+        await this.notifyEscalatedInboundReply(contact, inbound.lastInboundMessage);
+        return this.store.upsertContact({
+          ...contact,
+          lastHumanManagedInboundAt: new Date().toISOString(),
+          lastHumanManagedInboundMessage: inbound.lastInboundMessage
+        });
       }
     }
 
@@ -2335,6 +2336,7 @@ class SmsBot {
     }
 
     if (contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN && contact.humanEscalationStatus) {
+      await this.notifyEscalatedInboundReply(contact, inbound.lastInboundMessage);
       return this.store.upsertContact({
         ...contact,
         lastHumanManagedInboundAt: new Date().toISOString(),
@@ -3485,6 +3487,35 @@ class SmsBot {
         Phone: contact.phone || "unknown",
         "GHL contact": contact.ghlContactId || contact.id,
         "Appointment ID": contact.appointmentId || "unknown",
+        Error: error.message
+      });
+      return false;
+    }
+  }
+
+  async notifyEscalatedInboundReply(contact, message) {
+    if (!message || contact.lastHumanManagedInboundMessage === message) return false;
+    const updated = await this.store.upsertContact({
+      ...contact,
+      lastInboundMessage: message
+    });
+    await this.store.addEscalation({
+      contactId: updated.id,
+      reason: "new_reply_after_human_escalation",
+      lastInboundMessage: message
+    });
+    await this.recordDecision(updated, "escalated", "new_reply_after_human_escalation", {
+      trigger: "inbound_sms",
+      message
+    });
+    try {
+      await slack.sendEscalatedInbound(this.config, updated);
+      return true;
+    } catch (error) {
+      await this.notifyBotError("Slack escalated inbound alert failed", {
+        Name: updated.name || "unknown",
+        Phone: updated.phone || "unknown",
+        "GHL contact": updated.ghlContactId || updated.id,
         Error: error.message
       });
       return false;

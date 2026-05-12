@@ -260,6 +260,31 @@ test("medical yes with paperwork and photos advances instead of escalating", asy
   assert.match(store.getContact("medical-paperwork").lastOutboundMessage, /What time works best|open for a call/i);
 });
 
+test("detailed emergency and medication message counts as medical answer", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "roberta-medical",
+    ghlContactId: "roberta-medical",
+    name: "Roberta Barajas Rios",
+    phone: "+15550000148",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    faultAnswer: "not_at_fault",
+    lastOutboundMessage: "Have you needed to see any doctors or receive any medical treatment after the accident?"
+  });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "roberta-medical",
+    message:
+      "This just happened last sat my neck felt stuck and pain on Thurs and yesterday I got a bad headache from my temple to my eye. So went to emergency. They said I got neck sprain like whip lash and to basically rest 4 to 6 weeks and gave me meds for pain and muscle relaxer"
+  });
+
+  assert.equal(contact.humanEscalationStatus, undefined);
+  assert.equal(contact.medicalTreatmentAnswer, "yes");
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.match(store.getContact("roberta-medical").lastOutboundMessage, /What time works best|open for a call|Specialist/i);
+});
+
 test("soft human escalation still captures a qualification answer instead of repeating stale question", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -1749,6 +1774,43 @@ test("duplicate escalations for same human-managed contact are suppressed", asyn
   assert.equal(store.getContact("dedupe-escalation").lastSuppressedEscalationReason, "llm_call_now");
 });
 
+test("new inbound replies on escalated contacts notify Slack without resuming bot", async () => {
+  const { bot, store } = makeBot();
+  const originalSendEscalatedInbound = slack.sendEscalatedInbound;
+  let alerts = 0;
+  slack.sendEscalatedInbound = async () => {
+    alerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "escalated-typing",
+      ghlContactId: "escalated-typing",
+      name: "Escalated Typing",
+      phone: "+15550000149",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      humanEscalationStatus: true,
+      humanEscalationStage: "human_review_pending",
+      escalationReason: "human_request",
+      lastInboundMessage: "Can someone call me?"
+    });
+
+    const contact = await bot.handleInboundSms({
+      contactId: "escalated-typing",
+      message: "Also my neck is hurting badly"
+    });
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+    assert.equal(contact.humanEscalationStatus, true);
+    assert.equal(alerts, 1);
+    assert.equal(store.data.escalations.filter((item) => item.contactId === "escalated-typing").length, 1);
+    assert.equal(store.getContact("escalated-typing").lastHumanManagedInboundMessage, "Also my neck is hurting badly");
+  } finally {
+    slack.sendEscalatedInbound = originalSendEscalatedInbound;
+  }
+});
+
 test("human escalation SLA jobs are tracked silently instead of posting bot-error Slack alerts", async () => {
   const { bot, store } = makeBot();
   let botErrorCount = 0;
@@ -2172,8 +2234,15 @@ test("human timeout uses a softer re-engagement message", async () => {
   assert.match(store.getContact("human-soft-return").lastOutboundMessage, /do not lose momentum/i);
 });
 
-test("lead replies while human is working do not trigger another Slack escalation", async () => {
+test("lead replies while human is working notify Slack but do not resume bot", async () => {
   const { bot, store } = makeBot();
+  const originalSendEscalatedInbound = slack.sendEscalatedInbound;
+  let alerts = 0;
+  slack.sendEscalatedInbound = async () => {
+    alerts += 1;
+    return { ok: true };
+  };
+  try {
   store.upsertContact({
     id: "human-managed-inbound",
     ghlContactId: "human-managed-inbound",
@@ -2190,8 +2259,12 @@ test("lead replies while human is working do not trigger another Slack escalatio
   const contact = await bot.handleInboundSms({ contactId: "human-managed-inbound", message: "yes I am here" });
 
   assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
-  assert.equal(store.data.escalations.length, 0);
+  assert.equal(alerts, 1);
+  assert.equal(store.data.escalations.length, 1);
   assert.equal(store.getContact("human-managed-inbound").lastHumanManagedInboundMessage, "yes I am here");
+  } finally {
+    slack.sendEscalatedInbound = originalSendEscalatedInbound;
+  }
 });
 
 test("warm follow-up jobs are blocked while lead is escalated to human", async () => {
@@ -3857,6 +3930,37 @@ test("call-now phrase interrupts qualification and sends urgent call alert", asy
     assert.match(store.getContact("call-now-mid-qualification").lastOutboundMessage, /connecting you with a Specialist/i);
   } finally {
     slack.sendUrgentCallNow = originalSendUrgentCallNow;
+  }
+});
+
+test("urgent call-now Slack posts to leads channel id", async () => {
+  const originalFetch = global.fetch;
+  let postedBody = null;
+  global.fetch = async (_url, options) => {
+    postedBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  try {
+    await slack.sendUrgentCallNow(
+      {
+        dryRun: false,
+        slack: {
+          token: "xoxb-test",
+          channel: "C0B2PN1APFT",
+          leadsChannel: "wrong-channel"
+        },
+        ghl: { appBaseUrl: "https://app.gohighlevel.com", locationId: "loc" }
+      },
+      {
+        name: "Call Now Lead",
+        phone: "+15550000150",
+        ghlContactId: "ghl-call-now"
+      }
+    );
+    assert.equal(postedBody.channel, "C09N85J9G4Q");
+    assert.match(postedBody.text, /URGENT: PC wants a call now/);
+  } finally {
+    global.fetch = originalFetch;
   }
 });
 

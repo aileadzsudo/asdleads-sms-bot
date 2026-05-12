@@ -172,7 +172,8 @@ function parseMedicalAnswer(text) {
   if (
     /\b(yes|yeah|yep|si|doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|pt|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|medico|clinica|ambulancia|terapia|tratamiento|quiropractico|fisioterapia|radiografia|resonancia)\b/.test(
       t
-    )
+    ) ||
+    /\b(emergency|emergency room|neck sprain|whip lash|whiplash|meds|medication|muscle relaxer|muscle relaxers|pain meds|prescription|prescribed|sprain|strain|fracture|concussion)\b/.test(t)
   ) {
     return { value: "yes", confidence: 0.9 };
   }
@@ -185,7 +186,7 @@ function hasExpectedAnswerSignal(progress, text) {
     return /\b(other driver|their fault|his fault|her fault|not my fault|i was not at fault|wasn't my fault|i wasn't driving|i was not driving|i wasnt driving|passenger|rideshare passenger|uber passenger|lyft passenger|lyft driver|uber driver|pedestrian|walking|crosswalk|my fault|i was at fault|at fault|they hit me|hit me|rear ended|rear-ended|not sure|unsure|partially|partial|otro conductor|culpa del otro|no fue mi culpa|pasajero|peaton|me chocaron|me dieron por detras|fue mi culpa|culpable|no estoy seguro)\b/.test(t);
   }
   if (progress === QUALIFICATION.NEEDS_MEDICAL) {
-    return /\b(doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|no doctor|no treatment|not seen|haven't|havent|didn't|didnt|medico|clinica|ambulancia|terapia|tratamiento|quiropractico|sin tratamiento|no he ido)\b/.test(t);
+    return /\b(doctor|hospital|er|e r|urgent care|chiro|chiropractor|therapy|physical therapy|treatment|medical|clinic|ambulance|ortho|orthopedic|pain management|primary care|pcp|mri|xray|x-ray|emergency|emergency room|neck sprain|whip lash|whiplash|meds|medication|muscle relaxer|muscle relaxers|pain meds|prescription|prescribed|sprain|strain|fracture|concussion|no doctor|no treatment|not seen|haven't|havent|didn't|didnt|medico|clinica|ambulancia|terapia|tratamiento|quiropractico|sin tratamiento|no he ido)\b/.test(t);
   }
   if (progress === QUALIFICATION.NEEDS_CALL_TIME) {
     return /\b(now|today|tomorrow|morning|afternoon|evening|tonight|noon|ahora|hoy|manana|tarde|noche|mediodia|\d{1,2}(?::\d{2})?\s*(am|pm)?)\b/.test(t);

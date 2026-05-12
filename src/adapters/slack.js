@@ -1,5 +1,7 @@
 const { contactLink } = require("./ghl");
 
+const CALL_NOW_LEADS_CHANNEL = "C09N85J9G4Q";
+
 function baseEscalationText(config, contact, title, reason, extra = {}) {
   const hiddenExtraFields = new Set(["Confidence", "Accident date", "Fault", "Medical"]);
   const lines = [
@@ -52,7 +54,19 @@ async function sendUrgentCallNow(config, contact, extra = {}) {
   return postSlack(
     config,
     baseEscalationText(config, contact, "URGENT: PC wants a call now", "call_now", extra),
-    config.slack.leadsChannel || config.slack.channel
+    CALL_NOW_LEADS_CHANNEL
+  );
+}
+
+async function sendEscalatedInbound(config, contact) {
+  return postSlack(
+    config,
+    [
+      "*New reply on escalated lead*",
+      `Name: ${contact.name || "unknown"}`,
+      `Message: ${contact.lastInboundMessage || "unknown"}`,
+      `Link: ${contactLink(config, contact) || "unknown"}`
+    ].join("\n")
   );
 }
 
@@ -97,4 +111,4 @@ async function sendBotError(config, title, details = {}) {
   return postSlack(config, lines.join("\n"), channel);
 }
 
-module.exports = { sendEscalation, sendUrgentCallNow, sendAppointmentBooked, sendAppointmentNotice, sendBotError };
+module.exports = { sendEscalation, sendUrgentCallNow, sendEscalatedInbound, sendAppointmentBooked, sendAppointmentNotice, sendBotError };
