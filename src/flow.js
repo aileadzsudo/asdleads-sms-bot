@@ -929,12 +929,18 @@ function shouldTreatNoResponseAsCallNoAnswer(existing = {}) {
 function hasNoResponseMemory(existing = {}) {
   if (!existing) return false;
   return Boolean(
-    hasAnyTag(existing, ["nr", "no_response"]) &&
-      (existing.lastOutboundMessage ||
-        existing.lastOutboundTimestamp ||
-        existing.currentSequenceName ||
-        (existing.sentColdTemplateKeys || []).length ||
-        existing.engagementStatus)
+    existing.lastOutboundMessage ||
+      existing.lastOutboundTimestamp ||
+      existing.currentSequenceName ||
+      (existing.sentColdTemplateKeys || []).length
+  );
+}
+
+function hasInitialColdMessageBeenSent(contact = {}) {
+  return Boolean(
+    (contact.sentColdTemplateKeys || []).includes("day_1_am") ||
+      (contact.currentSequenceName === "initial_sms" && contact.currentSequenceDay === 1) ||
+      (contact.lastOutboundMessage && /do you remember the date of the accident|what was the date of the accident/i.test(contact.lastOutboundMessage))
   );
 }
 
@@ -1260,6 +1266,7 @@ class SmsBot {
     this.store = store;
     this.config = config;
     this.bookingAlertLocks = new Set();
+    this.initialEnrollmentLocks = new Set();
   }
 
   async notifyBotError(title, details = {}, options = {}) {
@@ -1934,107 +1941,123 @@ class SmsBot {
 
   async startFromNoResponseDisposition(payload) {
     const normalized = normalizePayload(payload, this.config);
-    const existing = await this.store.getContact(normalized.id);
-    if (shouldTreatNoResponseAsCallNoAnswer(existing)) {
-      return this.sendCallNowNoAnswerRecovery(existing, normalized, "no_response_disposition");
-    }
-
-    if (hasNoResponseMemory(existing)) {
-      let contact = await this.store.upsertContact({
-        ...existing,
-        ...normalized,
-        timezone: chooseContactTimezone(existing, normalized, this.config),
-        optOutStatus: existing.optOutStatus || false,
-        humanEscalationStatus: existing.humanEscalationStatus || false
-      });
-      contact = await this.hydrateContactTags(contact);
-      if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
-      if (hasNqTag(contact)) return this.stopForNqTag(contact);
-      if (hasManualHumanHoldTag(contact)) return this.stopForManualHoldTag(contact);
-      await this.recordDecision(contact, "skipped", "repeat_no_response_already_enrolled", {
-        trigger: "no_response_disposition",
-        meta: {
-          currentSequenceName: contact.currentSequenceName || "",
-          engagementStatus: contact.engagementStatus || "",
-          lastOutboundMessage: contact.lastOutboundMessage || ""
-        }
-      });
-      return contact;
-    }
-
-    const contact = await this.store.upsertContact({
-      ...normalized,
-      engagementStatus: ENGAGEMENT.CALLED_NO_ANSWER,
-      qualificationProgress: payload.qualificationProgress || QUALIFICATION.NEEDS_FAULT,
-      optOutStatus: false,
-      humanEscalationStatus: false,
-      automationPaused: false,
-      automationPauseReason: "",
-      awaitingBackupTime: false,
-      awaitingSpecificCallTime: false,
-      currentSequenceName: "",
-      currentSequenceDay: 0,
-      currentSequenceSlot: "",
-      currentMessageCountForDay: 0,
-      sentColdTemplateKeys: []
-    });
-    await this.store.cancelJobsForContact(contact.id, "fresh no-response enrollment", (job) =>
-      BOT_SEQUENCE_JOB_TYPES.includes(job.type)
-    );
-    const hydrated = await this.hydrateContactTags(contact);
-    if (hasSignedTag(hydrated)) return this.stopForSignedTag(hydrated);
-    if (hasNqTag(hydrated)) return this.stopForNqTag(hydrated);
-    if (hasManualHumanHoldTag(hydrated)) return this.stopForManualHoldTag(hydrated);
-    const initial = render(coldOutreachTemplates.day_1_am, contact);
-    const sent = await this.sendBotMessage(contact, initial, {
-      bypassQuietHours: true,
-      templateGroup: "coldOutreachTemplates",
-      templateKey: "day_1_am"
-    });
-    if (!sent) {
-      const latest = (await this.store.getContact(contact.id)) || contact;
-      if (
-        latest.optOutStatus ||
-        latest.automationPaused ||
-        latest.engagementStatus === ENGAGEMENT.OPTED_OUT ||
-        hasSignedTag(latest) ||
-        hasNqTag(latest) ||
-        hasManualHumanHoldTag(latest)
-      ) {
-        return latest;
+    const lockKey = normalized.id || normalized.ghlContactId || normalized.phone;
+    if (lockKey && this.initialEnrollmentLocks.has(lockKey)) {
+      const existingDuringLock = await this.store.getContact(normalized.id);
+      if (existingDuringLock) {
+        await this.recordDecision(existingDuringLock, "skipped", "repeat_no_response_enrollment_in_progress", {
+          trigger: "no_response_disposition"
+        });
+        return existingDuringLock;
       }
-      await this.store.addJob({
-        type: "initial_sms",
-        contactId: latest.id,
-        runAt: addMinutes(new Date(), latest.lastTagLookupFailedAt ? 5 : 1).toISOString(),
-        payload: { templateKey: "day_1_am", source: "fresh_retry" }
-      });
-      return this.store.upsertContact({
-        ...latest,
-        engagementStatus: ENGAGEMENT.CALLED_NO_ANSWER,
-        currentSequenceName: "initial_sms_pending",
-        currentSequenceDay: 1,
-        currentMessageCountForDay: 0,
-        sentColdTemplateKeys: Array.from(new Set([...(latest.sentColdTemplateKeys || [])].filter((key) => key !== "day_1_am")))
-      });
+      return normalized;
     }
-    const afterInitial = await this.store.upsertContact({
-      ...sent,
-      engagementStatus: ENGAGEMENT.INITIAL_SMS_SENT,
-      currentSequenceName: "initial_sms",
-      currentSequenceDay: 1,
-      currentMessageCountForDay: 1,
-      sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || contact.sentColdTemplateKeys || []), "day_1_am"]))
-    });
-    await this.scheduleFreshLeadFollowUps(afterInitial);
-    await this.scheduleColdOutreach(afterInitial);
-    await this.store.addJob({
-      type: "cold_entry_check",
-      contactId: afterInitial.id,
-      runAt: addMinutes(new Date(), 15).toISOString(),
-      payload: { lastOutboundTimestamp: afterInitial.lastOutboundTimestamp || new Date().toISOString() }
-    });
-    return afterInitial;
+    if (lockKey) this.initialEnrollmentLocks.add(lockKey);
+    try {
+      const existing = await this.store.getContact(normalized.id);
+      if (shouldTreatNoResponseAsCallNoAnswer(existing)) {
+        return this.sendCallNowNoAnswerRecovery(existing, normalized, "no_response_disposition");
+      }
+
+      if (hasNoResponseMemory(existing)) {
+        let contact = await this.store.upsertContact({
+          ...existing,
+          ...normalized,
+          timezone: chooseContactTimezone(existing, normalized, this.config),
+          optOutStatus: existing.optOutStatus || false,
+          humanEscalationStatus: existing.humanEscalationStatus || false
+        });
+        contact = await this.hydrateContactTags(contact);
+        if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
+        if (hasNqTag(contact)) return this.stopForNqTag(contact);
+        if (hasManualHumanHoldTag(contact)) return this.stopForManualHoldTag(contact);
+        await this.recordDecision(contact, "skipped", "repeat_no_response_already_enrolled", {
+          trigger: "no_response_disposition",
+          meta: {
+            currentSequenceName: contact.currentSequenceName || "",
+            engagementStatus: contact.engagementStatus || "",
+            lastOutboundMessage: contact.lastOutboundMessage || ""
+          }
+        });
+        return contact;
+      }
+
+      const contact = await this.store.upsertContact({
+        ...normalized,
+        engagementStatus: ENGAGEMENT.CALLED_NO_ANSWER,
+        qualificationProgress: payload.qualificationProgress || QUALIFICATION.NEEDS_FAULT,
+        optOutStatus: false,
+        humanEscalationStatus: false,
+        automationPaused: false,
+        automationPauseReason: "",
+        awaitingBackupTime: false,
+        awaitingSpecificCallTime: false,
+        currentSequenceName: "",
+        currentSequenceDay: 0,
+        currentSequenceSlot: "",
+        currentMessageCountForDay: 0,
+        sentColdTemplateKeys: []
+      });
+      await this.store.cancelJobsForContact(contact.id, "fresh no-response enrollment", (job) =>
+        BOT_SEQUENCE_JOB_TYPES.includes(job.type)
+      );
+      const hydrated = await this.hydrateContactTags(contact);
+      if (hasSignedTag(hydrated)) return this.stopForSignedTag(hydrated);
+      if (hasNqTag(hydrated)) return this.stopForNqTag(hydrated);
+      if (hasManualHumanHoldTag(hydrated)) return this.stopForManualHoldTag(hydrated);
+      const initial = render(coldOutreachTemplates.day_1_am, contact);
+      const sent = await this.sendBotMessage(contact, initial, {
+        bypassQuietHours: true,
+        templateGroup: "coldOutreachTemplates",
+        templateKey: "day_1_am"
+      });
+      if (!sent) {
+        const latest = (await this.store.getContact(contact.id)) || contact;
+        if (
+          latest.optOutStatus ||
+          latest.automationPaused ||
+          latest.engagementStatus === ENGAGEMENT.OPTED_OUT ||
+          hasSignedTag(latest) ||
+          hasNqTag(latest) ||
+          hasManualHumanHoldTag(latest)
+        ) {
+          return latest;
+        }
+        await this.store.addJob({
+          type: "initial_sms",
+          contactId: latest.id,
+          runAt: addMinutes(new Date(), latest.lastTagLookupFailedAt ? 5 : 1).toISOString(),
+          payload: { templateKey: "day_1_am", source: "fresh_retry" }
+        });
+        return this.store.upsertContact({
+          ...latest,
+          engagementStatus: ENGAGEMENT.CALLED_NO_ANSWER,
+          currentSequenceName: "initial_sms_pending",
+          currentSequenceDay: 1,
+          currentMessageCountForDay: 0,
+          sentColdTemplateKeys: Array.from(new Set([...(latest.sentColdTemplateKeys || [])].filter((key) => key !== "day_1_am")))
+        });
+      }
+      const afterInitial = await this.store.upsertContact({
+        ...sent,
+        engagementStatus: ENGAGEMENT.INITIAL_SMS_SENT,
+        currentSequenceName: "initial_sms",
+        currentSequenceDay: 1,
+        currentMessageCountForDay: 1,
+        sentColdTemplateKeys: Array.from(new Set([...(sent?.sentColdTemplateKeys || contact.sentColdTemplateKeys || []), "day_1_am"]))
+      });
+      await this.scheduleFreshLeadFollowUps(afterInitial);
+      await this.scheduleColdOutreach(afterInitial);
+      await this.store.addJob({
+        type: "cold_entry_check",
+        contactId: afterInitial.id,
+        runAt: addMinutes(new Date(), 15).toISOString(),
+        payload: { lastOutboundTimestamp: afterInitial.lastOutboundTimestamp || new Date().toISOString() }
+      });
+      return afterInitial;
+    } finally {
+      if (lockKey) this.initialEnrollmentLocks.delete(lockKey);
+    }
   }
 
   async sendCallNowNoAnswerRecovery(existing, normalized = {}, trigger = "manual_repair") {
@@ -4344,6 +4367,15 @@ class SmsBot {
     }
     if (job.type === "initial_sms") {
       const fresh = await this.store.getContact(job.contactId);
+      if (hasInitialColdMessageBeenSent(fresh)) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "initial_sms_already_sent"
+        });
+        await this.recordDecision(fresh, "skipped", "initial_sms_already_sent", { jobId: job.id, jobType: job.type });
+        return;
+      }
       const rendered = await this.renderManagedTemplate(fresh, "coldOutreachTemplates", job.payload.templateKey, coldOutreachTemplates[job.payload.templateKey]);
       const sent = await this.sendBotMessage(fresh, rendered.message, {
         ...rendered.meta,

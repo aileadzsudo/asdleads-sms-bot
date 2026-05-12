@@ -438,6 +438,31 @@ test("repeat NR on an already enrolled NR lead does not resend the initial cold 
   );
 });
 
+test("repeat NR without a stored NR tag does not resend the initial cold SMS", async () => {
+  const { bot, store } = makeBot();
+
+  await bot.startFromNoResponseDisposition({
+    contactId: "joseph-dupe",
+    name: "Joseph Gomez",
+    phone: "+15550000123",
+    disposition: "NR"
+  });
+  await bot.startFromNoResponseDisposition({
+    contactId: "joseph-dupe",
+    name: "Joseph Gomez",
+    phone: "+15550000123",
+    disposition: "NR"
+  });
+
+  const outbound = store.data.messages.filter((message) => message.contactId === "joseph-dupe" && message.direction === "outbound");
+  assert.equal(outbound.length, 1);
+  assert.match(outbound[0].body, /do you remember the date of the accident/i);
+  assert.equal(
+    store.data.decisionLogs.some((log) => log.contactId === "joseph-dupe" && log.reason === "repeat_no_response_already_enrolled"),
+    true
+  );
+});
+
 test("short yes-now inbound triggers urgent call-now instead of staying in cold outreach", async () => {
   const { bot, store } = makeBot();
   let urgentAlerts = 0;
@@ -4296,6 +4321,38 @@ test("initial no-response SMS records day 1 AM as already sent", async () => {
   });
 
   assert.deepEqual(contact.sentColdTemplateKeys, ["day_1_am"]);
+});
+
+test("queued initial SMS skips when the initial cold SMS was already sent", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "initial-job-dupe",
+    ghlContactId: "initial-job-dupe",
+    name: "Initial Job Dupe",
+    phone: "+15550000124",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.INITIAL_SMS_SENT,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT,
+    currentSequenceName: "initial_sms",
+    currentSequenceDay: 1,
+    sentColdTemplateKeys: ["day_1_am"],
+    lastOutboundMessage: "Hi Initial Job Dupe, do you remember the date of the accident?"
+  });
+  const job = store.addJob({
+    type: "initial_sms",
+    contactId: "initial-job-dupe",
+    runAt: new Date().toISOString(),
+    payload: { templateKey: "day_1_am", source: "fresh_retry" }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "initial_sms_already_sent");
+  assert.equal(
+    store.data.messages.filter((message) => message.contactId === "initial-job-dupe" && message.direction === "outbound").length,
+    0
+  );
 });
 
 test("immediate no-response enrollment queues cold outreach without duplicates", async () => {
