@@ -284,6 +284,7 @@ function parseCallTime(text, contact, config, now = new Date()) {
     .replace(/\bsabado\b/g, "saturday")
     .replace(/\bdomingo\b/g, "sunday")
     .replace(/(\d)\s*([ap])\s*\.?\s*m\.?/g, "$1$2m")
+    .replace(/\b([1-9]|1[0-2])([0-5]\d)\s*(am|pm)\b/g, "$1:$2 $3")
     .replace(/\$\s*\d[\d,.]*/g, " ")
     .replace(/\b\d{1,3},\d{3,}\b/g, " ")
     .replace(/\s+/g, " ")

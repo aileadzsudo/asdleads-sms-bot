@@ -814,6 +814,45 @@ test("backup time reply finalizes scheduled call instead of escalating", async (
   assert.match(store.getContact("c3b").lastOutboundMessage, /backup/i);
 });
 
+test("primary and backup in the same scheduling reply are both saved", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentBooked = slack.sendAppointmentBooked;
+  const alerts = [];
+  slack.sendAppointmentBooked = async (_config, _contact, extra) => {
+    alerts.push(extra);
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "maggie-inline-backup",
+      ghlContactId: "maggie-inline-backup",
+      name: "Maggie Lopez",
+      phone: "+15550000152",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      faultAnswer: "not_at_fault",
+      medicalTreatmentAnswer: "yes"
+    });
+
+    const contact = await bot.handleCallTime(
+      store.getContact("maggie-inline-backup"),
+      "Anytime work after 10am. Let's say tomorrow about 10:30 Yeah for sure let's say 230 pm if I happen to miss u at 10:30"
+    );
+
+    assert.equal(contact.awaitingBackupTime, false);
+    assert.equal(contact.qualificationProgress, QUALIFICATION.COMPLETE);
+    assert.match(contact.preferredCallTime, /10:30 AM/);
+    assert.match(contact.backupCallTime, /2:30 PM/);
+    assert.ok(contact.backupCallTimeIso);
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0]["Backup time"], /2:30 PM/);
+    assert.match(store.getContact("maggie-inline-backup").lastOutboundMessage, /2:30 PM CST as a backup/);
+  } finally {
+    slack.sendAppointmentBooked = originalSendAppointmentBooked;
+  }
+});
+
 test("explicit earlier call time while awaiting backup reschedules primary appointment", async () => {
   const { bot, store } = makeBot();
   const originalUpdateAppointment = ghl.updateAppointment;

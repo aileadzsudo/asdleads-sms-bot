@@ -70,6 +70,12 @@ test("parses call now and simple scheduled time", () => {
   assert.ok(parsed.startsAt);
 });
 
+test("parses compact call times like 230 pm", () => {
+  const parsed = parseCallTime("tomorrow 230 pm", contact, config, new Date("2026-05-11T18:00:00Z"));
+  assert.equal(parsed.type, "scheduled");
+  assert.equal(parsed.startsAt, "2026-05-12T19:30:00.000Z");
+});
+
 test("call-time parser asks for clarification when the lead says today does not work", () => {
   assert.equal(parseCallTime("Today is not tha day", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("Again today doesn't work", contact, config).preferredDay, "tomorrow_or_later");

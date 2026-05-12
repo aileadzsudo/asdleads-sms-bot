@@ -804,6 +804,65 @@ function parseBackupWindow(text) {
   };
 }
 
+function hasInlineBackupSignal(text) {
+  const t = normalize(text);
+  return /\b(backup|back up|in case|otherwise|alternate|second option|if i miss|if we miss|if you miss|if i happen to miss|happen to miss|miss u|miss you|miss the call)\b/.test(t);
+}
+
+function extractTimeSnippets(text) {
+  const t = normalize(String(text || "")).replace(/\b([1-9]|1[0-2])([0-5]\d)\s*(am|pm)\b/g, "$1:$2 $3");
+  const snippets = [];
+  const patterns = [
+    /\b(?:today|tomorrow)?\s*(?:at|around|about|after|by)?\s*\d{1,2}:\d{2}\s*(?:am|pm)?\b/g,
+    /\b(?:today|tomorrow)?\s*(?:at|around|about|after|by)?\s*\d{1,2}\s*(?:am|pm)\b/g,
+    /\b(?:today|tomorrow)?\s*(?:at|around|about|after|by)\s*\d{1,2}\b/g
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(t))) {
+      const value = match[0].replace(/\s+/g, " ").trim();
+      if (value) snippets.push({ value, index: match.index });
+    }
+  }
+  return snippets
+    .sort((a, b) => a.index - b.index || b.value.length - a.value.length)
+    .filter((item, index, list) => !list.slice(0, index).some((existing) => existing.index === item.index && existing.value.includes(item.value)));
+}
+
+function extractInlineBackupTime(text, contact, config, primaryStartsAt) {
+  if (!primaryStartsAt || !hasInlineBackupSignal(text)) return null;
+  const primaryDate = new Date(primaryStartsAt);
+  const primaryMs = primaryDate.getTime();
+  if (Number.isNaN(primaryMs)) return null;
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  const normalized = normalize(String(text || "")).replace(/\b([1-9]|1[0-2])([0-5]\d)\s*(am|pm)\b/g, "$1:$2 $3");
+  const cueMatch = normalized.match(/\b(backup|back up|in case|otherwise|alternate|second option|if i miss|if we miss|if you miss|if i happen to miss|happen to miss|miss u|miss you|miss the call)\b/);
+  const cueIndex = cueMatch ? cueMatch.index : normalized.length;
+  const tempContact = { ...contact, preferredCallTimeIso: primaryStartsAt, timezone: timeZone };
+  const candidates = extractTimeSnippets(text)
+    .map((snippet) => {
+      let parsed = parseCallTime(snippet.value, tempContact, config);
+      if (parsed?.type === "scheduled" && !hasExplicitCallDate(snippet.value)) {
+        parsed = anchorBackupTimeToPrimaryDate(parsed, tempContact, config);
+      }
+      if (parsed?.type !== "scheduled") return null;
+      const startsAt = new Date(parsed.startsAt);
+      const diffMinutes = Math.round((startsAt.getTime() - primaryMs) / 60000);
+      return { ...snippet, parsed, diffMinutes, distanceFromCue: Math.abs(snippet.index - cueIndex) };
+    })
+    .filter(Boolean)
+    .filter((candidate) => candidate.diffMinutes >= 15);
+  if (!candidates.length) return null;
+  const beforeCue = candidates.filter((candidate) => candidate.index <= cueIndex).sort((a, b) => b.index - a.index);
+  const selected = beforeCue[0] || candidates.sort((a, b) => a.distanceFromCue - b.distanceFromCue)[0];
+  const display = formatForContact(new Date(selected.parsed.startsAt), tempContact, config);
+  return {
+    backupCallTime: display,
+    backupCallTimeIso: selected.parsed.startsAt,
+    backupCallTimeType: "exact"
+  };
+}
+
 function backupWindowStartIso(contact, config) {
   if (!contact.preferredCallTimeIso) return "";
   const startHour = Number(contact.backupWindowStartHour);
@@ -3170,14 +3229,25 @@ class SmsBot {
     const startsAt = parsed.startsAt;
     const endsAt = addMinutes(new Date(startsAt), 15).toISOString();
     const display = formatForContact(new Date(startsAt), contact, this.config);
+    const inlineBackup = extractInlineBackupTime(text, { ...contact, preferredCallTimeIso: startsAt }, this.config, startsAt);
     let appointment = null;
     try {
       appointment = await ghl.createAppointment(
         this.config,
-        contact,
+        {
+          ...contact,
+          preferredCallTime: display,
+          preferredCallTimeIso: startsAt,
+          ...(inlineBackup || {})
+        },
         startsAt,
         endsAt,
-        appointmentNotes({ ...contact, preferredCallTime: display, preferredCallTimeIso: startsAt })
+        appointmentNotes({
+          ...contact,
+          preferredCallTime: display,
+          preferredCallTimeIso: startsAt,
+          ...(inlineBackup || {})
+        })
       );
     } catch (error) {
       await this.notifyBotError("GHL appointment booking failed", {
@@ -3201,15 +3271,45 @@ class SmsBot {
     const updated = await this.store.upsertContact({
       ...contact,
       engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
-      qualificationProgress: QUALIFICATION.CALL_BOOKED,
+      qualificationProgress: inlineBackup ? QUALIFICATION.COMPLETE : QUALIFICATION.CALL_BOOKED,
       preferredCallTime: display,
       preferredCallTimeIso: startsAt,
       appointmentId: appointment.id || appointment.appointment?.id || "",
-      awaitingBackupTime: true,
+      ...(inlineBackup || {}),
+      awaitingBackupTime: !inlineBackup,
       awaitingSpecificCallTime: false,
       ...clearCallTimeClarificationPatch(),
       lastAppointmentBookingError: ""
     });
+    if (inlineBackup) {
+      await this.syncAppointmentNotes(updated, {
+        backupTime: updated.backupCallTime,
+        reason: "Primary and backup time supplied in the same contact reply."
+      });
+      const sent =
+        (await this.sendBotMessage(
+          updated,
+          render(qualificationTemplates.bookingConfirmedWithBackup, updated, {
+            primaryTime: updated.preferredCallTime,
+            backupTime: updated.backupCallTime
+          }),
+          { bypassQuietHours: true }
+        )) || updated;
+      const latest = sent || (await this.store.getContact(updated.id)) || updated;
+      if (!latest.bookingAlertSentAt) {
+        const bookingAlertSent = await this.notifyAppointmentBooked(latest, {
+          "Primary call time": latest.preferredCallTime,
+          "Backup time": latest.backupCallTime || "none",
+          Timezone: latest.timezone,
+          "GHL appointment": latest.appointmentId || "created"
+        });
+        if (bookingAlertSent) {
+          await this.store.upsertContact({ ...latest, bookingAlertSentAt: new Date().toISOString() });
+        }
+      }
+      await this.scheduleAppointmentReminders(latest);
+      return this.store.getContact(latest.id) || latest;
+    }
     const afterBackupAsk =
       (await this.sendBotMessage(updated, render(qualificationTemplates.backupAsk, updated, { time: display }), {
       bypassQuietHours: true
