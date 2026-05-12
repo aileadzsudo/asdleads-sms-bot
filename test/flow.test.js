@@ -3424,6 +3424,52 @@ test("admin mark no-show preserves backup time and schedules backup reminders", 
   assert.equal(backupJobs.some((job) => job.payload.templateKey === "afterPrimaryMissed"), false);
 });
 
+test("generic follow up tag does not block explicit no-show recovery", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "follow-up-no-show",
+    ghlContactId: "follow-up-no-show",
+    name: "Follow Up No Show",
+    phone: "+15550000186",
+    tags: ["follow up"],
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Fri, May 8, 4:00 PM CST",
+    preferredCallTimeIso: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+    appointmentId: "follow-up-no-show-appt"
+  });
+
+  const contact = await bot.markNoShow({ contactId: "follow-up-no-show", appointmentId: "follow-up-no-show-appt", status: "no_show" });
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "follow-up-no-show");
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
+  assert.equal(jobs.some((job) => job.type === "missed_call_followup" && job.status === "pending"), true);
+});
+
+test("hard human hold tag still blocks explicit no-show recovery", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "hard-hold-no-show",
+    ghlContactId: "hard-hold-no-show",
+    name: "Hard Hold No Show",
+    phone: "+15550000187",
+    tags: ["human_hold"],
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Fri, May 8, 4:00 PM CST",
+    preferredCallTimeIso: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+    appointmentId: "hard-hold-no-show-appt"
+  });
+
+  const contact = await bot.markNoShow({ contactId: "hard-hold-no-show", appointmentId: "hard-hold-no-show-appt", status: "no_show" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.equal(store.getSetting("last_no_show_webhook").value.result, "skipped_manual_hold_tag");
+  assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "hard-hold-no-show" && job.status === "pending"), false);
+});
+
 test("manual GHL appointment sync adopts appointment and schedules reminders", async () => {
   const { bot, store } = makeBot();
   const startsAt = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();

@@ -332,6 +332,17 @@ function hasManualHumanHoldTag(contact) {
   ]);
 }
 
+function hasNoShowAutomationHoldTag(contact) {
+  return hasAnyTag(contact, [
+    "human_hold",
+    "keep_human",
+    "manual_hold",
+    "do_not_return_to_bot",
+    "qr",
+    "call_connected_follow_up"
+  ]);
+}
+
 function contactIdentitySet(contact) {
   return new Set(
     [
@@ -4894,7 +4905,7 @@ class SmsBot {
       await this.recordDecision(contact, "skipped", "appointment_no_show_opted_out", { trigger: "appointment_no_show" });
       return contact;
     }
-    if (hasSignedTag(contact) || hasNqTag(contact) || hasManualHumanHoldTag(contact)) {
+    if (hasSignedTag(contact) || hasNqTag(contact) || hasNoShowAutomationHoldTag(contact)) {
       const skipReason = hasSignedTag(contact) ? "signed_tag" : hasNqTag(contact) ? "nq_tag" : "manual_hold_tag";
       await this.recordNoShowWebhook(payload, { resolvedContactId: contact.id, appointmentId: webhookAppointmentId, status: webhookStatus, result: `skipped_${skipReason}` });
       await this.recordDecision(contact, "skipped", `appointment_no_show_${skipReason}`, { trigger: "appointment_no_show" });
