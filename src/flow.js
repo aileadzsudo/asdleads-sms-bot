@@ -52,6 +52,7 @@ const HUMAN_ESCALATION_SLA_MINUTES = [5, 15, 30];
 const HUMAN_REPLY_TIMEOUT_MINUTES = 5;
 const HUMAN_CALL_TIMEOUT_MINUTES = 30;
 const INBOUND_BUFFER_SECONDS = 30;
+const URGENT_CALL_NOW_FASTLANE_WINDOW_MINUTES = 10;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
 const NO_SHOW_SAME_DAY_MINUTES = [10, 45, 120, 240, 360];
 const NO_SHOW_DAYS = [2, 3, 4, 5, 6, 7];
@@ -942,6 +943,13 @@ function hasInitialColdMessageBeenSent(contact = {}) {
       (contact.currentSequenceName === "initial_sms" && contact.currentSequenceDay === 1) ||
       (contact.lastOutboundMessage && /do you remember the date of the accident|what was the date of the accident/i.test(contact.lastOutboundMessage))
   );
+}
+
+function hasRecentUrgentCallNowAlert(contact = {}, windowMinutes = URGENT_CALL_NOW_FASTLANE_WINDOW_MINUTES) {
+  if (!contact?.urgentCallNowAlertSentAt) return false;
+  const sentAt = new Date(contact.urgentCallNowAlertSentAt).getTime();
+  if (!Number.isFinite(sentAt)) return false;
+  return Date.now() - sentAt <= windowMinutes * 60 * 1000;
 }
 
 function isPermanentSmsBlockError(error) {
@@ -2174,6 +2182,37 @@ class SmsBot {
     }
     await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
     if (resolution.duplicateConflict) return contact;
+    if (isCallNow(inbound.lastInboundMessage) && !hasRecentUrgentCallNowAlert(contact)) {
+      const alertContact = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.READY_FOR_CALL,
+        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+        humanEscalationStatus: true,
+        humanEscalationStage: "call_now_fastlane_alerted",
+        escalationReason: "call_now",
+        urgentCallNowAlertMessage: inbound.lastInboundMessage,
+        urgentCallNowAlertRequestedAt: new Date().toISOString()
+      });
+      try {
+        await slack.sendUrgentCallNow(this.config, alertContact);
+        contact = await this.store.upsertContact({
+          ...alertContact,
+          urgentCallNowAlertSentAt: new Date().toISOString()
+        });
+        await this.recordDecision(contact, "escalated", "call_now_fastlane_slack_alert_sent", {
+          trigger: "inbound_sms",
+          message: inbound.lastInboundMessage
+        });
+      } catch (error) {
+        await this.notifyBotError("Slack urgent call-now alert failed", {
+          Name: alertContact.name || "unknown",
+          Phone: alertContact.phone || "unknown",
+          "GHL contact": alertContact.ghlContactId || alertContact.id,
+          Error: error.message
+        });
+        contact = alertContact;
+      }
+    }
     const pendingInboundMessages = [...(contact.pendingInboundMessages || []), inbound.lastInboundMessage].filter(Boolean).slice(-6);
     contact = await this.store.upsertContact({
       ...contact,
@@ -3233,19 +3272,34 @@ class SmsBot {
       ...contact,
       engagementStatus: ENGAGEMENT.READY_FOR_CALL,
       humanEscalationStatus: true,
+      humanEscalationStage: contact.humanEscalationStage || "call_now",
+      escalationReason: "call_now",
       awaitingSpecificCallTime: false,
       ...clearCallTimeClarificationPatch()
       });
-      const slackPromise = slack.sendUrgentCallNow(this.config, updated).catch((error) =>
-        this.notifyBotError("Slack urgent call-now alert failed", {
-          Name: updated.name || "unknown",
-          Phone: updated.phone || "unknown",
-          "GHL contact": updated.ghlContactId || updated.id,
-          Error: error.message
-        })
-      );
+      const shouldSendSlackAlert = !hasRecentUrgentCallNowAlert(updated);
+      const slackPromise = shouldSendSlackAlert
+        ? slack
+            .sendUrgentCallNow(this.config, updated)
+            .catch((error) =>
+              this.notifyBotError("Slack urgent call-now alert failed", {
+                Name: updated.name || "unknown",
+                Phone: updated.phone || "unknown",
+                "GHL contact": updated.ghlContactId || updated.id,
+                Error: error.message
+              })
+            )
+        : Promise.resolve();
       const smsPromise = this.sendBotMessage(updated, qualificationTemplates.callNow, { bypassQuietHours: true });
       const results = await Promise.allSettled([slackPromise, smsPromise]);
+      if (shouldSendSlackAlert && results[0].status === "fulfilled") {
+        const latest = (await this.store.getContact(updated.id)) || updated;
+        await this.store.upsertContact({
+          ...latest,
+          urgentCallNowAlertSentAt: new Date().toISOString(),
+          urgentCallNowAlertMessage: text
+        });
+      }
       const sentResult = results[1];
       return sentResult.status === "fulfilled" && sentResult.value ? sentResult.value : updated;
     }

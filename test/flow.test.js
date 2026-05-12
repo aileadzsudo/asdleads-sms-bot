@@ -3909,6 +3909,47 @@ test("queued inbound SMS buffers quick consecutive messages before responding", 
   assert.equal(store.data.messages.filter((message) => message.contactId === "buffered-inbound" && message.direction === "inbound").length, 2);
 });
 
+test("queued call-now inbound sends Slack immediately but delays bot SMS until buffer", async () => {
+  const { bot, store } = makeBot();
+  const originalSendUrgentCallNow = slack.sendUrgentCallNow;
+  let urgentAlerts = 0;
+  slack.sendUrgentCallNow = async () => {
+    urgentAlerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "fastlane-call-now",
+      ghlContactId: "fastlane-call-now",
+      name: "Alexander",
+      phone: "+15550000180",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      lastOutboundMessage: "Are you open for a call now or later today?"
+    });
+
+    await bot.queueInboundSms({ contactId: "fastlane-call-now", message: "Yes call me now" });
+
+    assert.equal(urgentAlerts, 1);
+    assert.equal(store.getContact("fastlane-call-now").engagementStatus, ENGAGEMENT.READY_FOR_CALL);
+    assert.equal(
+      store.data.messages.filter((message) => message.contactId === "fastlane-call-now" && message.direction === "outbound").length,
+      0
+    );
+
+    const job = Object.values(store.data.jobs).find(
+      (item) => item.contactId === "fastlane-call-now" && item.type === "process_inbound_buffer" && item.status === "pending"
+    );
+    await bot.runDueJob(job);
+
+    assert.equal(urgentAlerts, 1);
+    assert.match(store.getContact("fastlane-call-now").lastOutboundMessage, /connecting you with a Specialist/i);
+  } finally {
+    slack.sendUrgentCallNow = originalSendUrgentCallNow;
+  }
+});
+
 test("injury context during call scheduling asks for a call time instead of escalating", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
