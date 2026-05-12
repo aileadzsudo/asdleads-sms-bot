@@ -54,8 +54,16 @@ const HUMAN_CALL_TIMEOUT_MINUTES = 30;
 const INBOUND_BUFFER_SECONDS = 30;
 const URGENT_CALL_NOW_FASTLANE_WINDOW_MINUTES = 10;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
-const NO_SHOW_SAME_DAY_MINUTES = [10, 45, 120, 240, 360];
-const NO_SHOW_DAYS = [2, 3, 4, 5, 6, 7];
+const NO_SHOW_SAME_DAY_MINUTES = [0, 15, 60, 120, 240, 360];
+const NO_SHOW_SAME_DAY_TEMPLATE_KEYS = [
+  "same_day_now",
+  "same_day_15",
+  "same_day_60",
+  "same_day_120",
+  "same_day_240",
+  "same_day_360"
+];
+const NO_SHOW_DAYS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 const BOT_SEQUENCE_JOB_TYPES = [
   "initial_sms",
   "cold_entry_check",
@@ -1212,6 +1220,14 @@ function isNoShowAppointmentStatus(status = "") {
   return /no[\s_-]?show|noshow|missed/.test(String(status || "").toLowerCase());
 }
 
+function isNoShowRecoveryContact(contact = {}) {
+  return (
+    contact.currentSequenceName === "appointment_no_show" ||
+    contact.engagementStatus === ENGAGEMENT.MISSED_CALL ||
+    Boolean(contact.appointmentNoShowAt)
+  );
+}
+
 function expectedAppointmentReminderRunAt(contact, templateKey, config) {
   if (!contact?.preferredCallTimeIso || !templateKey) return null;
   const appointment = new Date(contact.preferredCallTimeIso);
@@ -1460,6 +1476,25 @@ class SmsBot {
       console.error("decision log failed", error);
       return null;
     }
+  }
+
+  async recordNoShowWebhook(payload = {}, patch = {}) {
+    if (!this.store.getSetting || !this.store.setSetting) return null;
+    const entry = {
+      receivedAt: new Date().toISOString(),
+      payloadKeys: Object.keys(payload || {}).sort(),
+      resolvedContactId: patch.resolvedContactId || appointmentContactId(payload) || "",
+      appointmentId: patch.appointmentId || appointmentIdFromPayload(payload) || "",
+      status: patch.status || appointmentStatusFromPayload(payload) || "",
+      result: patch.result || "received",
+      error: patch.error || "",
+      jobCount: patch.jobCount ?? null
+    };
+    const setting = await this.store.getSetting("no_show_webhook_log");
+    const log = Array.isArray(setting?.value) ? setting.value : [];
+    await this.store.setSetting("last_no_show_webhook", entry);
+    await this.store.setSetting("no_show_webhook_log", [entry, ...log].slice(0, 100));
+    return entry;
   }
 
   async stopForDuplicateTerminalContact(contact, duplicate, reason, message) {
@@ -3277,6 +3312,15 @@ class SmsBot {
       awaitingSpecificCallTime: false,
       ...clearCallTimeClarificationPatch()
       });
+      if (isNoShowRecoveryContact(contact)) {
+        await this.store.cancelJobsForContact(updated.id, "no-show lead wants call now", (job) =>
+          ["missed_call_followup", "backup_no_show_reminder", "backup_time_timeout"].includes(job.type)
+        );
+        await this.recordDecision(updated, "escalated", "no_show_call_now_rescue", {
+          trigger: "inbound_sms",
+          message: text
+        });
+      }
       const shouldSendSlackAlert = !hasRecentUrgentCallNowAlert(updated);
       const slackPromise = shouldSendSlackAlert
         ? slack
@@ -3307,6 +3351,95 @@ class SmsBot {
     const endsAt = addMinutes(new Date(startsAt), 15).toISOString();
     const display = formatForContact(new Date(startsAt), contact, this.config);
     const inlineBackup = extractInlineBackupTime(text, { ...contact, preferredCallTimeIso: startsAt }, this.config, startsAt);
+    if (isNoShowRecoveryContact(contact)) {
+      let appointment = null;
+      const appointmentPayload = {
+        ...contact,
+        preferredCallTime: display,
+        preferredCallTimeIso: startsAt,
+        ...(inlineBackup || {}),
+        appointmentSource: "no_show_recovery",
+        previousAppointmentMissed: true
+      };
+      try {
+        appointment = await ghl.updateAppointment(
+          this.config,
+          appointmentPayload,
+          contact.appointmentId,
+          startsAt,
+          endsAt,
+          appointmentNotes(appointmentPayload, { reason: "Rebooked after no-show." })
+        );
+      } catch (error) {
+        await this.notifyBotError("GHL no-show rebook failed", {
+          Name: contact.name || "unknown",
+          Phone: contact.phone || "unknown",
+          "GHL contact": contact.ghlContactId || contact.id,
+          "Appointment ID": contact.appointmentId || "new",
+          "Requested start": startsAt,
+          Error: error.message
+        });
+        return this.escalate(contact, "no_show_rebook_failed", {
+          "Requested start": startsAt,
+          Error: error.message
+        });
+      }
+      let updated = await this.store.upsertContact({
+        ...appointmentPayload,
+        engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+        qualificationProgress: QUALIFICATION.CALL_BOOKED,
+        currentSequenceName: "no_show_rebooked",
+        currentSequenceDay: "",
+        currentSequenceSlot: "",
+        appointmentId: appointment.id || appointment.appointment?.id || contact.appointmentId || "",
+        appointmentSource: "no_show_recovery",
+        previousAppointmentMissed: true,
+        rebookedAfterNoShowAt: new Date().toISOString(),
+        awaitingBackupTime: false,
+        awaitingSpecificCallTime: false,
+        humanEscalationStatus: false,
+        humanEscalationStage: "no_show_rebooked",
+        escalationReason: "",
+        ...clearCallTimeClarificationPatch()
+      });
+      await this.store.cancelJobsForContact(updated.id, "no-show rebooked", (job) =>
+        ["missed_call_followup", "backup_no_show_reminder", "backup_time_timeout", "appointment_reminder"].includes(job.type)
+      );
+      try {
+        await ghl.addTags(this.config, updated, ["Rebooked After No Show"]);
+      } catch (error) {
+        await this.notifyBotError(
+          "GHL rebooked no-show tag failed",
+          {
+            Name: updated.name || "unknown",
+            Phone: updated.phone || "unknown",
+            "GHL contact": updated.ghlContactId || updated.id,
+            Error: error.message
+          },
+          { operationalOnly: true, level: "warn" }
+        );
+      }
+      const sent =
+        (await this.sendBotMessage(updated, render(qualificationTemplates.noShowRebookConfirmed, updated, { time: display }), {
+          bypassQuietHours: true
+        })) || updated;
+      updated = sent || (await this.store.getContact(updated.id)) || updated;
+      await this.notifyAppointmentBooked(updated, {
+        Title: "Call rebooked after no-show",
+        "Primary call time": updated.preferredCallTime,
+        "Backup time": updated.backupCallTime || "none",
+        Timezone: updated.timezone,
+        "GHL appointment": updated.appointmentId || "updated",
+        Action: "no_show_rebooked"
+      });
+      await this.scheduleAppointmentReminders(updated);
+      await this.recordDecision(updated, "booked", "no_show_rebooked", {
+        trigger: "inbound_sms",
+        message: text,
+        meta: { startsAt, appointmentId: updated.appointmentId || "" }
+      });
+      return this.store.getContact(updated.id) || updated;
+    }
     let appointment = null;
     try {
       appointment = await ghl.createAppointment(
@@ -3773,7 +3906,7 @@ class SmsBot {
     });
   }
 
-  async scheduleBackupNoShowReminders(contact) {
+  async scheduleBackupNoShowReminders(contact, options = {}) {
     await this.store.cancelJobsForContact(contact.id, "backup no-show reminders replaced", (job) => job.type === "backup_no_show_reminder");
     if (!contact.backupCallTime) return false;
     const targetIso = backupReminderTargetIso(contact, this.config);
@@ -3796,7 +3929,17 @@ class SmsBot {
       });
     };
 
-    await addReminder("afterPrimaryMissed", now);
+    if (options.sendInitialNow) {
+      await this.sendBotMessage(
+        contact,
+        render(backupReminderTemplates.afterPrimaryMissed, contact, {
+          primaryTime: contact.preferredCallTime || "",
+          backupTime: contact.backupCallTime || ""
+        })
+      );
+    } else {
+      await addReminder("afterPrimaryMissed", now);
+    }
     await addReminder("thirtyBefore", addMinutes(target, -30));
     await addReminder("fiveBefore", addMinutes(target, -5));
     return true;
@@ -3805,7 +3948,6 @@ class SmsBot {
   async scheduleNoShowFollowUps(contact, options = {}) {
     await this.store.cancelJobsForContact(contact.id, "no-show follow-ups replaced", (job) => job.type === "missed_call_followup");
     const now = new Date();
-    const sameDayKeys = ["sameDay10", "sameDay45", "sameDay120", "sameDay240", "sameDayLast"];
     for (const [index, minutes] of NO_SHOW_SAME_DAY_MINUTES.entries()) {
       if (options.skipEarlySameDay && index < 2) continue;
       const runAt = addMinutes(now, minutes);
@@ -3815,7 +3957,7 @@ class SmsBot {
         type: "missed_call_followup",
         contactId: contact.id,
         runAt: runAt.toISOString(),
-        payload: { templateGroup: "noShowTemplates", templateKey: sameDayKeys[index], sequence: "appointment_no_show" }
+        payload: { templateGroup: "noShowTemplates", templateKey: NO_SHOW_SAME_DAY_TEMPLATE_KEYS[index], sequence: "appointment_no_show" }
       });
     }
     for (const day of NO_SHOW_DAYS) {
@@ -3860,10 +4002,48 @@ class SmsBot {
 
   async markNoShow(payload) {
     const webhookContactId = appointmentContactId(payload);
+    const webhookAppointmentId = appointmentIdFromPayload(payload) || payload.appointmentId || payload.appointment_id || "";
+    const webhookStatus = appointmentStatusFromPayload(payload);
+    await this.recordNoShowWebhook(payload, {
+      resolvedContactId: webhookContactId,
+      appointmentId: webhookAppointmentId,
+      status: webhookStatus,
+      result: "received"
+    });
+    if (!webhookContactId && !payload.contactId && !payload.contact_id && !payload.ghlContactId && !payload.ghl_contact_id) {
+      await this.recordNoShowWebhook(payload, {
+        appointmentId: webhookAppointmentId,
+        status: webhookStatus,
+        result: "missing_contact_id",
+        error: "No contact id resolved from no-show payload"
+      });
+      await this.notifyBotError(
+        "GHL no-show webhook missing contact",
+        {
+          "Appointment ID": webhookAppointmentId || "unknown",
+          Status: webhookStatus || "unknown",
+          "Payload keys": Object.keys(payload || {}).sort().join(", ")
+        },
+        { operationalOnly: true, level: "warn" }
+      );
+      return null;
+    }
     const normalized = normalizePayload(webhookContactId ? { ...payload, contactId: webhookContactId } : payload, this.config);
     const existing = await this.store.getContact(normalized.id);
     const base = { ...(existing || {}), ...normalized };
-    const appointmentId = appointmentIdFromPayload(payload) || payload.appointmentId || payload.appointment_id || base.appointmentId || "";
+    let contact = await this.hydrateContactTags(base, { force: true });
+    if (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) {
+      await this.recordNoShowWebhook(payload, { resolvedContactId: contact.id, appointmentId: webhookAppointmentId, status: webhookStatus, result: "skipped_opted_out" });
+      await this.recordDecision(contact, "skipped", "appointment_no_show_opted_out", { trigger: "appointment_no_show" });
+      return contact;
+    }
+    if (hasSignedTag(contact) || hasNqTag(contact) || hasManualHumanHoldTag(contact)) {
+      const skipReason = hasSignedTag(contact) ? "signed_tag" : hasNqTag(contact) ? "nq_tag" : "manual_hold_tag";
+      await this.recordNoShowWebhook(payload, { resolvedContactId: contact.id, appointmentId: webhookAppointmentId, status: webhookStatus, result: `skipped_${skipReason}` });
+      await this.recordDecision(contact, "skipped", `appointment_no_show_${skipReason}`, { trigger: "appointment_no_show" });
+      return contact;
+    }
+    const appointmentId = webhookAppointmentId || base.appointmentId || "";
     const preferredCallTimeIso =
       appointmentStartIsoFromPayload(payload, base, this.config) ||
       normalized.preferredCallTimeIso ||
@@ -3878,21 +4058,61 @@ class SmsBot {
       payload.scheduledTime ||
       base.preferredCallTime ||
       (preferredCallTimeIso ? formatForContact(new Date(preferredCallTimeIso), base, this.config) : "");
-    let contact = await this.store.upsertContact({
-      ...base,
+    const noShowCount = Number(contact.noShowCount || 0) + 1;
+    contact = await this.store.upsertContact({
+      ...contact,
       engagementStatus: ENGAGEMENT.MISSED_CALL,
       qualificationProgress: QUALIFICATION.CALL_BOOKED,
       appointmentNoShowAt: new Date().toISOString(),
+      noShowCount,
+      repeatNoShow: noShowCount >= 2,
+      previousAppointmentMissed: true,
       preferredCallTime,
       preferredCallTimeIso,
       appointmentId,
-      currentSequenceName: "appointment_no_show"
+      currentSequenceName: "appointment_no_show",
+      currentSequenceDay: 1,
+      currentSequenceSlot: noShowCount >= 2 ? "repeat_no_show" : "no_show"
     });
+    await this.recordNoShowWebhook(payload, {
+      resolvedContactId: contact.id,
+      appointmentId,
+      status: webhookStatus,
+      result: noShowCount >= 2 ? "repeat_no_show_started" : "contact_resolved"
+    });
+    await this.recordDecision(contact, "missed", noShowCount >= 2 ? "repeat_no_show_started" : "appointment_no_show_started", {
+      trigger: "appointment_no_show",
+      meta: { appointmentId: contact.appointmentId || "", noShowCount }
+    });
+    if (noShowCount >= 3) {
+      await this.store.cancelJobsForContact(contact.id, "third no-show escalated");
+      await this.recordNoShowWebhook(payload, { resolvedContactId: contact.id, appointmentId, status: webhookStatus, result: "third_no_show_escalated" });
+      return this.escalate(contact, "third_no_show");
+    }
     await this.store.cancelJobsForContact(contact.id, "appointment marked no-show", (job) =>
-      ["appointment_reminder", "backup_time_timeout", "warm_followup", "enter_reengagement", "send_reengagement_template"].includes(job.type)
+      [
+        "appointment_reminder",
+        "backup_time_timeout",
+        "warm_followup",
+        "enter_reengagement",
+        "send_reengagement_template",
+        "initial_sms",
+        "cold_entry_check",
+        "send_cold_template",
+        "fresh_lead_followup",
+        "backup_no_show_reminder",
+        "missed_call_followup"
+      ].includes(job.type)
     );
-    const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(contact);
+    const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(contact, { sendInitialNow: true });
     await this.scheduleNoShowFollowUps(contact, { skipEarlySameDay: hasBackupReminderPlan });
+    const pendingNoShowJobs = this.store
+      .listJobs(contact.id)
+      .filter((job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)).length;
+    await this.recordDecision(contact, "repaired", "appointment_no_show_jobs_scheduled", {
+      trigger: "appointment_no_show",
+      meta: { appointmentId: contact.appointmentId || "", jobCount: pendingNoShowJobs, backupFlow: hasBackupReminderPlan }
+    });
     if (hasBackupReminderPlan) {
       const backupAlertKey = `${contact.appointmentId || contact.id}|${contact.backupCallTimeIso || contact.backupCallTime || ""}`;
       if (contact.noShowBackupAlertKey !== backupAlertKey) {
@@ -3911,14 +4131,12 @@ class SmsBot {
         }
       }
     }
-    contact = await this.store.upsertContact({
-      ...contact,
-      currentSequenceDay: 1,
-      currentSequenceSlot: "no_show"
-    });
-    await this.recordDecision(contact, "missed", "appointment_no_show", {
-      trigger: "appointment_no_show",
-      meta: { appointmentId: contact.appointmentId || "", backupCallTime: contact.backupCallTime || "" }
+    await this.recordNoShowWebhook(payload, {
+      resolvedContactId: contact.id,
+      appointmentId,
+      status: webhookStatus,
+      result: hasBackupReminderPlan ? "backup_flow_started" : "jobs_scheduled",
+      jobCount: pendingNoShowJobs
     });
     return contact;
   }

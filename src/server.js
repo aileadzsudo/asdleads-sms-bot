@@ -1808,8 +1808,10 @@ const server = http.createServer(async (req, res) => {
         send(res, 401, { ok: false, error: auth.reason });
         return;
       }
+      await bot.recordNoShowWebhook(payload, { result: "route_received" });
       const dedupe = await dedupeWebhook(req, payload, "appointment-no-show");
       if (dedupe.duplicate) {
+        await bot.recordNoShowWebhook(payload, { result: "duplicate_ignored" });
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
         return;
       }

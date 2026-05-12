@@ -3131,9 +3131,13 @@ test("appointment no-show schedules reschedule recovery without restarting quali
   assert.equal(contact.qualificationProgress, QUALIFICATION.CALL_BOOKED);
   assert.equal(contact.currentSequenceName, "appointment_no_show");
   assert.equal(jobs.some((job) => job.payload.templateGroup === "noShowTemplates"), true);
+  assert.equal(jobs.some((job) => job.payload.templateKey === "same_day_now"), true);
   assert.equal(jobs.some((job) => job.payload.templateKey === "day_2_am"), true);
+  assert.equal(jobs.some((job) => job.payload.templateKey === "day_14_pm"), true);
+  assert.equal(contact.noShowCount, 1);
+  assert.equal(store.getSetting("last_no_show_webhook").value.result, "jobs_scheduled");
 
-  const firstJob = jobs.find((job) => job.payload.templateKey === "sameDay10") || jobs[0];
+  const firstJob = jobs.find((job) => job.payload.templateKey === "same_day_now") || jobs[0];
   store.updateJob(firstJob.id, { runAt: new Date().toISOString() });
   await bot.runDueJob(store.data.jobs[firstJob.id]);
 
@@ -3163,13 +3167,9 @@ test("appointment no-show schedules backup time reminders when backup exists", a
     .filter((job) => job.contactId === "no-show-backup" && job.type === "backup_no_show_reminder" && job.status === "pending")
     .sort((a, b) => new Date(a.runAt) - new Date(b.runAt));
 
-  assert.equal(backupJobs.length >= 2, true);
-  assert.equal(backupJobs.some((job) => job.payload.templateKey === "afterPrimaryMissed"), true);
-
-  const firstJob = backupJobs.find((job) => job.payload.templateKey === "afterPrimaryMissed");
-  store.updateJob(firstJob.id, { runAt: new Date().toISOString() });
-  await bot.runDueJob(store.data.jobs[firstJob.id]);
-
+  assert.equal(backupJobs.length >= 1, true);
+  assert.equal(backupJobs.some((job) => job.payload.templateKey === "afterPrimaryMissed"), false);
+  assert.equal(backupJobs.some((job) => job.payload.templateKey === "thirtyBefore" || job.payload.templateKey === "fiveBefore"), true);
   assert.match(store.getContact("no-show-backup").lastOutboundMessage, /backup time/i);
   assert.match(store.getContact("no-show-backup").lastOutboundMessage, /4:00 PM/i);
 });
@@ -3202,7 +3202,8 @@ test("admin mark no-show preserves backup time and schedules backup reminders", 
   assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
   assert.equal(store.getContact("admin-no-show-backup").preferredCallTime, "Fri, May 8, 4:00 PM CST");
   assert.equal(store.getContact("admin-no-show-backup").backupCallTime, "Fri, May 8, 5:00 PM CST");
-  assert.equal(backupJobs.some((job) => job.payload.templateKey === "afterPrimaryMissed"), true);
+  assert.equal(store.getContact("admin-no-show-backup").lastOutboundMessage.includes("5:00 PM"), true);
+  assert.equal(backupJobs.some((job) => job.payload.templateKey === "afterPrimaryMissed"), false);
 });
 
 test("manual GHL appointment sync adopts appointment and schedules reminders", async () => {
@@ -3276,6 +3277,91 @@ test("GHL appointment no-show status preserves backup and starts no-show recover
   assert.equal(jobs.some((job) => job.contactId === "sync-no-show" && job.type === "backup_no_show_reminder" && job.status === "pending"), true);
   assert.equal(jobs.some((job) => job.contactId === "sync-no-show" && job.type === "missed_call_followup" && job.status === "pending"), true);
   assert.ok(store.getContact("sync-no-show").noShowBackupAlertSentAt);
+});
+
+test("no-show webhook with missing contact logs operational issue without crashing", async () => {
+  const { bot, store } = makeBot();
+  const contact = await bot.markNoShow({ appointmentId: "missing-contact-appt", status: "no_show" });
+
+  assert.equal(contact, null);
+  assert.equal(store.getSetting("last_no_show_webhook").value.result, "missing_contact_id");
+  const errors = store.getSetting("bot_error_log").value;
+  assert.equal(errors[0].title, "GHL no-show webhook missing contact");
+  assert.equal(errors[0].operationalOnly, true);
+});
+
+test("exact time reply during no-show recovery rebooks and schedules reminders", async () => {
+  const { bot, store } = makeBot();
+  const originalUpdateAppointment = ghl.updateAppointment;
+  const originalSendAppointmentBooked = slack.sendAppointmentBooked;
+  const updates = [];
+  const alerts = [];
+  ghl.updateAppointment = async (_config, _contact, appointmentId, startsAt, _endsAt, notes) => {
+    updates.push({ appointmentId, startsAt, notes });
+    return { id: appointmentId || "new-no-show-appt" };
+  };
+  slack.sendAppointmentBooked = async (_config, _contact, extra) => {
+    alerts.push(extra);
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "no-show-rebook",
+      ghlContactId: "no-show-rebook",
+      name: "Rebook",
+      phone: "+15550000082",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.MISSED_CALL,
+      qualificationProgress: QUALIFICATION.CALL_BOOKED,
+      currentSequenceName: "appointment_no_show",
+      appointmentNoShowAt: new Date().toISOString(),
+      appointmentId: "old-appt"
+    });
+    store.addJob({
+      type: "missed_call_followup",
+      contactId: "no-show-rebook",
+      runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      payload: { templateGroup: "noShowTemplates", templateKey: "same_day_60" }
+    });
+
+    const contact = await bot.handleCallTime(store.getContact("no-show-rebook"), "tomorrow at 11am");
+    const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "no-show-rebook");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+    assert.equal(contact.currentSequenceName, "no_show_rebooked");
+    assert.equal(contact.appointmentSource, "no_show_recovery");
+    assert.equal(contact.previousAppointmentMissed, true);
+    assert.ok(contact.rebookedAfterNoShowAt);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].appointmentId, "old-appt");
+    assert.equal(alerts[0].Title, "Call rebooked after no-show");
+    assert.match(store.getContact("no-show-rebook").lastOutboundMessage, /rebooked/i);
+    assert.equal(jobs.some((job) => job.type === "missed_call_followup" && job.status === "pending"), false);
+    assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
+  } finally {
+    ghl.updateAppointment = originalUpdateAppointment;
+    slack.sendAppointmentBooked = originalSendAppointmentBooked;
+  }
+});
+
+test("third no-show escalates instead of continuing blind automation", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "third-no-show",
+    ghlContactId: "third-no-show",
+    name: "Repeat",
+    phone: "+15550000083",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    noShowCount: 2
+  });
+
+  const contact = await bot.markNoShow({ contactId: "third-no-show", appointmentId: "repeat-appt", status: "no_show" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(contact.escalationReason, "third_no_show");
+  assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "third-no-show" && job.type === "missed_call_followup" && job.status === "pending"), false);
 });
 
 test("manual appointment edit after no-show replaces recovery with normal reminders", async () => {

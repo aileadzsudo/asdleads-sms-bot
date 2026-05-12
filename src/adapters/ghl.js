@@ -180,6 +180,15 @@ async function updateAppointment(config, contact, appointmentId, startsAt, endsA
   );
 }
 
+async function addTags(config, contact, tags = []) {
+  const contactId = contact?.ghlContactId || contact?.id;
+  const cleanTags = Array.isArray(tags) ? tags.filter(Boolean) : [tags].filter(Boolean);
+  if (!contactId || cleanTags.length === 0) {
+    return { ok: true, skipped: true, reason: "contactId or tags missing", contactId, tags: cleanTags };
+  }
+  return ghlRequest(config, `/contacts/${encodeURIComponent(contactId)}/tags`, { tags: cleanTags });
+}
+
 async function deleteAppointment(config, appointmentId) {
   if (!appointmentId) return { ok: true, skipped: true, reason: "appointmentId missing" };
   return ghlRequest(config, `/calendars/events/${encodeURIComponent(appointmentId)}`, {}, "DELETE");
@@ -197,6 +206,7 @@ module.exports = {
   sendSms,
   createAppointment,
   updateAppointment,
+  addTags,
   deleteAppointment,
   getContact,
   searchContactsByTag,

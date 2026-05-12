@@ -72,7 +72,7 @@ async function sendEscalatedInbound(config, contact) {
 
 async function sendAppointmentBooked(config, contact, extra = {}) {
   const lines = [
-    "*Call appointment booked*",
+    `*${extra.Title || "Call appointment booked"}*`,
     `Name: ${contact.name || "unknown"}`,
     `Phone: ${contact.phone || "unknown"}`,
     `Primary: ${extra["Primary call time"] || contact.preferredCallTime || "unknown"}`,
