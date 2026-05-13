@@ -1714,7 +1714,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "GET" && req.url.startsWith("/oauth/ghl/callback")) {
+    if (
+      req.method === "GET" &&
+      (req.url.startsWith("/oauth/ghl/callback") || req.url.startsWith("/oauth/asd/callback"))
+    ) {
       const url = new URL(req.url, config.publicBaseUrl || "http://127.0.0.1");
       const diagnostic = {
         receivedAt: new Date().toISOString(),
@@ -1744,7 +1747,7 @@ const server = http.createServer(async (req, res) => {
   <body>
     <main>
       <h1>Accident Support Desk app connected</h1>
-      <p>HighLevel redirected here successfully. You can close this tab and return to the Marketplace app setup.</p>
+      <p>The app redirected here successfully. You can close this tab and return to the app setup.</p>
       <p>Status: <code>${diagnostic.hasCode ? "authorization code received" : "callback reached"}</code></p>
     </main>
   </body>
@@ -1979,7 +1982,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && req.url === "/webhooks/ghl/human-outbound") {
+    if (req.method === "POST" && (req.url === "/webhooks/ghl/human-outbound" || req.url === "/webhooks/asd/human-outbound")) {
       const payload = await readJson(req);
       const auth = requireMarketplaceWebhookAuth(req, payload);
       if (!auth.ok) {
