@@ -1,6 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
 const { loadConfig } = require("./config");
 const { createStore } = require("./storeFactory");
@@ -31,6 +32,23 @@ let lastAutoAppliedBatchId = "";
 const JOB_RETRY_MINUTES = [5, 15, 60];
 const BACKFILL_DEFAULT_SPACING_MINUTES = 3;
 const BACKFILL_MAX_BATCH = 250;
+const GHL_SIGNATURE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAi2HR1srL4o18O8BRa7gVJY7G7bupbN3H9AwJrHCDiOg=
+-----END PUBLIC KEY-----`;
+const GHL_LEGACY_SIGNATURE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAokvo/r9tVgcfZ5DysOSC
+Frm602qYV0MaAiNnX9O8KxMbiyRKWeL9JpCpVpt4XHIcBOK4u3cLSqJGOLaPuXw6
+dO0t6Q/ZVdAV5Phz+ZtzPL16iCGeK9po6D6JHBpbi989mmzMryUnQJezlYJ3DVfB
+csedpinheNnyYeFXolrJvcsjDtfAeRx5ByHQmTnSdFUzuAnC9/GepgLT9SM4nCpv
+uxmZMxrJt5Rw+VUaQ9B8JSvbMPpez4peKaJPZHBbU3OdeCVx5klVXXZQGNHOs8gF
+3kvoV5rTnXV0IknLBXlcKKAQLZcY/Q9rG6Ifi9c+5vqlvHPCUJFT5XUGG5RKgOKU
+J062fRtN+rLYZUV+BjafxQauvC8wSWeYja63VSUruvmNj8xkx2zE/Juc+yjLjTXp
+IocmaiFeAO6fUtNjDeFVkhf5LNb59vECyrHD2SQIrhgXpO4Q3dVNA5rw576PwTzN
+h/AMfHKIjE4xQA1SZuYJmNnmVZLIZBlQAF9Ntd03rfadZ+yDiOXCCs9FkHibELhC
+HULgCsnuDJHcrGNd5/Ddm5hxGQ0ASitgHeMZ0kcIOwKDOzOU53lDza6/Y09T7sYJ
+PQe7z0cvj7aE4B+Ax1ZoZGPzpJlZtGXCsu9aTEGEnKzmsFqwcSsnw3JB31IGKAyk
+T1hhTiaCeIY/OwwwNUY2yvcCAwEAAQ==
+-----END PUBLIC KEY-----`;
 
 function isPermanentSmsBlock(error) {
   return /DND is active for SMS|do not disturb|opted out|unsubscribed/i.test(error?.message || "");
@@ -51,7 +69,11 @@ async function readJson(req) {
   for await (const chunk of req) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return {};
-  return JSON.parse(raw);
+  const parsed = JSON.parse(raw);
+  if (parsed && typeof parsed === "object") {
+    Object.defineProperty(parsed, "__rawBody", { value: raw, enumerable: false });
+  }
+  return parsed;
 }
 
 function requireWebhookSecret(req, payload = {}) {
@@ -69,6 +91,45 @@ function requireWebhookSecret(req, payload = {}) {
     payload.customData?.["x-asdleads-secret"];
   if (provided === config.webhookSecret) return { ok: true };
   return { ok: false, reason: "invalid webhook secret" };
+}
+
+function verifyGhlWebhookSignature(req, payload = {}) {
+  const raw = payload.__rawBody || "";
+  if (!raw) return { ok: false, reason: "missing raw body" };
+  const signature = req.headers["x-ghl-signature"];
+  const legacySignature = req.headers["x-wh-signature"];
+  if (signature) {
+    try {
+      const ok = crypto.verify(
+        null,
+        Buffer.from(raw, "utf8"),
+        GHL_SIGNATURE_PUBLIC_KEY,
+        Buffer.from(String(signature), "base64")
+      );
+      return ok ? { ok: true } : { ok: false, reason: "invalid x-ghl-signature" };
+    } catch (error) {
+      return { ok: false, reason: `x-ghl-signature error: ${error.message}` };
+    }
+  }
+  if (legacySignature) {
+    try {
+      const verifier = crypto.createVerify("SHA256");
+      verifier.update(raw);
+      const ok = verifier.verify(GHL_LEGACY_SIGNATURE_PUBLIC_KEY, String(legacySignature), "base64");
+      return ok ? { ok: true } : { ok: false, reason: "invalid x-wh-signature" };
+    } catch (error) {
+      return { ok: false, reason: `x-wh-signature error: ${error.message}` };
+    }
+  }
+  return { ok: false, reason: "missing GHL signature" };
+}
+
+function requireMarketplaceWebhookAuth(req, payload = {}) {
+  const secretAuth = requireWebhookSecret(req, payload);
+  if (secretAuth.ok) return secretAuth;
+  const signatureAuth = verifyGhlWebhookSignature(req, payload);
+  if (signatureAuth.ok) return signatureAuth;
+  return { ok: false, reason: `${secretAuth.reason}; ${signatureAuth.reason}` };
 }
 
 function requireAdmin(req) {
@@ -1257,6 +1318,11 @@ function send(res, status, body) {
   res.end(JSON.stringify(body, null, 2));
 }
 
+function sendHtml(res, status, body) {
+  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(body);
+}
+
 function sendFile(res, filePath, contentType) {
   if (!fs.existsSync(filePath)) {
     send(res, 404, { ok: false, error: "file not found" });
@@ -1648,6 +1714,45 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && req.url.startsWith("/oauth/ghl/callback")) {
+      const url = new URL(req.url, config.publicBaseUrl || "http://127.0.0.1");
+      const diagnostic = {
+        receivedAt: new Date().toISOString(),
+        hasCode: Boolean(url.searchParams.get("code")),
+        locationId: url.searchParams.get("locationId") || url.searchParams.get("location_id") || "",
+        companyId: url.searchParams.get("companyId") || url.searchParams.get("company_id") || "",
+        state: url.searchParams.get("state") || ""
+      };
+      if (store?.setSetting) await store.setSetting("last_ghl_oauth_callback", diagnostic);
+      sendHtml(
+        res,
+        200,
+        `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Accident Support Desk connected</title>
+    <style>
+      body { font-family: Arial, sans-serif; background: #f6f7f9; color: #182230; margin: 0; padding: 40px; }
+      main { max-width: 680px; margin: 0 auto; background: white; border: 1px solid #d8dee8; border-radius: 12px; padding: 28px; }
+      h1 { margin: 0 0 12px; font-size: 24px; }
+      p { line-height: 1.5; }
+      code { background: #eef2f6; padding: 3px 6px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Accident Support Desk app connected</h1>
+      <p>HighLevel redirected here successfully. You can close this tab and return to the Marketplace app setup.</p>
+      <p>Status: <code>${diagnostic.hasCode ? "authorization code received" : "callback reached"}</code></p>
+    </main>
+  </body>
+</html>`
+      );
+      return;
+    }
+
     if (req.method === "GET" && req.url === "/review") {
       sendFile(res, path.join(publicDir, "review.html"), "text/html; charset=utf-8");
       return;
@@ -1876,9 +1981,20 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && req.url === "/webhooks/ghl/human-outbound") {
       const payload = await readJson(req);
-      const auth = requireWebhookSecret(req, payload);
+      const auth = requireMarketplaceWebhookAuth(req, payload);
       if (!auth.ok) {
         send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      if (payload.type && payload.type !== "OutboundMessage") {
+        if (store?.setSetting) {
+          await store.setSetting("last_ghl_marketplace_webhook_ignored", {
+            receivedAt: new Date().toISOString(),
+            type: payload.type,
+            payloadKeys: Object.keys(payload || {}).sort()
+          });
+        }
+        send(res, 200, { ok: true, ignored: true, reason: "not an OutboundMessage event" });
         return;
       }
       const dedupe = await dedupeWebhook(req, payload, "human-outbound");
