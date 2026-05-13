@@ -1914,7 +1914,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && ["/webhooks/ghl/no-show", "/webhooks/ghl/appointment-no-show"].includes(req.url)) {
+    if (
+      req.method === "POST" &&
+      ["/webhooks/ghl/no-show", "/webhooks/ghl/appointment-no-show", "/webhooks/asd/no-show", "/webhooks/asd/appointment-no-show"].includes(req.url)
+    ) {
       const payload = await readJson(req);
       const auth = requireWebhookSecret(req, payload);
       if (!auth.ok) {
