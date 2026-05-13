@@ -672,6 +672,15 @@ function canHumanOutboundBookAppointment(contact, text, config) {
   return parsed?.type === "scheduled";
 }
 
+function isHumanOutboundSmsPayload(payload = {}) {
+  const eventType = textValue(payload.type).toLowerCase();
+  const messageType = textValue(payload.messageType || payload.messageTypeString).toLowerCase();
+  if (!eventType && !messageType) return true;
+  const isMarketplaceOutbound = eventType === "outboundmessage";
+  if (!isMarketplaceOutbound && !messageType) return true;
+  return messageType === "sms" || messageType === "type_sms" || messageType.includes("sms");
+}
+
 function canApplyAdminPause(controlMeta = {}) {
   return ["admin_contact_action", "admin_bulk_contact_action", "dashboard_contact_shortcut", "local_tester"].includes(
     controlMeta.source
@@ -3595,6 +3604,13 @@ class SmsBot {
     const normalized = normalizePayload(payload, this.config);
     const contact = await this.store.getContact(normalized.id);
     if (!contact) return null;
+    if (!isHumanOutboundSmsPayload(payload)) {
+      await this.recordDecision(contact, "ignored", "human_outbound_non_sms_ignored", {
+        trigger: "human_outbound",
+        messageType: payload.messageType || payload.messageTypeString || payload.type || ""
+      });
+      return contact;
+    }
 
     const now = new Date().toISOString();
     const message = textValue(normalized.lastInboundMessage || payload.message || payload.body || payload.text) || "Manual human SMS sent";

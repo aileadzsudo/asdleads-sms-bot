@@ -2376,6 +2376,44 @@ test("manual human SMS returns lead to bot after timeout if lead stays quiet", a
   );
 });
 
+test("human outbound webhook ignores non-SMS marketplace events", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "human-call-outbound",
+    ghlContactId: "human-call-outbound",
+    name: "Human Call",
+    phone: "+15550000242",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_working",
+    automationPaused: true,
+    automationPauseReason: "human_working"
+  });
+
+  await bot.handleHumanOutbound({
+    type: "OutboundMessage",
+    contactId: "human-call-outbound",
+    messageType: "CALL",
+    messageTypeString: "TYPE_CALL",
+    callDuration: 42,
+    callStatus: "completed"
+  });
+
+  assert.equal(
+    Object.values(store.data.messages).some(
+      (message) => message.contactId === "human-call-outbound" && message.direction === "human_outbound"
+    ),
+    false
+  );
+  assert.equal(
+    Object.values(store.data.jobs).some(
+      (job) => job.contactId === "human-call-outbound" && job.type === "human_reply_timeout" && job.status === "pending"
+    ),
+    false
+  );
+});
+
 test("human timeout uses a softer re-engagement message", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
