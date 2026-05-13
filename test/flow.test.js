@@ -2414,6 +2414,36 @@ test("human outbound webhook ignores non-SMS marketplace events", async () => {
   );
 });
 
+test("human outbound webhook ignores the bot's own outbound SMS echo", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "bot-echo",
+    ghlContactId: "bot-echo",
+    name: "Bot Echo",
+    phone: "+15550000243",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_MEDICAL,
+    lastOutboundMessage: "Have you needed to see any doctors or receive any medical treatment after the accident?",
+    lastOutboundTimestamp: new Date().toISOString()
+  });
+
+  await bot.handleHumanOutbound({
+    type: "OutboundMessage",
+    contactId: "bot-echo",
+    messageType: "SMS",
+    messageTypeString: "TYPE_SMS",
+    body: "Have you needed to see any doctors or receive any medical treatment after the accident?"
+  });
+
+  assert.equal(
+    Object.values(store.data.messages).some(
+      (message) => message.contactId === "bot-echo" && message.direction === "human_outbound"
+    ),
+    false
+  );
+  assert.equal(store.getContact("bot-echo").automationPaused, undefined);
+});
+
 test("human timeout uses a softer re-engagement message", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

@@ -681,6 +681,15 @@ function isHumanOutboundSmsPayload(payload = {}) {
   return messageType === "sms" || messageType === "type_sms" || messageType.includes("sms");
 }
 
+function isLikelyBotOutboundEcho(contact = {}, text = "") {
+  const body = textValue(text).toLowerCase().replace(/\s+/g, " ").trim();
+  const lastBot = textValue(contact.lastOutboundMessage || "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!body || !lastBot || body !== lastBot) return false;
+  const lastBotAt = contact.lastOutboundTimestamp ? new Date(contact.lastOutboundTimestamp).getTime() : 0;
+  if (!lastBotAt || Number.isNaN(lastBotAt)) return true;
+  return Date.now() - lastBotAt < 15 * 60 * 1000;
+}
+
 function canApplyAdminPause(controlMeta = {}) {
   return ["admin_contact_action", "admin_bulk_contact_action", "dashboard_contact_shortcut", "local_tester"].includes(
     controlMeta.source
@@ -3614,6 +3623,13 @@ class SmsBot {
 
     const now = new Date().toISOString();
     const message = textValue(normalized.lastInboundMessage || payload.message || payload.body || payload.text) || "Manual human SMS sent";
+    if (isLikelyBotOutboundEcho(contact, message)) {
+      await this.recordDecision(contact, "ignored", "human_outbound_bot_echo_ignored", {
+        trigger: "human_outbound",
+        message
+      });
+      return contact;
+    }
     await this.cancelHumanEscalationWatchdog(contact.id, "human sent manual SMS");
     await this.store.cancelJobsForContact(contact.id, "human took over");
     await this.store.addMessage({
