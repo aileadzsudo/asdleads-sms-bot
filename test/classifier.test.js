@@ -33,6 +33,7 @@ test("parses only the answer expected by current qualification progress", () => 
     "not_at_fault"
   );
   assert.equal(parseExpectedAnswer(QUALIFICATION.NEEDS_MEDICAL, "I went to urgent care").value, "yes");
+  assert.equal(parseExpectedAnswer(QUALIFICATION.NEEDS_MEDICAL, "Not really, I just hit my knee").value, "no");
   assert.equal(parseExpectedAnswer(QUALIFICATION.NEEDS_FAULT, "who is this"), null);
 });
 

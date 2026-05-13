@@ -25,6 +25,7 @@ const {
   escalationReason,
   classifyHumanContextIntent,
   parseAccidentDate,
+  parseMedicalAnswer,
   parseCallTime,
   parseExpectedAnswer,
   isCallNow,
@@ -76,6 +77,7 @@ const BOT_SEQUENCE_JOB_TYPES = [
   "send_cold_template",
   "fresh_lead_followup",
   "warm_followup",
+  "relative_call_time_autobook",
   "enter_reengagement",
   "send_reengagement_template",
   "appointment_reminder",
@@ -89,6 +91,7 @@ const HUMAN_ESCALATION_BLOCKED_JOB_TYPES = [
   "fresh_lead_followup",
   "send_cold_template",
   "warm_followup",
+  "relative_call_time_autobook",
   "enter_reengagement",
   "send_reengagement_template",
   "missed_call_followup",
@@ -1248,6 +1251,30 @@ function relativeTimeClarification(parsed, contact, config) {
   const first = roundToQuarterHour(new Date(parsed.relativeTarget));
   const second = addMinutes(first, 15);
   return `Just to confirm, do you mean around ${formatTimeOnly(first, contact, config)} or ${formatTimeOnly(second, contact, config)}? Reply with the exact time that works best.`;
+}
+
+function relativeTimeAutobookTarget(parsed) {
+  if (!parsed?.relativeTarget) return null;
+  const target = roundToQuarterHour(new Date(parsed.relativeTarget));
+  return Number.isNaN(target.getTime()) ? null : target;
+}
+
+function relativeTimeAutobookRunAt(target, now = new Date()) {
+  if (target.getTime() - now.getTime() <= 20 * 60 * 1000) return addMinutes(now, 1);
+  const fiveMinutesFromNow = addMinutes(now, 5);
+  const tenMinutesBeforeTarget = addMinutes(target, -10);
+  if (tenMinutesBeforeTarget > now && tenMinutesBeforeTarget < fiveMinutesFromNow) return tenMinutesBeforeTarget;
+  return fiveMinutesFromNow;
+}
+
+function manualAppointmentConfirmation(contact, display) {
+  if (contact.appointmentType === "contract_review") {
+    return `Got it, your contract review call is set for ${display} 📅 Please keep your phone close so the team can walk you through the agreement.`;
+  }
+  if (contact.appointmentType === "qualified_follow_up") {
+    return `Got it, your follow-up call is set for ${display} 📅 Our Specialist will call from a local number, so please keep your phone close.`;
+  }
+  return `Got it, your Specialist call is set for ${display} 📅 They will call from a local number, so please keep your phone close.`;
 }
 
 function appointmentNotes(contact, extra = {}) {
@@ -2884,7 +2911,15 @@ class SmsBot {
     }
     if (resolution.duplicateConflict) return contact;
     await this.store.cancelJobsForContact(contact.id, "contact replied", (job) =>
-      ["fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "cold_entry_check"].includes(job.type)
+      [
+        "fresh_lead_followup",
+        "send_cold_template",
+        "warm_followup",
+        "relative_call_time_autobook",
+        "enter_reengagement",
+        "send_reengagement_template",
+        "cold_entry_check"
+      ].includes(job.type)
     );
     if (contact.humanEscalationStatus) {
       await this.store.cancelJobsForContact(contact.id, "human escalation active", (job) =>
@@ -2943,6 +2978,22 @@ class SmsBot {
     let dateAnswer = parseAccidentDate(inbound.lastInboundMessage);
     if (dateAnswer && !contact.accidentDate) {
       contact = await this.store.upsertContact({ ...contact, accidentDate: dateAnswer.value });
+    }
+    const earlyHumanContext = classifyHumanContextIntent(inbound.lastInboundMessage, contact.qualificationProgress);
+    const canCaptureIncidentalMedical =
+      !earlyHumanContext &&
+      (contact.qualificationProgress === QUALIFICATION.NEEDS_MEDICAL ||
+        /\b(doctor|hospital|emergency|urgent care|chiro|chiropractor|therapy|treatment|medical|clinic|ambulance|mri|xray|x-ray|meds|medication|prescription|sprain|whiplash|went to|seen|saw)\b/i.test(
+          inbound.lastInboundMessage
+        ));
+    const incidentalMedicalAnswer =
+      !contact.medicalTreatmentAnswer && canCaptureIncidentalMedical ? parseMedicalAnswer(inbound.lastInboundMessage) : null;
+    if (incidentalMedicalAnswer) {
+      contact = await this.store.upsertContact({
+        ...contact,
+        medicalTreatmentAnswer: incidentalMedicalAnswer.value,
+        incidentalMedicalAnswerAt: new Date().toISOString()
+      });
     }
     const answeredColdDateQuestion = Boolean(dateAnswer && canTreatDateAsColdOutreachAnswer(contact));
     const expectedAnswerBeforeFirmIssue = parseExpectedAnswer(contact.qualificationProgress, inbound.lastInboundMessage);
@@ -3972,9 +4023,22 @@ class SmsBot {
       nextContact = await this.store.upsertContact({
         ...contact,
         faultAnswer: answer.value,
-        qualificationProgress: QUALIFICATION.NEEDS_MEDICAL
+        qualificationProgress: contact.medicalTreatmentAnswer ? QUALIFICATION.NEEDS_CALL_TIME : QUALIFICATION.NEEDS_MEDICAL
       });
-      nextMessage = qualificationTemplates.medical;
+      if (nextContact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME) {
+        const recentCallTime = await this.recentCallTimeCandidate(nextContact);
+        if (recentCallTime) {
+          nextContact = await this.store.upsertContact({
+            ...nextContact,
+            recoveredCallTimeMessage: recentCallTime.message,
+            recoveredCallTimeAt: new Date().toISOString()
+          });
+          return this.handleCallTime(nextContact, recentCallTime.message);
+        }
+        nextMessage = callAskTemplateForTime(nextContact, this.config);
+      } else {
+        nextMessage = qualificationTemplates.medical;
+      }
     } else if (contact.qualificationProgress === QUALIFICATION.NEEDS_MEDICAL) {
       nextContact = await this.store.upsertContact({
         ...contact,
@@ -4083,6 +4147,7 @@ class SmsBot {
       const contextPatch = callTimeClarificationPatch(contact, parsed, text, "booking");
       contact = await this.store.upsertContact({ ...contact, awaitingSpecificCallTime: true, ...contextPatch });
       const normalizedText = normalize(text);
+      const autobookTarget = relativeTimeAutobookTarget(parsed);
       let question = relativeTimeClarification(parsed, contact, this.config) || "What specific time works best for your call today or tomorrow?";
       const inheritedDay = contextPatch.callTimeClarificationDay || contact.callTimeClarificationDay;
       const inheritedDayLabel = contextPatch.callTimeClarificationDayLabel || contact.callTimeClarificationDayLabel;
@@ -4105,6 +4170,28 @@ class SmsBot {
       }
       const sent = await this.sendBotMessage(contact, question, { bypassQuietHours: true });
       const latest = sent || (await this.store.getContact(contact.id)) || contact;
+      if (autobookTarget) {
+        await this.store.cancelJobsForContact(latest.id, "relative call time clarification scheduled", (job) =>
+          ["warm_followup", "enter_reengagement", "relative_call_time_autobook"].includes(job.type)
+        );
+        await this.store.addJob({
+          type: "relative_call_time_autobook",
+          contactId: latest.id,
+          runAt: relativeTimeAutobookRunAt(autobookTarget).toISOString(),
+          payload: {
+            targetIso: autobookTarget.toISOString(),
+            expectedProgress: QUALIFICATION.NEEDS_CALL_TIME,
+            baseOutboundTimestamp: latest.lastOutboundTimestamp || new Date().toISOString(),
+            sourceMessage: text
+          }
+        });
+        await this.recordDecision(latest, "queued", "relative_call_time_autobook_after_one_clarifier", {
+          trigger: "inbound_sms",
+          message: text,
+          meta: { targetIso: autobookTarget.toISOString() }
+        });
+        return latest;
+      }
       await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
       return latest;
     }
@@ -5173,13 +5260,24 @@ class SmsBot {
     const display = formatForContact(new Date(startsAt), contact, this.config);
     const oldAppointmentId = contact.appointmentId || "";
     const oldStartsAt = contact.preferredCallTimeIso || "";
+    const explicitBackupAsk = ["true", "yes", "1"].includes(
+      normalize(
+        payload.askBackup ||
+          payload.requestBackup ||
+          payload.botAskBackup ||
+          payload.customData?.askBackup ||
+          payload.customData?.requestBackup ||
+          ""
+      )
+    );
     const shouldAskBackupForManualSync =
+      explicitBackupAsk &&
       appointmentType === "initial" &&
       !oldAppointmentId &&
       !contact.awaitingBackupTime &&
       !contact.bookingAlertSentAt &&
       new Date(startsAt) > addMinutes(new Date(), 20);
-    const updated = await this.store.upsertContact({
+    let updated = await this.store.upsertContact({
       ...contact,
       engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
       qualificationProgress: QUALIFICATION.COMPLETE,
@@ -5257,6 +5355,22 @@ class SmsBot {
         payload: { appointmentIso: startsAt, source: "manual_appointment_sync" }
       });
       return awaitingBackup;
+    }
+
+    const manualConfirmationAlreadySent = updated.manualAppointmentConfirmationSentFor === startsAt;
+    const shouldSendManualConfirmation =
+      !manualConfirmationAlreadySent && !updated.awaitingBackupTime && (startsAt !== oldStartsAt || appointmentId !== oldAppointmentId);
+    if (shouldSendManualConfirmation) {
+      const confirmed = await this.sendBotMessage(updated, manualAppointmentConfirmation(updated, display), {
+        bypassQuietHours: true,
+        templateGroup: "manualAppointmentConfirmation",
+        templateKey: updated.appointmentType || "initial"
+      });
+      updated = await this.store.upsertContact({
+        ...(confirmed || updated),
+        manualAppointmentConfirmationSentFor: startsAt,
+        manualAppointmentConfirmationSentAt: new Date().toISOString()
+      });
     }
 
     const suppressAppointmentAlert = suppressAppointmentAlertFromPayload(payload);
@@ -5859,6 +5973,47 @@ class SmsBot {
           ...rendered.meta
         });
       }
+    }
+    if (job.type === "relative_call_time_autobook") {
+      const fresh = await this.store.getContact(job.contactId);
+      const target = new Date(job.payload?.targetIso || "");
+      if (
+        !fresh ||
+        fresh.qualificationProgress !== QUALIFICATION.NEEDS_CALL_TIME ||
+        !fresh.awaitingSpecificCallTime ||
+        Number.isNaN(target.getTime()) ||
+        fresh.preferredCallTimeIso
+      ) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "relative_autobook_not_applicable"
+        });
+        if (fresh) await this.recordDecision(fresh, "skipped", "relative_autobook_not_applicable", { jobId: job.id, jobType: job.type });
+        return;
+      }
+      if (
+        job.payload?.baseOutboundTimestamp &&
+        fresh.lastResponseTimestamp &&
+        new Date(fresh.lastResponseTimestamp) > new Date(job.payload.baseOutboundTimestamp)
+      ) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "relative_autobook_contact_replied"
+        });
+        await this.recordDecision(fresh, "skipped", "relative_autobook_contact_replied", { jobId: job.id, jobType: job.type });
+        return;
+      }
+      const timeZone = fresh.timezone || this.config.texting.defaultTimezone;
+      const timeText = formatTimeOnly(target, fresh, this.config);
+      const bookingText = sameLocalDay(target, new Date(), timeZone) ? `today at ${timeText}` : `tomorrow at ${timeText}`;
+      await this.recordDecision(fresh, "booked", "relative_autobook_after_no_clarification_reply", {
+        jobId: job.id,
+        jobType: job.type,
+        meta: { targetIso: target.toISOString(), sourceMessage: job.payload?.sourceMessage || "" }
+      });
+      await this.handleCallTime(fresh, bookingText);
     }
     if (job.type === "enter_reengagement") {
       const fresh = await this.store.getContact(job.contactId);

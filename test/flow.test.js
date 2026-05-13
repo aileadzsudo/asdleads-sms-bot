@@ -3581,11 +3581,74 @@ test("manual GHL appointment sync adopts appointment and schedules reminders", a
   assert.equal(contact.qualificationProgress, QUALIFICATION.COMPLETE);
   assert.equal(contact.appointmentId, "manual-appt-event");
   assert.equal(contact.appointmentSource, "ghl_manual");
-  assert.equal(contact.awaitingBackupTime, true);
-  assert.match(store.getContact("manual-appt").lastOutboundMessage, /backup time/i);
+  assert.equal(contact.awaitingBackupTime, false);
+  assert.match(store.getContact("manual-appt").lastOutboundMessage, /Specialist call is set/i);
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "send_cold_template" && job.status === "pending"), false);
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "appointment_reminder" && job.status === "pending"), true);
-  assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "backup_time_timeout" && job.status === "pending"), true);
+  assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "backup_time_timeout" && job.status === "pending"), false);
+});
+
+test("date replies can also save medical treatment details for later qualification memory", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "date-medical",
+    ghlContactId: "date-medical",
+    name: "Deanna",
+    phone: "+15550000951",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  await bot.handleInboundSms({
+    contactId: "date-medical",
+    message: "Jan 14 2026 n yes went to emergency room for xrays"
+  });
+  let contact = store.getContact("date-medical");
+  assert.equal(contact.accidentDate, "jan 14 2026");
+  assert.equal(contact.medicalTreatmentAnswer, "yes");
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_FAULT);
+  assert.match(contact.lastOutboundMessage, /at fault/i);
+
+  await bot.handleInboundSms({ contactId: "date-medical", message: "The other driver was at fault" });
+  contact = store.getContact("date-medical");
+  assert.equal(contact.faultAnswer, "not_at_fault");
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.match(contact.lastOutboundMessage, /call/i);
+  assert.doesNotMatch(contact.lastOutboundMessage, /doctors|medical treatment/i);
+});
+
+test("relative call time asks once, then auto-books if the lead does not answer", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "relative-auto-book",
+    ghlContactId: "relative-auto-book",
+    name: "Maria",
+    phone: "+15550000952",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+
+  await bot.handleInboundSms({ contactId: "relative-auto-book", message: "In an hour you can call" });
+  let contact = store.getContact("relative-auto-book");
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.match(contact.lastOutboundMessage, /Just to confirm/i);
+  assert.equal(
+    Object.values(store.data.jobs).some((job) => job.contactId === "relative-auto-book" && job.type === "warm_followup" && job.status === "pending"),
+    false
+  );
+  const job = Object.values(store.data.jobs).find(
+    (item) => item.contactId === "relative-auto-book" && item.type === "relative_call_time_autobook" && item.status === "pending"
+  );
+  assert.ok(job);
+  await store.updateJob(job.id, { runAt: new Date().toISOString() });
+  await bot.runDueJob(store.data.jobs[job.id]);
+
+  contact = store.getContact("relative-auto-book");
+  assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+  assert.ok(contact.preferredCallTimeIso);
+  assert.match(contact.lastOutboundMessage, /backup time|locked in/i);
 });
 
 test("contract-sent contact still syncs manual contract review appointment", async () => {
