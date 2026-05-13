@@ -1498,6 +1498,7 @@ async function integrationStatus() {
     safeJson("OpenAI batch status", () => runPythonJson("llm_batch_examples.py", ["status"])),
     safeJson("Slack auth", () => slackAuthStatus())
   ]);
+  const lastHumanOutboundWebhook = store?.getSetting ? await store.getSetting("last_human_outbound_webhook") : null;
   return {
     ok: true,
     checkedAt: new Date().toISOString(),
@@ -1518,7 +1519,8 @@ async function integrationStatus() {
       ghl,
       openaiBatch,
       slack
-    }
+    },
+    lastHumanOutboundWebhook: lastHumanOutboundWebhook?.value || null
   };
 }
 
@@ -1984,8 +1986,27 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && (req.url === "/webhooks/ghl/human-outbound" || req.url === "/webhooks/asd/human-outbound")) {
       const payload = await readJson(req);
+      const baseWebhookDiagnostic = {
+        receivedAt: new Date().toISOString(),
+        path: req.url,
+        type: payload.type || payload.messageType || payload.messageTypeString || "",
+        payloadKeys: Object.keys(payload || {}).sort()
+      };
+      if (store?.setSetting) {
+        await store.setSetting("last_human_outbound_webhook", {
+          ...baseWebhookDiagnostic,
+          stage: "received"
+        });
+      }
       const auth = requireMarketplaceWebhookAuth(req, payload);
       if (!auth.ok) {
+        if (store?.setSetting) {
+          await store.setSetting("last_human_outbound_webhook", {
+            ...baseWebhookDiagnostic,
+            stage: "unauthorized",
+            error: auth.reason
+          });
+        }
         send(res, 401, { ok: false, error: auth.reason });
         return;
       }
@@ -1996,16 +2017,36 @@ const server = http.createServer(async (req, res) => {
             type: payload.type,
             payloadKeys: Object.keys(payload || {}).sort()
           });
+          await store.setSetting("last_human_outbound_webhook", {
+            ...baseWebhookDiagnostic,
+            stage: "ignored",
+            reason: "not an OutboundMessage event"
+          });
         }
         send(res, 200, { ok: true, ignored: true, reason: "not an OutboundMessage event" });
         return;
       }
       const dedupe = await dedupeWebhook(req, payload, "human-outbound");
       if (dedupe.duplicate) {
+        if (store?.setSetting) {
+          await store.setSetting("last_human_outbound_webhook", {
+            ...baseWebhookDiagnostic,
+            stage: "duplicate",
+            eventId: dedupe.id
+          });
+        }
         send(res, 200, { ok: true, duplicate: true, eventId: dedupe.id });
         return;
       }
       const contact = await bot.handleHumanOutbound(payload);
+      if (store?.setSetting) {
+        await store.setSetting("last_human_outbound_webhook", {
+          ...baseWebhookDiagnostic,
+          stage: contact ? "processed" : "contact_not_found",
+          contactId: contact?.id || payload.contactId || payload.contact_id || payload.contact?.id || "",
+          messagePreview: safeText(payload.message || payload.body || payload.text || payload.messageBody || "").slice(0, 120)
+        });
+      }
       send(res, contact ? 200 : 404, { ok: Boolean(contact), contact });
       return;
     }
