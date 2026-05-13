@@ -5182,9 +5182,10 @@ class SmsBot {
     );
     const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(contact, { sendInitialNow: true });
     await this.scheduleNoShowFollowUps(contact, { skipEarlySameDay: hasBackupReminderPlan });
-    const pendingNoShowJobs = this.store
-      .listJobs(contact.id)
-      .filter((job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)).length;
+    const contactJobs = await this.store.listJobs(contact.id);
+    const pendingNoShowJobs = contactJobs.filter(
+      (job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)
+    ).length;
     await this.recordDecision(contact, "repaired", "appointment_no_show_jobs_scheduled", {
       trigger: "appointment_no_show",
       meta: { appointmentId: contact.appointmentId || "", jobCount: pendingNoShowJobs, backupFlow: hasBackupReminderPlan }
