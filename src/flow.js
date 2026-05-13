@@ -652,6 +652,23 @@ function canAutoResumeHumanScheduling(contact, text, config) {
   return Boolean(looksLikeCallScheduling(text) && parseCallTime(text, schedulingContact, config));
 }
 
+function canHumanOutboundBookAppointment(contact, text, config) {
+  if (!contact || contact.optOutStatus || hasSignedTag(contact) || hasNqTag(contact)) return false;
+  if (contact.appointmentId && !isReschedulePending(contact) && !isNoShowRecoveryContact(contact)) return false;
+  const schedulingState = Boolean(
+    contact.awaitingSpecificCallTime ||
+      contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME ||
+      contact.engagementStatus === ENGAGEMENT.READY_FOR_CALL ||
+      contact.currentSequenceName === "call_now_no_answer" ||
+      contact.currentSequenceName === "call_dropped_recovery" ||
+      isNoShowRecoveryContact(contact)
+  );
+  if (!schedulingState) return false;
+  const schedulingContact = { ...contact, qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME };
+  const parsed = parseCallTime(text, schedulingContact, config);
+  return parsed?.type === "scheduled";
+}
+
 function canApplyAdminPause(controlMeta = {}) {
   return ["admin_contact_action", "admin_bulk_contact_action", "dashboard_contact_shortcut", "local_tester"].includes(
     controlMeta.source
@@ -999,6 +1016,44 @@ function parseBackupWindow(text) {
     endHour,
     endMinute,
     confidence: 0.86
+  };
+}
+
+function parseStandaloneCallWindow(text) {
+  const t = normalize(String(text || "").replace(/[–—]/g, "-"));
+  if (
+    !/^\s*(?:today|tomorrow)?\s*(?:from\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:-|to|through|until)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:today|tomorrow)?\s*$/.test(
+      t
+    )
+  ) {
+    return null;
+  }
+  return parseBackupWindow(t);
+}
+
+function backupFromWindowEnd(window, contact, config, primaryStartsAt) {
+  if (!window || !primaryStartsAt) return null;
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  const primaryDate = getLocalParts(new Date(primaryStartsAt), timeZone);
+  const backupDate = localDateToUtc(
+    {
+      year: primaryDate.year,
+      month: primaryDate.month,
+      day: primaryDate.day,
+      hour: window.endHour,
+      minute: window.endMinute
+    },
+    timeZone
+  );
+  if (backupDate <= new Date(primaryStartsAt)) return null;
+  return {
+    backupCallTime: formatForContact(backupDate, contact, config),
+    backupCallTimeIso: backupDate.toISOString(),
+    backupCallTimeType: "exact",
+    backupWindowStartHour: "",
+    backupWindowStartMinute: "",
+    backupWindowEndHour: "",
+    backupWindowEndMinute: ""
   };
 }
 
@@ -3499,6 +3554,23 @@ class SmsBot {
       direction: "human_outbound",
       body: message
     });
+    if (canHumanOutboundBookAppointment(contact, message, this.config)) {
+      const schedulingContact = await this.store.upsertContact({
+        ...contact,
+        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+        engagementStatus: contact.engagementStatus === ENGAGEMENT.MISSED_CALL ? ENGAGEMENT.MISSED_CALL : ENGAGEMENT.ACTIVE_CONVERSATION,
+        humanEscalationStatus: false,
+        humanEscalationStage: "human_booking_assist",
+        escalationReason: "",
+        automationPaused: false,
+        automationPauseReason: ""
+      });
+      await this.recordDecision(schedulingContact, "booked", "human_outbound_booking_assist", {
+        trigger: "human_outbound",
+        message
+      });
+      return this.handleCallTime(schedulingContact, message);
+    }
     const updated = await this.store.upsertContact({
       ...contact,
       humanEscalationStatus: true,
@@ -3974,6 +4046,7 @@ class SmsBot {
     if (resolvedTimezone && resolvedTimezone !== contact.timezone) {
       contact = await this.store.upsertContact({ ...contact, timezone: resolvedTimezone });
     }
+    const standaloneCallWindow = parseStandaloneCallWindow(text);
     let parsed = parseCallTime(text, contact, this.config);
     parsed = anchorScheduledTimeToClarifiedDay(parsed, text, contact, this.config);
     if (!parsed) {
@@ -4124,7 +4197,9 @@ class SmsBot {
     const startsAt = parsed.startsAt;
     const endsAt = addMinutes(new Date(startsAt), 15).toISOString();
     const display = formatForContact(new Date(startsAt), contact, this.config);
-    const inlineBackup = extractInlineBackupTime(text, { ...contact, preferredCallTimeIso: startsAt }, this.config, startsAt);
+    const inlineBackup =
+      backupFromWindowEnd(standaloneCallWindow, { ...contact, preferredCallTimeIso: startsAt }, this.config, startsAt) ||
+      extractInlineBackupTime(text, { ...contact, preferredCallTimeIso: startsAt }, this.config, startsAt);
     if (isNoShowRecoveryContact(contact)) {
       let appointment = null;
       const appointmentType = contact.appointmentType || "initial";

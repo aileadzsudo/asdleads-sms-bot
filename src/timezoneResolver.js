@@ -146,6 +146,14 @@ function timezoneFromState(value) {
 
 function timezoneFromText(value) {
   const raw = String(value || "");
+  if (raw.includes("/")) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: raw }).format(new Date());
+      return raw;
+    } catch {
+      // Fall through to state and common timezone aliases.
+    }
+  }
   const fromState = timezoneFromState(raw);
   if (fromState) return fromState;
   const alias = TIMEZONE_ALIASES.find(([, pattern]) => pattern.test(raw));

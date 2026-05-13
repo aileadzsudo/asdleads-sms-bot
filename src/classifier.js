@@ -293,7 +293,19 @@ function parseCallTime(text, contact, config, now = new Date()) {
   const timeZone = contact.timezone || config.texting.defaultTimezone;
   const local = getLocalParts(now, timeZone);
   const explicitToday = /\btoday\b/.test(t);
-  if (/^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/.test(t) || /^\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?$/.test(t)) {
+  const standaloneTimeRange = t.match(
+    /^\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|to|through|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$/
+  );
+  const rangeCouldBeCallTime =
+    standaloneTimeRange &&
+    Number(standaloneTimeRange[1]) >= 1 &&
+    Number(standaloneTimeRange[1]) <= 12 &&
+    Number(standaloneTimeRange[4]) >= 1 &&
+    Number(standaloneTimeRange[4]) <= 12;
+  if (
+    /^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/.test(t) ||
+    (!rangeCouldBeCallTime && /^\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?$/.test(t))
+  ) {
     return { type: "needs_specific_time", confidence: 0.68, reason: "date_without_time" };
   }
   if (isNotTodayAvailability(t)) {
@@ -340,6 +352,30 @@ function parseCallTime(text, contact, config, now = new Date()) {
   if (/\bnoon\b/.test(t)) {
     const startsAt = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, hour: 12, minute: 0 }, timeZone);
     return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: 0.85 };
+  }
+  if (rangeCouldBeCallTime) {
+    let hour = Number(standaloneTimeRange[1]);
+    const minute = Number(standaloneTimeRange[2] || 0);
+    const endHour = Number(standaloneTimeRange[4]);
+    const meridiem = standaloneTimeRange[3] || standaloneTimeRange[6];
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return null;
+    if (meridiem === "pm" && hour < 12) hour += 12;
+    if (meridiem === "am" && hour === 12) hour = 0;
+    if (!meridiem && hour >= 1 && hour <= 7 && endHour >= 1 && endHour <= 7) hour += 12;
+    const startsAt = localDateToUtc(
+      { year: local.year, month: local.month, day: local.day + dayOffset, hour, minute },
+      timeZone
+    );
+    if (startsAt <= now) {
+      if (explicitToday) return { type: "needs_specific_time", confidence: 0.72 };
+      const futureOffset = weekdayMatch ? dayOffset + 7 : dayOffset + 1;
+      const futureStartsAt = localDateToUtc(
+        { year: local.year, month: local.month, day: local.day + futureOffset, hour, minute },
+        timeZone
+      );
+      return { type: "scheduled", startsAt: futureStartsAt.toISOString(), confidence: meridiem ? 0.88 : 0.72 };
+    }
+    return { type: "scheduled", startsAt: startsAt.toISOString(), confidence: meridiem ? 0.9 : 0.72 };
   }
   const colonTime = clockText.match(/\b(?:at|after|around|about)?\s*(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
   const simpleTime = clockText.match(

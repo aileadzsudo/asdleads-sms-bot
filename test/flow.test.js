@@ -1112,6 +1112,86 @@ test("backup time answer sends the first booking Slack with backup included", as
   }
 });
 
+test("call time range after tomorrow clarification books primary and backup", async () => {
+  const { bot, store } = makeBot();
+  const originalCreateAppointment = ghl.createAppointment;
+  ghl.createAppointment = async () => ({ id: "range-appt" });
+  try {
+    store.upsertContact({
+      id: "range-call-time",
+      ghlContactId: "range-call-time",
+      name: "Halema",
+      phone: "+15550000188",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      faultAnswer: "not_at_fault",
+      medicalTreatmentAnswer: "yes",
+      awaitingSpecificCallTime: true,
+      callTimeClarificationDay: "tomorrow",
+      callTimeClarificationAskedAt: new Date().toISOString()
+    });
+
+    const contact = await bot.handleInboundSms({ contactId: "range-call-time", message: "3-4" });
+    const saved = store.getContact("range-call-time");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+    assert.equal(saved.appointmentId, "range-appt");
+    assert.match(saved.preferredCallTime, /3:00 PM/);
+    assert.match(saved.backupCallTime, /4:00 PM/);
+    assert.equal(saved.backupCallTimeType, "exact");
+    assert.match(saved.lastOutboundMessage, /4:00 PM .*backup/i);
+    assert.equal(
+      Object.values(store.data.jobs).some(
+        (job) => job.contactId === "range-call-time" && job.type === "appointment_reminder" && job.status === "pending"
+      ),
+      true
+    );
+  } finally {
+    ghl.createAppointment = originalCreateAppointment;
+  }
+});
+
+test("human outbound time can complete scheduling and create reminders", async () => {
+  const { bot, store } = makeBot();
+  const originalCreateAppointment = ghl.createAppointment;
+  ghl.createAppointment = async () => ({ id: "human-booked-appt" });
+  try {
+    store.upsertContact({
+      id: "human-booked-time",
+      ghlContactId: "human-booked-time",
+      name: "Human Assist",
+      phone: "+15550000189",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      humanEscalationStatus: true,
+      humanEscalationStage: "human_working",
+      automationPaused: true,
+      automationPauseReason: "human_working",
+      awaitingSpecificCallTime: true,
+      callTimeClarificationDay: "tomorrow",
+      callTimeClarificationAskedAt: new Date().toISOString()
+    });
+
+    const contact = await bot.handleHumanOutbound({ contactId: "human-booked-time", message: "3 pm" });
+    const messages = store.data.messages.filter((message) => message.contactId === "human-booked-time");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+    assert.equal(store.getContact("human-booked-time").appointmentId, "human-booked-appt");
+    assert.equal(messages.some((message) => message.direction === "human_outbound" && message.body === "3 pm"), true);
+    assert.match(store.getContact("human-booked-time").lastOutboundMessage, /backup time/i);
+    assert.equal(
+      Object.values(store.data.jobs).some(
+        (job) => job.contactId === "human-booked-time" && job.type === "appointment_reminder" && job.status === "pending"
+      ),
+      true
+    );
+  } finally {
+    ghl.createAppointment = originalCreateAppointment;
+  }
+});
+
 test("legacy next-day evening reminder jobs still render", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -5123,6 +5203,21 @@ test("normalizes timezone from GHL state when timezone is empty", () => {
 
   assert.equal(normalized.state, "CA");
   assert.equal(normalized.timezone, "America/Los_Angeles");
+});
+
+test("preserves valid IANA timezone strings before applying common aliases", () => {
+  const normalized = normalizePayload(
+    {
+      contactId: "tz-iana",
+      name: "TZ IANA",
+      phone: "+15550000071",
+      timezone: "Pacific/Honolulu",
+      tags: ["NR"]
+    },
+    testConfig("")
+  );
+
+  assert.equal(normalized.timezone, "Pacific/Honolulu");
 });
 
 test("normalizes timezone from owner/state even when GHL sends account default timezone", () => {
