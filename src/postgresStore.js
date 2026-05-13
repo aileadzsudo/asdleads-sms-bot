@@ -251,12 +251,13 @@ class PostgresStore {
   }
 
   async setSetting(key, value) {
+    const jsonValue = value === undefined ? null : JSON.stringify(value);
     const result = await this.pool.query(
       `insert into settings (key, value, updated_at)
        values ($1, $2, now())
        on conflict (key) do update set value = excluded.value, updated_at = now()
        returning key, value, updated_at`,
-      [key, value]
+      [key, jsonValue]
     );
     const row = result.rows[0];
     return { key: row.key, value: row.value, updatedAt: row.updated_at.toISOString() };
