@@ -45,7 +45,10 @@ function loadConfig() {
       classifierModel: process.env.OPENAI_CLASSIFIER_MODEL || "gpt-5-mini",
       fallbackEnabled: String(process.env.LLM_FALLBACK_ENABLED || "false").toLowerCase() === "true",
       minConfidence: Number(process.env.LLM_MIN_CONFIDENCE || 0.85),
-      clarifyConfidence: Number(process.env.LLM_CLARIFY_CONFIDENCE || 0.6)
+      clarifyConfidence: Number(process.env.LLM_CLARIFY_CONFIDENCE || 0.6),
+      decisionGateEnabled: String(process.env.LLM_DECISION_GATE_ENABLED || "true").toLowerCase() !== "false",
+      decisionGateModel: process.env.LLM_DECISION_GATE_MODEL || process.env.OPENAI_CLASSIFIER_MODEL || "gpt-5-mini",
+      decisionGateMinConfidence: Number(process.env.LLM_DECISION_GATE_MIN_CONFIDENCE || 0.82)
     },
     ghl: {
       apiBase: process.env.GHL_API_BASE || "https://services.leadconnectorhq.com",

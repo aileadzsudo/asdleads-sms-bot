@@ -4336,6 +4336,152 @@ test("LLM call-now intent at call-time stage is accepted without generic yes-no 
   }
 });
 
+test("LLM decision gate blocks risky call-now confirmation", async () => {
+  const { bot, store } = makeBot();
+  bot.config.llm = {
+    apiKey: "test-key",
+    fallbackEnabled: true,
+    classifierModel: "test-model",
+    decisionGateEnabled: true,
+    decisionGateModel: "test-model",
+    decisionGateMinConfidence: 0.82,
+    minConfidence: 0.85,
+    clarifyConfidence: 0.6
+  };
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      output_text: JSON.stringify({
+        decision: "block_clarify",
+        confidence: 0.93,
+        reason: "The recent context says the lead is not available right now.",
+        corrected_intent: "ask_for_later_time",
+        risk_flags: ["negative_availability"]
+      })
+    })
+  });
+  try {
+    store.upsertContact({
+      id: "gate-not-right-now",
+      ghlContactId: "gate-not-right-now",
+      name: "DeAndre",
+      phone: "+15550000191",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      lastOutboundMessage: "Are you open for a call now or later today?"
+    });
+
+    const contact = await bot.handleCallTime(store.getContact("gate-not-right-now"), "now is fine");
+
+    assert.notEqual(contact.engagementStatus, ENGAGEMENT.READY_FOR_CALL);
+    assert.match(store.getContact("gate-not-right-now").lastOutboundMessage, /later today or tomorrow/i);
+    assert.equal(
+      store.listDecisionLogs().some((decision) => decision.contactId === "gate-not-right-now" && decision.action === "llm_gate_blocked"),
+      true
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("LLM decision gate corrects conflicting reschedule time", async () => {
+  const { bot, store } = makeBot();
+  bot.config.llm = {
+    apiKey: "test-key",
+    fallbackEnabled: true,
+    classifierModel: "test-model",
+    decisionGateEnabled: true,
+    decisionGateModel: "test-model",
+    decisionGateMinConfidence: 0.82,
+    minConfidence: 0.85,
+    clarifyConfidence: 0.6
+  };
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      output_text: JSON.stringify({
+        decision: "correct_time",
+        confidence: 0.96,
+        reason: "The lead rejected the old 3:15 time and gave 6pm as the new time.",
+        corrected_intent: "reschedule",
+        corrected_time_text: "6pm",
+        risk_flags: ["conflicting_existing_time"]
+      })
+    })
+  });
+  try {
+    store.upsertContact({
+      id: "gate-riley-reschedule",
+      ghlContactId: "gate-riley-reschedule",
+      name: "Riley",
+      phone: "+15550000192",
+      timezone: "America/Los_Angeles",
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.CALL_BOOKED,
+      preferredCallTime: "Wed, May 13, 3:15 PM PST",
+      preferredCallTimeIso: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      appointmentId: "riley-appt"
+    });
+
+    const contact = await bot.handleReschedule(
+      store.getContact("gate-riley-reschedule"),
+      "I cant make it at 3:15 i can only make it at 6pm"
+    );
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+    assert.match(store.getContact("gate-riley-reschedule").preferredCallTime, /6:00 PM/);
+    assert.doesNotMatch(store.getContact("gate-riley-reschedule").lastOutboundMessage, /3:15 PM/);
+    assert.equal(
+      store.listDecisionLogs().some((decision) => decision.contactId === "gate-riley-reschedule" && decision.action === "llm_gate_corrected_time"),
+      true
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("LLM decision gate failure blocks booking instead of guessing", async () => {
+  const { bot, store } = makeBot();
+  bot.config.llm = {
+    apiKey: "test-key",
+    fallbackEnabled: true,
+    classifierModel: "test-model",
+    decisionGateEnabled: true,
+    decisionGateModel: "test-model",
+    decisionGateMinConfidence: 0.82,
+    minConfidence: 0.85,
+    clarifyConfidence: 0.6
+  };
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    throw new Error("network down");
+  };
+  try {
+    store.upsertContact({
+      id: "gate-failure-booking",
+      ghlContactId: "gate-failure-booking",
+      name: "Gate Failure",
+      phone: "+15550000193",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+    });
+
+    const contact = await bot.handleCallTime(store.getContact("gate-failure-booking"), "tomorrow at 2pm");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+    assert.equal(store.getContact("gate-failure-booking").appointmentId, undefined);
+    assert.equal(
+      store.listDecisionLogs().some((decision) => decision.contactId === "gate-failure-booking" && decision.action === "llm_gate_failed"),
+      true
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("vague call time reply schedules hot lead warm follow-ups", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({

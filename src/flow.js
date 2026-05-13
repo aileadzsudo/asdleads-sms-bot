@@ -33,6 +33,7 @@ const {
   hasClockTimeSignal
 } = require("./classifier");
 const { classifyWithLlm } = require("./llmClassifier");
+const { runDecisionGate } = require("./llmDecisionGate");
 const {
   addMinutes,
   formatForContact,
@@ -1977,6 +1978,124 @@ class SmsBot {
       console.error("decision log failed", error);
       return null;
     }
+  }
+
+  async evaluateDecisionGate(contact, proposedAction, latestInboundMessage, proposed = {}, options = {}) {
+    if (options.skipDecisionGate || !this.config.llm?.decisionGateEnabled || !this.config.llm?.apiKey) {
+      return { decision: "allow", confidence: 1, reason: options.skipDecisionGate ? "decision gate skipped" : "decision gate disabled" };
+    }
+    let messages = [];
+    try {
+      messages = this.store.listMessages ? await this.store.listMessages(contact.id) : [];
+    } catch {
+      messages = [];
+    }
+    try {
+      const result = await runDecisionGate(this.config, {
+        contact,
+        messages,
+        latestInboundMessage,
+        proposedAction,
+        proposed
+      });
+      if (!result) return { decision: "allow", confidence: 1, reason: "decision gate disabled" };
+      const minConfidence = Number(this.config.llm.decisionGateMinConfidence || 0.82);
+      const guardedResult =
+        result.decision === "allow" && result.confidence < minConfidence
+          ? {
+              ...result,
+              decision: "block_clarify",
+              reason: `Low confidence allow blocked: ${result.reason || "no reason"}`
+            }
+          : result;
+      const actionByDecision = {
+        allow: "llm_gate_allowed",
+        block_clarify: "llm_gate_blocked",
+        block_escalate: "llm_gate_escalated",
+        correct_time: "llm_gate_corrected_time",
+        switch_to_reschedule: "llm_gate_corrected_time",
+        switch_to_call_now: "llm_gate_corrected_time",
+        do_nothing: "llm_gate_blocked"
+      };
+      const latest = await this.store.upsertContact({
+        ...contact,
+        lastLlmDecisionGate: guardedResult,
+        lastLlmDecisionGateAt: new Date().toISOString(),
+        lastLlmDecisionGateAction: proposedAction,
+        lastLlmDecisionGateRiskFlags: guardedResult.risk_flags || []
+      });
+      await this.recordDecision(latest, actionByDecision[guardedResult.decision] || "llm_gate_blocked", proposedAction, {
+        trigger: "llm_decision_gate",
+        message: latestInboundMessage || "",
+        meta: {
+          decision: guardedResult.decision,
+          confidence: guardedResult.confidence,
+          reason: guardedResult.reason,
+          correctedIntent: guardedResult.corrected_intent || "",
+          correctedTimeText: guardedResult.corrected_time_text || "",
+          riskFlags: guardedResult.risk_flags || [],
+          proposed
+        }
+      });
+      return guardedResult;
+    } catch (error) {
+      await this.notifyBotError(
+        "LLM decision gate failed",
+        {
+          Name: contact.name || "unknown",
+          Phone: contact.phone || "unknown",
+          "GHL contact": contact.ghlContactId || contact.id,
+          "Proposed action": proposedAction,
+          "Last inbound": latestInboundMessage || "",
+          Error: error.message
+        },
+        { operationalOnly: true, slack: false, level: "warn" }
+      );
+      await this.recordDecision(contact, "llm_gate_failed", proposedAction, {
+        trigger: "llm_decision_gate",
+        message: latestInboundMessage || "",
+        meta: { error: error.message, proposed }
+      });
+      return {
+        decision: "block_escalate",
+        confidence: 0,
+        reason: `LLM decision gate failed: ${error.message}`,
+        risk_flags: ["llm_gate_failed"],
+        failed: true
+      };
+    }
+  }
+
+  async handleDecisionGateStop(contact, gate, proposedAction, latestInboundMessage, options = {}) {
+    const decision = gate?.decision || "block_escalate";
+    if (decision === "do_nothing") return this.store.getContact(contact.id) || contact;
+    if (decision === "block_escalate") {
+      return this.escalate(contact, `llm_gate_${proposedAction}`, {
+        Reason: gate.reason || "LLM gate blocked risky bot action.",
+        Confidence: String(gate.confidence ?? ""),
+        Flags: (gate.risk_flags || []).join(", ")
+      });
+    }
+    const question =
+      options.question ||
+      (proposedAction.includes("reschedule")
+        ? "I want to make sure I move it correctly 🙏 What exact time should I move your call to?"
+        : proposedAction.includes("backup")
+          ? "I want to make sure I have this right 🙏 What backup time should I use, or should I keep only the primary time?"
+          : proposedAction.includes("call_now")
+            ? "No worries 🙏 What time later today or tomorrow works best for a quick Specialist call?"
+            : "I want to make sure I book the right time 🙏 What exact time should I put you down for?");
+    const updated = await this.store.upsertContact({
+      ...contact,
+      awaitingSpecificCallTime: !proposedAction.includes("backup"),
+      lastLlmGateClarificationReason: gate.reason || "",
+      lastLlmGateClarificationAction: proposedAction,
+      lastLlmGateClarificationMessage: latestInboundMessage || ""
+    });
+    const sent = await this.sendBotMessage(updated, localizeMessage(question, updated), { bypassQuietHours: true });
+    const latest = sent || (await this.store.getContact(updated.id)) || updated;
+    await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+    return latest;
   }
 
   async recordNoShowWebhook(payload = {}, patch = {}) {
@@ -4094,7 +4213,7 @@ class SmsBot {
     return latest;
   }
 
-  async handleCallTime(contact, text) {
+  async handleCallTime(contact, text, options = {}) {
     contact = await this.hydrateContactTags(contact, { force: true });
     if (isSoftRefusal(text)) {
       return this.escalate(contact, "soft_refusal");
@@ -4264,6 +4383,26 @@ class SmsBot {
       return latest;
     }
     if (parsed.type === "now") {
+      const gate = await this.evaluateDecisionGate(
+        contact,
+        "call_now_confirmation",
+        text,
+        {
+          parsedType: parsed.type,
+          currentAppointmentTime: contact.preferredCallTime || "",
+          currentAppointmentIso: contact.preferredCallTimeIso || ""
+        },
+        options
+      );
+      if (gate.decision === "correct_time" && gate.corrected_time_text) {
+        return this.handleCallTime(contact, gate.corrected_time_text, { skipDecisionGate: true });
+      }
+      if (gate.decision === "switch_to_reschedule") {
+        return this.handleReschedule(contact, gate.corrected_time_text || text, { skipDecisionGate: true });
+      }
+      if (gate.decision !== "allow" && gate.decision !== "switch_to_call_now") {
+        return this.handleDecisionGateStop(contact, gate, "call_now_confirmation", text);
+      }
       const updated = await this.store.upsertContact({
       ...contact,
       engagementStatus: ENGAGEMENT.READY_FOR_CALL,
@@ -4319,6 +4458,35 @@ class SmsBot {
     const inlineBackup =
       backupFromWindowEnd(standaloneCallWindow, { ...contact, preferredCallTimeIso: startsAt }, this.config, startsAt) ||
       extractInlineBackupTime(text, { ...contact, preferredCallTimeIso: startsAt }, this.config, startsAt);
+    const bookingGateAction = isNoShowRecoveryContact(contact) ? "no_show_rebook" : "create_appointment";
+    const bookingGate = await this.evaluateDecisionGate(
+      contact,
+      bookingGateAction,
+      text,
+      {
+        parsedType: parsed.type,
+        proposedStartIso: startsAt,
+        proposedDisplay: display,
+        inlineBackup: inlineBackup || null,
+        currentAppointmentTime: contact.preferredCallTime || "",
+        currentAppointmentIso: contact.preferredCallTimeIso || "",
+        appointmentId: contact.appointmentId || "",
+        appointmentType: contact.appointmentType || "initial"
+      },
+      options
+    );
+    if (bookingGate.decision === "correct_time" && bookingGate.corrected_time_text) {
+      return this.handleCallTime(contact, bookingGate.corrected_time_text, { skipDecisionGate: true });
+    }
+    if (bookingGate.decision === "switch_to_reschedule") {
+      return this.handleReschedule(contact, bookingGate.corrected_time_text || text, { skipDecisionGate: true });
+    }
+    if (bookingGate.decision === "switch_to_call_now") {
+      return this.handleCallTime(contact, "call me now", { skipDecisionGate: true });
+    }
+    if (bookingGate.decision !== "allow") {
+      return this.handleDecisionGateStop(contact, bookingGate, bookingGateAction, text);
+    }
     if (isNoShowRecoveryContact(contact)) {
       let appointment = null;
       const appointmentType = contact.appointmentType || "initial";
@@ -4531,7 +4699,7 @@ class SmsBot {
     return afterBackupAsk;
   }
 
-  async handleReschedule(contact, text) {
+  async handleReschedule(contact, text, options = {}) {
     let parsed = parseCallTime(text, contact, this.config);
     parsed = anchorScheduledTimeToClarifiedDay(parsed, text, contact, this.config);
     if (!parsed || parsed.type === "now") {
@@ -4597,6 +4765,33 @@ class SmsBot {
 
     const startsAt = parsed.startsAt;
     const endsAt = addMinutes(new Date(startsAt), 15).toISOString();
+    const display = formatForContact(new Date(startsAt), contact, this.config);
+    const gate = await this.evaluateDecisionGate(
+      contact,
+      "reschedule_appointment",
+      text,
+      {
+        parsedType: parsed.type,
+        proposedStartIso: startsAt,
+        proposedDisplay: display,
+        currentAppointmentTime: contact.preferredCallTime || "",
+        currentAppointmentIso: contact.preferredCallTimeIso || "",
+        appointmentId: contact.appointmentId || ""
+      },
+      options
+    );
+    if (gate.decision === "correct_time" && gate.corrected_time_text) {
+      return this.handleReschedule(contact, gate.corrected_time_text, { skipDecisionGate: true });
+    }
+    if (gate.decision === "switch_to_call_now") {
+      return this.handleCallTime(contact, "call me now", { skipDecisionGate: true });
+    }
+    if (gate.decision !== "allow" && gate.decision !== "switch_to_reschedule") {
+      await this.store.cancelJobsForContact(contact.id, "reschedule blocked pending clarification", (job) =>
+        ["appointment_reminder", "backup_time_timeout", "backup_no_show_reminder"].includes(job.type)
+      );
+      return this.handleDecisionGateStop(contact, gate, "reschedule_appointment", text);
+    }
     let appointment = null;
     try {
       appointment = await ghl.updateAppointment(
@@ -4622,7 +4817,6 @@ class SmsBot {
       });
     }
 
-    const display = formatForContact(new Date(startsAt), contact, this.config);
     const updated = await this.store.upsertContact({
       ...contact,
       engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
@@ -4736,9 +4930,30 @@ class SmsBot {
     return updated;
   }
 
-  async handleBackupTime(contact, text) {
+  async handleBackupTime(contact, text, options = {}) {
     const backupWindow = parseBackupWindow(text);
     if (backupWindow) {
+      const gate = await this.evaluateDecisionGate(
+        contact,
+        "finalize_backup_time",
+        text,
+        {
+          backupType: "window",
+          backupTime: backupWindow.value,
+          primaryTime: contact.preferredCallTime || "",
+          primaryTimeIso: contact.preferredCallTimeIso || ""
+        },
+        options
+      );
+      if (gate.decision === "switch_to_reschedule") {
+        return this.handleReschedule(contact, gate.corrected_time_text || text, { skipDecisionGate: true });
+      }
+      if (gate.decision === "correct_time" && gate.corrected_time_text) {
+        return this.handleBackupTime(contact, gate.corrected_time_text, { skipDecisionGate: true });
+      }
+      if (gate.decision !== "allow") {
+        return this.handleDecisionGateStop(contact, gate, "finalize_backup_time", text);
+      }
       const updated = await this.store.upsertContact({
         ...contact,
         backupCallTime: backupWindow.value,
@@ -4787,6 +5002,28 @@ class SmsBot {
     let updated = contact;
     if (parsed?.type === "scheduled") {
       const backup = formatForContact(new Date(parsed.startsAt), contact, this.config);
+      const gate = await this.evaluateDecisionGate(
+        contact,
+        "finalize_backup_time",
+        text,
+        {
+          backupType: "exact",
+          backupTime: backup,
+          backupTimeIso: parsed.startsAt,
+          primaryTime: contact.preferredCallTime || "",
+          primaryTimeIso: contact.preferredCallTimeIso || ""
+        },
+        options
+      );
+      if (gate.decision === "switch_to_reschedule") {
+        return this.handleReschedule(contact, gate.corrected_time_text || text, { skipDecisionGate: true });
+      }
+      if (gate.decision === "correct_time" && gate.corrected_time_text) {
+        return this.handleBackupTime(contact, gate.corrected_time_text, { skipDecisionGate: true });
+      }
+      if (gate.decision !== "allow") {
+        return this.handleDecisionGateStop(contact, gate, "finalize_backup_time", text);
+      }
       updated = await this.store.upsertContact({
         ...contact,
         backupCallTime: backup,
@@ -4809,6 +5046,25 @@ class SmsBot {
         { bypassQuietHours: true }
       );
     } else {
+      const gate = await this.evaluateDecisionGate(
+        contact,
+        "finalize_no_backup",
+        text,
+        {
+          primaryTime: contact.preferredCallTime || "",
+          primaryTimeIso: contact.preferredCallTimeIso || ""
+        },
+        options
+      );
+      if (gate.decision === "switch_to_reschedule") {
+        return this.handleReschedule(contact, gate.corrected_time_text || text, { skipDecisionGate: true });
+      }
+      if (gate.decision === "correct_time" && gate.corrected_time_text) {
+        return this.handleBackupTime(contact, gate.corrected_time_text, { skipDecisionGate: true });
+      }
+      if (gate.decision !== "allow") {
+        return this.handleDecisionGateStop(contact, gate, "finalize_no_backup", text);
+      }
       updated = await this.store.upsertContact({
         ...contact,
         awaitingBackupTime: false,
@@ -5394,16 +5650,54 @@ class SmsBot {
     const shouldSendManualConfirmation =
       !manualConfirmationAlreadySent && !updated.awaitingBackupTime && (startsAt !== oldStartsAt || appointmentId !== oldAppointmentId);
     if (shouldSendManualConfirmation) {
-      const confirmed = await this.sendBotMessage(updated, manualAppointmentConfirmation(updated, display), {
-        bypassQuietHours: true,
-        templateGroup: "manualAppointmentConfirmation",
-        templateKey: updated.appointmentType || "initial"
-      });
-      updated = await this.store.upsertContact({
-        ...(confirmed || updated),
-        manualAppointmentConfirmationSentFor: startsAt,
-        manualAppointmentConfirmationSentAt: new Date().toISOString()
-      });
+      const gate = await this.evaluateDecisionGate(
+        updated,
+        "manual_appointment_confirmation",
+        updated.lastInboundMessage || updated.lastHumanOutboundMessage || "",
+        {
+          proposedStartIso: startsAt,
+          proposedDisplay: display,
+          currentAppointmentTime: contact.preferredCallTime || "",
+          currentAppointmentIso: contact.preferredCallTimeIso || "",
+          rawStartsAt: textValue(rawStartsAt),
+          appointmentTimeSource
+        }
+      );
+      if (gate.decision === "correct_time" && gate.corrected_time_text) {
+        return this.handleReschedule(updated, gate.corrected_time_text, { skipDecisionGate: true });
+      }
+      if (gate.decision === "switch_to_reschedule") {
+        return this.handleReschedule(updated, gate.corrected_time_text || updated.lastInboundMessage || "", { skipDecisionGate: true });
+      }
+      if (gate.decision === "block_escalate") {
+        return this.escalate(updated, "llm_gate_manual_appointment_confirmation", {
+          Reason: gate.reason || "Manual appointment confirmation looked risky.",
+          Confidence: String(gate.confidence ?? "")
+        });
+      }
+      if (gate.decision !== "allow") {
+        await this.recordDecision(updated, "llm_gate_blocked", "manual_appointment_confirmation_sms_suppressed", {
+          trigger: "appointment_sync",
+          meta: {
+            decision: gate.decision,
+            confidence: gate.confidence,
+            reason: gate.reason,
+            proposedStartIso: startsAt,
+            proposedDisplay: display
+          }
+        });
+      } else {
+        const confirmed = await this.sendBotMessage(updated, manualAppointmentConfirmation(updated, display), {
+          bypassQuietHours: true,
+          templateGroup: "manualAppointmentConfirmation",
+          templateKey: updated.appointmentType || "initial"
+        });
+        updated = await this.store.upsertContact({
+          ...(confirmed || updated),
+          manualAppointmentConfirmationSentFor: startsAt,
+          manualAppointmentConfirmationSentAt: new Date().toISOString()
+        });
+      }
     }
 
     const suppressAppointmentAlert = suppressAppointmentAlertFromPayload(payload);
@@ -6041,12 +6335,35 @@ class SmsBot {
       const timeZone = fresh.timezone || this.config.texting.defaultTimezone;
       const timeText = formatTimeOnly(target, fresh, this.config);
       const bookingText = sameLocalDay(target, new Date(), timeZone) ? `today at ${timeText}` : `tomorrow at ${timeText}`;
+      const gate = await this.evaluateDecisionGate(fresh, "relative_time_autobook", job.payload?.sourceMessage || bookingText, {
+        targetIso: target.toISOString(),
+        bookingText,
+        sourceMessage: job.payload?.sourceMessage || "",
+        baseOutboundTimestamp: job.payload?.baseOutboundTimestamp || ""
+      });
+      if (gate.decision === "correct_time" && gate.corrected_time_text) {
+        await this.recordDecision(fresh, "booked", "relative_autobook_corrected_by_llm_gate", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: { targetIso: target.toISOString(), correctedTimeText: gate.corrected_time_text }
+        });
+        await this.handleCallTime(fresh, gate.corrected_time_text, { skipDecisionGate: true });
+        await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });
+        return;
+      }
+      if (gate.decision !== "allow") {
+        await this.handleDecisionGateStop(fresh, gate, "relative_time_autobook", job.payload?.sourceMessage || bookingText, {
+          question: "I do not want to guess the wrong time 🙏 What exact time should I put you down for?"
+        });
+        await this.store.updateJob(job.id, { status: "done", finishedAt: new Date().toISOString() });
+        return;
+      }
       await this.recordDecision(fresh, "booked", "relative_autobook_after_no_clarification_reply", {
         jobId: job.id,
         jobType: job.type,
         meta: { targetIso: target.toISOString(), sourceMessage: job.payload?.sourceMessage || "" }
       });
-      await this.handleCallTime(fresh, bookingText);
+      await this.handleCallTime(fresh, bookingText, { skipDecisionGate: true });
     }
     if (job.type === "enter_reengagement") {
       const fresh = await this.store.getContact(job.contactId);
