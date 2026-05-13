@@ -14,6 +14,10 @@ function rowData(row) {
   return row?.data || null;
 }
 
+function jsonb(value) {
+  return JSON.stringify(value === undefined ? null : value);
+}
+
 class PostgresStore {
   constructor(databaseUrl) {
     this.pool = new Pool({
@@ -100,7 +104,7 @@ class PostgresStore {
         ghl_contact_id = excluded.ghl_contact_id,
         data = excluded.data,
         updated_at = now()`,
-      [id, next.phone || "", next.ghlContactId || "", next]
+      [id, next.phone || "", next.ghlContactId || "", jsonb(next)]
     );
     return next;
   }
@@ -125,7 +129,7 @@ class PostgresStore {
     await this.pool.query(
       `insert into messages (id, contact_id, direction, body, created_at, data)
        values ($1, $2, $3, $4, $5, $6)`,
-      [item.id, item.contactId || "", item.direction || "", item.body || "", item.createdAt, item]
+      [item.id, item.contactId || "", item.direction || "", item.body || "", item.createdAt, jsonb(item)]
     );
     return item;
   }
@@ -135,7 +139,7 @@ class PostgresStore {
     await this.pool.query(
       `insert into escalations (id, contact_id, reason, created_at, data)
        values ($1, $2, $3, $4, $5)`,
-      [item.id, item.contactId || "", item.reason || "", item.createdAt, item]
+      [item.id, item.contactId || "", item.reason || "", item.createdAt, jsonb(item)]
     );
     return item;
   }
@@ -152,7 +156,7 @@ class PostgresStore {
         run_at = excluded.run_at,
         data = excluded.data,
         updated_at = now()`,
-      [item.id, item.contactId || "", item.type, item.status, item.runAt || null, item]
+      [item.id, item.contactId || "", item.type, item.status, item.runAt || null, jsonb(item)]
     );
     return item;
   }
@@ -172,7 +176,7 @@ class PostgresStore {
     const next = { ...existing, ...patch };
     await this.pool.query(
       `update jobs set status = $2, run_at = $3, data = $4, updated_at = now() where id = $1`,
-      [id, next.status, next.runAt || null, next]
+      [id, next.status, next.runAt || null, jsonb(next)]
     );
     return next;
   }
@@ -187,7 +191,7 @@ class PostgresStore {
            updated_at = now()
        where id = $1 and status = 'pending'
        returning data`,
-      [id, JSON.stringify(patch)]
+      [id, jsonb(patch)]
     );
     return rowData(result.rows[0]);
   }
@@ -227,7 +231,7 @@ class PostgresStore {
     await this.pool.query(
       `insert into decision_logs (id, contact_id, action, reason, created_at, data)
        values ($1, $2, $3, $4, $5, $6)`,
-      [item.id, item.contactId || "", item.action || "", item.reason || "", item.createdAt, item]
+      [item.id, item.contactId || "", item.action || "", item.reason || "", item.createdAt, jsonb(item)]
     );
     return item;
   }
@@ -251,13 +255,12 @@ class PostgresStore {
   }
 
   async setSetting(key, value) {
-    const jsonValue = value === undefined ? null : JSON.stringify(value);
     const result = await this.pool.query(
       `insert into settings (key, value, updated_at)
        values ($1, $2, now())
        on conflict (key) do update set value = excluded.value, updated_at = now()
        returning key, value, updated_at`,
-      [key, jsonValue]
+      [key, jsonb(value)]
     );
     const row = result.rows[0];
     return { key: row.key, value: row.value, updatedAt: row.updated_at.toISOString() };
@@ -278,7 +281,7 @@ class PostgresStore {
       `insert into webhook_events (id, payload)
        values ($1, $2)
        on conflict (id) do nothing`,
-      [id, payload]
+      [id, jsonb(payload)]
     );
     return { inserted: result.rowCount === 1 };
   }
