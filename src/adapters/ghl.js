@@ -207,6 +207,24 @@ async function deleteAppointment(config, appointmentId) {
   return ghlRequest(config, `/calendars/events/${encodeURIComponent(appointmentId)}`, {}, "DELETE");
 }
 
+async function listCalendarEvents(config, { startTime, endTime, calendarId } = {}) {
+  if (!config.ghl.token || !config.ghl.locationId || !(calendarId || config.ghl.calendarId)) {
+    return { ok: true, skipped: true, reason: "calendar config missing", events: [] };
+  }
+  const params = new URLSearchParams({
+    locationId: config.ghl.locationId,
+    calendarId: calendarId || config.ghl.calendarId,
+    startTime: String(startTime),
+    endTime: String(endTime)
+  });
+  const payload = await ghlGet(config, `/calendars/events?${params.toString()}`);
+  return {
+    ok: true,
+    raw: payload,
+    events: Array.isArray(payload.events) ? payload.events : []
+  };
+}
+
 function contactLink(config, contact) {
   if (contact.ghlContactLink) return contact.ghlContactLink;
   const contactId = contact.ghlContactId || contact.id;
@@ -225,5 +243,6 @@ module.exports = {
   getContact,
   searchContactsByTag,
   searchContactsByPhone,
+  listCalendarEvents,
   contactLink
 };

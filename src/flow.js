@@ -1742,10 +1742,30 @@ function suppressAppointmentAlertFromPayload(payload = {}) {
   return ["true", "1", "yes", "y"].includes(normalize(value));
 }
 
+function suppressAppointmentConfirmationFromPayload(payload = {}) {
+  const value = textValue(
+    appointmentField(payload, [
+      "suppressConfirmation",
+      "suppress_confirmation",
+      "suppressSms",
+      "suppress_sms",
+      "noSms",
+      "no_sms",
+      "silentConfirmation",
+      "silent_confirmation"
+    ])
+  );
+  return ["true", "1", "yes", "y"].includes(normalize(value)) || suppressAppointmentAlertFromPayload(payload);
+}
+
 function isNoShowAppointmentStatus(status = "") {
   return /no[\s_-]?show|noshow|missed|did[\s_-]?not[\s_-]?show|didnt[\s_-]?show|not[\s_-]?showed|not[\s_-]?shown/.test(
     String(status || "").toLowerCase()
   );
+}
+
+function isInactiveAppointmentStatus(status = "") {
+  return /cancelled|canceled|showed|completed|invalid/.test(String(status || "").toLowerCase());
 }
 
 function booleanLike(value) {
@@ -5806,6 +5826,32 @@ class SmsBot {
     const existing = await this.store.getContact(normalized.id);
     const base = { ...(existing || {}), ...normalized };
     let contact = await this.hydrateContactTags(base, { force: true });
+    if (
+      existing?.appointmentNoShowAt &&
+      webhookAppointmentId &&
+      existing.appointmentId === webhookAppointmentId &&
+      existing.currentSequenceName === "appointment_no_show"
+    ) {
+      const jobs = await this.store.listJobs(existing.id);
+      const hasNoShowRecoveryJob = jobs.some(
+        (job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)
+      );
+      if (!hasNoShowRecoveryJob) {
+        const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(existing);
+        await this.scheduleNoShowFollowUps(existing, { skipEarlySameDay: hasBackupReminderPlan });
+        await this.recordDecision(existing, "repaired", "duplicate_no_show_recovery_repaired", {
+          trigger: "appointment_no_show",
+          meta: { appointmentId: webhookAppointmentId, backupFlow: hasBackupReminderPlan }
+        });
+      }
+      await this.recordNoShowWebhook(payload, {
+        resolvedContactId: existing.id,
+        appointmentId: webhookAppointmentId,
+        status: webhookStatus,
+        result: "duplicate_no_show_ignored"
+      });
+      return existing;
+    }
     if (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) {
       await this.recordNoShowWebhook(payload, { resolvedContactId: contact.id, appointmentId: webhookAppointmentId, status: webhookStatus, result: "skipped_opted_out" });
       await this.recordDecision(contact, "skipped", "appointment_no_show_opted_out", { trigger: "appointment_no_show" });
@@ -6015,8 +6061,10 @@ class SmsBot {
           ""
       )
     );
+    const suppressManualConfirmation = suppressAppointmentConfirmationFromPayload(payload);
     const shouldAskBackupForManualSync =
       explicitBackupAsk &&
+      !suppressManualConfirmation &&
       appointmentType === "initial" &&
       !oldAppointmentId &&
       !contact.awaitingBackupTime &&
@@ -6104,7 +6152,10 @@ class SmsBot {
 
     const manualConfirmationAlreadySent = updated.manualAppointmentConfirmationSentFor === startsAt;
     const shouldSendManualConfirmation =
-      !manualConfirmationAlreadySent && !updated.awaitingBackupTime && (startsAt !== oldStartsAt || appointmentId !== oldAppointmentId);
+      !suppressManualConfirmation &&
+      !manualConfirmationAlreadySent &&
+      !updated.awaitingBackupTime &&
+      (startsAt !== oldStartsAt || appointmentId !== oldAppointmentId);
     if (shouldSendManualConfirmation) {
       const gate = await this.evaluateDecisionGate(
         updated,
@@ -6221,6 +6272,112 @@ class SmsBot {
     }
 
     return updated;
+  }
+
+  async syncUpcomingCalendarAppointments(options = {}) {
+    if (this.config.ghl?.calendarFailsafeEnabled === false) return [];
+    if (!this.config.ghl?.token || !this.config.ghl?.locationId || !this.config.ghl?.calendarId) return [];
+    const now = new Date();
+    const intervalMinutes = Math.max(1, Number(this.config.ghl.calendarFailsafeIntervalMinutes || 5));
+    if (!options.force && this.store.getSetting) {
+      const last = await this.store.getSetting("last_calendar_failsafe_sync");
+      const lastRanAt = last?.value?.ranAt ? new Date(last.value.ranAt) : null;
+      if (lastRanAt && !Number.isNaN(lastRanAt.getTime()) && now.getTime() - lastRanAt.getTime() < intervalMinutes * 60 * 1000) {
+        return [];
+      }
+    }
+
+    const lookBackHours = Math.max(0, Number(options.lookBackHours ?? this.config.ghl.calendarFailsafeLookBackHours ?? 12));
+    const lookAheadHours = Math.max(1, Number(options.lookAheadHours ?? this.config.ghl.calendarFailsafeLookAheadHours ?? 36));
+    const startTime = options.startTime || addMinutes(now, -lookBackHours * 60).getTime();
+    const endTime = options.endTime || addMinutes(now, lookAheadHours * 60).getTime();
+    const results = [];
+    let events = [];
+    try {
+      const response = await ghl.listCalendarEvents(this.config, { startTime, endTime });
+      events = response.events || [];
+    } catch (error) {
+      await this.notifyBotError("GHL calendar failsafe sync failed", { Error: error.message }, { level: "warn" });
+      if (this.store.setSetting) {
+        await this.store.setSetting("last_calendar_failsafe_sync", {
+          ranAt: now.toISOString(),
+          ok: false,
+          error: error.message
+        });
+      }
+      return [{ action: "calendar_failsafe_failed", error: error.message }];
+    }
+
+    const seen = new Set();
+    for (const event of events.sort((a, b) => new Date(a.startTime || 0) - new Date(b.startTime || 0))) {
+      const appointmentId = appointmentIdFromPayload(event) || textValue(event.id);
+      const contactId = appointmentContactId(event);
+      const status = appointmentStatusFromPayload(event);
+      const title = appointmentTitleFromPayload(event);
+      const payload = {
+        ...event,
+        appointment: event,
+        event,
+        contactId,
+        appointmentId,
+        startTime: appointmentStartRawFromPayload(event),
+        appointmentStatus: status,
+        title,
+        source: "calendar_failsafe",
+        suppressAlert: true,
+        suppressConfirmation: true,
+        silent: true
+      };
+      const startIso = appointmentStartIsoFromPayload(payload, {}, this.config);
+      const startsAt = startIso ? new Date(startIso) : null;
+      const dedupeKey = [contactId, appointmentId || startIso || event.startTime || "", status || "confirmed"].join("|");
+      if (!contactId || !startsAt || Number.isNaN(startsAt.getTime()) || seen.has(dedupeKey)) {
+        results.push({ action: "calendar_event_skipped", contactId, appointmentId, reason: !contactId ? "missing_contact" : "invalid_or_duplicate" });
+        continue;
+      }
+      seen.add(dedupeKey);
+      if (isInactiveAppointmentStatus(status)) {
+        results.push({ action: "calendar_event_skipped", contactId, appointmentId, reason: `inactive_${status || "status"}` });
+        continue;
+      }
+      try {
+        if (isNoShowAppointmentPayload(payload)) {
+          if (startsAt <= addMinutes(now, 15)) {
+            const contact = await this.markNoShow(payload);
+            results.push({ action: "calendar_no_show_synced", contactId: contact?.id || contactId, appointmentId });
+          } else {
+            results.push({ action: "calendar_event_skipped", contactId, appointmentId, reason: "future_no_show_status" });
+          }
+          continue;
+        }
+        if (startsAt > addMinutes(now, 2)) {
+          const contact = await this.syncAppointment(payload);
+          results.push({ action: "calendar_appointment_synced", contactId: contact?.id || contactId, appointmentId });
+        } else {
+          results.push({ action: "calendar_event_skipped", contactId, appointmentId, reason: "past_or_too_soon" });
+        }
+      } catch (error) {
+        results.push({ action: "calendar_event_failed", contactId, appointmentId, error: error.message });
+        await this.notifyBotError("GHL calendar event failsafe failed", {
+          "Contact ID": contactId,
+          "Appointment ID": appointmentId || "unknown",
+          Status: status || "unknown",
+          Error: error.message
+        });
+      }
+    }
+
+    if (this.store.setSetting) {
+      await this.store.setSetting("last_calendar_failsafe_sync", {
+        ranAt: new Date().toISOString(),
+        ok: true,
+        eventCount: events.length,
+        repairedCount: results.filter((item) => /synced/.test(item.action)).length,
+        skippedCount: results.filter((item) => /skipped/.test(item.action)).length,
+        failedCount: results.filter((item) => /failed/.test(item.action)).length
+      });
+    }
+    return results;
   }
 
   async escalate(contact, reason, extra = {}) {

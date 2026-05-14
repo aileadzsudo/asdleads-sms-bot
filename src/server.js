@@ -1674,6 +1674,17 @@ async function runDueJobs() {
   for (const item of healed) {
     results.push({ ok: true, type: "stuck_state_heal", ...item });
   }
+  if (bot.syncUpcomingCalendarAppointments) {
+    try {
+      const calendarRepairs = await bot.syncUpcomingCalendarAppointments();
+      for (const item of calendarRepairs) {
+        results.push({ ok: !/failed/.test(item.action || ""), type: "calendar_failsafe", ...item });
+      }
+    } catch (error) {
+      await notifyBotError("Calendar failsafe tick failed", { Error: error.message });
+      results.push({ ok: false, type: "calendar_failsafe", error: error.message });
+    }
+  }
   return results;
 }
 
@@ -2203,6 +2214,20 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       send(res, 200, { ok: true, ...(await rescheduleColdPmJobs()) });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/calendar/failsafe-sync") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const results = bot.syncUpcomingCalendarAppointments
+        ? await bot.syncUpcomingCalendarAppointments({ ...payload, force: true })
+        : [];
+      send(res, 200, { ok: true, results });
       return;
     }
 

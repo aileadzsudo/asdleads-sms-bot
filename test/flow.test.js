@@ -6025,3 +6025,85 @@ test("no-response enrollment accepts NR tags from GHL payloads", () => {
   assert.equal(isNoResponseSignal({ contact: { tags: ["NR"] } }), true);
   assert.equal(isNoResponseSignal({ disposition: "answered", tags: ["warm"] }), false);
 });
+
+test("calendar failsafe silently syncs GHL appointments and schedules reminders", async () => {
+  const { bot, store } = makeBot();
+  bot.config.ghl.token = "test-token";
+  bot.config.ghl.locationId = "loc";
+  bot.config.ghl.calendarId = "cal";
+  const startsAt = Date.now() + 2 * 60 * 60 * 1000;
+  store.upsertContact({
+    id: "calendar-sync-1",
+    ghlContactId: "calendar-sync-1",
+    name: "Calendar Lead",
+    phone: "+15550000400",
+    tags: ["levin_co"],
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    humanEscalationStatus: true,
+    automationPaused: true
+  });
+  const originalListCalendarEvents = ghl.listCalendarEvents;
+  try {
+    ghl.listCalendarEvents = async () => ({
+      ok: true,
+      events: [
+        {
+          id: "appt-calendar-1",
+          contactId: "calendar-sync-1",
+          startTime: startsAt,
+          endTime: startsAt + 15 * 60 * 1000,
+          appointmentStatus: "confirmed",
+          title: "Calendar Lead"
+        }
+      ]
+    });
+
+    const result = await bot.syncUpcomingCalendarAppointments({ force: true });
+    const contact = store.getContact("calendar-sync-1");
+    const reminders = store
+      .listJobs("calendar-sync-1")
+      .filter((job) => job.status === "pending" && job.type === "appointment_reminder");
+
+    assert.equal(result.some((item) => item.action === "calendar_appointment_synced"), true);
+    assert.equal(contact.appointmentId, "appt-calendar-1");
+    assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+    assert.equal(reminders.length, 2);
+    assert.equal(store.listMessages("calendar-sync-1").length, 0);
+  } finally {
+    ghl.listCalendarEvents = originalListCalendarEvents;
+  }
+});
+
+test("duplicate no-show webhook for same appointment is idempotent", async () => {
+  const { bot, store } = makeBot();
+  const startsAt = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "noshow-idempotent",
+    ghlContactId: "noshow-idempotent",
+    name: "No Show Lead",
+    phone: "+15550000401",
+    timezone: "America/Chicago",
+    appointmentId: "appt-noshow-1",
+    appointmentNoShowAt: new Date().toISOString(),
+    noShowCount: 1,
+    currentSequenceName: "appointment_no_show",
+    engagementStatus: ENGAGEMENT.MISSED_CALL,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTimeIso: startsAt
+  });
+
+  const contact = await bot.markNoShow({
+    contactId: "noshow-idempotent",
+    appointmentId: "appt-noshow-1",
+    startTime: startsAt,
+    appointmentStatus: "noshow"
+  });
+
+  assert.equal(contact.noShowCount, 1);
+  assert.equal(store.getContact("noshow-idempotent").noShowCount, 1);
+  assert.equal(
+    store.listDecisionLogs("noshow-idempotent").some((log) => log.reason === "repeat_no_show_started"),
+    false
+  );
+});

@@ -55,7 +55,11 @@ function loadConfig() {
       appBaseUrl: process.env.GHL_APP_BASE_URL || "https://app.gohighlevel.com",
       token: process.env.GHL_API_TOKEN || "",
       locationId: process.env.GHL_LOCATION_ID || "",
-      calendarId: process.env.GHL_CALENDAR_ID || ""
+      calendarId: process.env.GHL_CALENDAR_ID || "",
+      calendarFailsafeEnabled: String(process.env.GHL_CALENDAR_FAILSAFE_ENABLED || "true").toLowerCase() !== "false",
+      calendarFailsafeIntervalMinutes: Number(process.env.GHL_CALENDAR_FAILSAFE_INTERVAL_MINUTES || 5),
+      calendarFailsafeLookAheadHours: Number(process.env.GHL_CALENDAR_FAILSAFE_LOOKAHEAD_HOURS || 36),
+      calendarFailsafeLookBackHours: Number(process.env.GHL_CALENDAR_FAILSAFE_LOOKBACK_HOURS || 12)
     },
     slack: {
       token: process.env.SLACK_BOT_TOKEN || "",
