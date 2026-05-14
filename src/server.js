@@ -2176,6 +2176,48 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && req.url === "/api/admin/bot/pause") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      send(res, 200, { ok: true, pause: await bot.globalPauseState() });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/bot/pause") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const pause = await bot.pauseGlobally({
+        hours: payload.hours || 24,
+        pauseUntil: payload.pauseUntil || "",
+        reason: payload.reason || "Global bot pause requested from admin API",
+        requestedBy: payload.requestedBy || "admin"
+      });
+      send(res, 200, { ok: true, pause });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/bot/resume") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const pause = await bot.clearGlobalPause({
+        reason: payload.reason || "Global bot pause cleared from admin API",
+        requestedBy: payload.requestedBy || "admin"
+      });
+      send(res, 200, { ok: true, pause });
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/api/admin/jobs/release-backfill") {
       const auth = requireAdmin(req);
       if (!auth.ok) {

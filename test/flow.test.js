@@ -6292,3 +6292,59 @@ test("duplicate no-show webhook for same appointment is idempotent", async () =>
     false
   );
 });
+
+test("global bot pause blocks direct outbound SMS", async () => {
+  const { bot, store } = makeBot();
+  const pauseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  await bot.pauseGlobally({ pauseUntil, reason: "test pause" });
+  const contact = store.upsertContact({
+    id: "global-pause-send",
+    ghlContactId: "global-pause-send",
+    name: "Paused Lead",
+    phone: "+15550000450",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  const result = await bot.sendBotMessage(contact, "This should not send", { bypassQuietHours: true });
+
+  assert.equal(result, null);
+  assert.equal(store.listMessages("global-pause-send").length, 0);
+  assert.equal(store.getContact("global-pause-send").lastOutboundMessage, undefined);
+  assert.equal(
+    store.listDecisionLogs("global-pause-send").some((log) => log.reason === "global_bot_pause"),
+    true
+  );
+});
+
+test("global bot pause holds due jobs until pause expires", async () => {
+  const { bot, store } = makeBot();
+  const pauseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  await bot.pauseGlobally({ pauseUntil, reason: "test pause" });
+  store.upsertContact({
+    id: "global-pause-job",
+    ghlContactId: "global-pause-job",
+    name: "Paused Job",
+    phone: "+15550000451",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+  const job = store.addJob({
+    type: "send_message",
+    contactId: "global-pause-job",
+    runAt: new Date().toISOString(),
+    payload: { message: "Hold me" }
+  });
+
+  await bot.runDueJob(job);
+
+  const updated = store.data.jobs[job.id];
+  assert.equal(updated.status, "pending");
+  assert.equal(updated.runAt, pauseUntil);
+  assert.equal(updated.skipReason, "global_bot_pause");
+  assert.equal(store.listMessages("global-pause-job").length, 0);
+  assert.equal(
+    store.listDecisionLogs("global-pause-job").some((log) => log.reason === "global_bot_pause"),
+    true
+  );
+});

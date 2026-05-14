@@ -66,6 +66,7 @@ const BOT_DUPLICATE_OUTBOUND_WINDOW_MINUTES = 60;
 const BOT_FLOOD_WINDOW_MINUTES = 15;
 const BOT_FLOOD_WINDOW_LIMIT = 3;
 const BOT_FLOOD_HOURLY_LIMIT = 6;
+const GLOBAL_BOT_PAUSE_SETTING = "global_bot_pause";
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
 const NO_SHOW_SAME_DAY_MINUTES = [0, 15, 60, 120, 240, 360];
 const NO_SHOW_SAME_DAY_TEMPLATE_KEYS = [
@@ -1993,6 +1994,55 @@ class SmsBot {
     this.initialEnrollmentLocks = new Set();
   }
 
+  async globalPauseState() {
+    if (!this.store?.getSetting) return { active: false };
+    const setting = await this.store.getSetting(GLOBAL_BOT_PAUSE_SETTING);
+    const value = setting?.value || {};
+    const pauseUntil = value.pauseUntil || value.until || "";
+    const untilDate = pauseUntil ? new Date(pauseUntil) : null;
+    const active =
+      value.active !== false &&
+      untilDate &&
+      !Number.isNaN(untilDate.getTime()) &&
+      untilDate.getTime() > Date.now();
+    return {
+      active: Boolean(active),
+      pauseUntil: active ? untilDate.toISOString() : "",
+      reason: value.reason || "",
+      requestedBy: value.requestedBy || "",
+      createdAt: value.createdAt || "",
+      updatedAt: setting?.updatedAt || ""
+    };
+  }
+
+  async pauseGlobally(options = {}) {
+    const hours = Number(options.hours || 24);
+    const pauseUntil = options.pauseUntil
+      ? new Date(options.pauseUntil)
+      : addMinutes(new Date(), Number.isFinite(hours) && hours > 0 ? hours * 60 : 24 * 60);
+    const value = {
+      active: true,
+      pauseUntil: pauseUntil.toISOString(),
+      reason: options.reason || "Global bot pause",
+      requestedBy: options.requestedBy || "admin",
+      createdAt: new Date().toISOString()
+    };
+    if (this.store?.setSetting) await this.store.setSetting(GLOBAL_BOT_PAUSE_SETTING, value);
+    return value;
+  }
+
+  async clearGlobalPause(options = {}) {
+    const value = {
+      active: false,
+      pauseUntil: "",
+      reason: options.reason || "Global bot pause cleared",
+      requestedBy: options.requestedBy || "admin",
+      clearedAt: new Date().toISOString()
+    };
+    if (this.store?.setSetting) await this.store.setSetting(GLOBAL_BOT_PAUSE_SETTING, value);
+    return value;
+  }
+
   async notifyBotError(title, details = {}, options = {}) {
     try {
       const recorded = await recordBotError(this.store, title, details, options);
@@ -2512,6 +2562,16 @@ class SmsBot {
     if (isEmptyTextToken(message)) {
       await this.recordDecision(contact, "skipped", "empty_bot_message", { meta: { templateKey: options.templateKey || "" } });
       return null;
+    }
+    if (!options.ignoreGlobalPause) {
+      const pause = await this.globalPauseState();
+      if (pause.active) {
+        await this.recordDecision(contact, "skipped", "global_bot_pause", {
+          message,
+          meta: { pauseUntil: pause.pauseUntil, reason: pause.reason }
+        });
+        return null;
+      }
     }
     if (!options.allowAfterOptOut && (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT)) {
       await this.recordDecision(contact, "skipped", "opted_out_or_terminal", { message, meta: { templateKey: options.templateKey || "" } });
@@ -6936,6 +6996,24 @@ class SmsBot {
   }
 
   async runDueJob(job) {
+    const pause = await this.globalPauseState();
+    if (pause.active) {
+      await this.store.updateJob(job.id, {
+        status: "pending",
+        runAt: pause.pauseUntil,
+        skipReason: "global_bot_pause",
+        lastPausedAt: new Date().toISOString()
+      });
+      const pausedContact = job.contactId ? await this.store.getContact(job.contactId) : null;
+      if (pausedContact) {
+        await this.recordDecision(pausedContact, "queued", "global_bot_pause", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: { pauseUntil: pause.pauseUntil, reason: pause.reason }
+        });
+      }
+      return;
+    }
     const outboundJobTypes = [
       "initial_sms",
       "send_message",
