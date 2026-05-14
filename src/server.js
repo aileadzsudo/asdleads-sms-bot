@@ -1499,6 +1499,24 @@ async function integrationStatus() {
     safeJson("Slack auth", () => slackAuthStatus())
   ]);
   const lastHumanOutboundWebhook = store?.getSetting ? await store.getSetting("last_human_outbound_webhook") : null;
+  const decisionLogs = store?.listDecisionLogs ? await store.listDecisionLogs() : [];
+  const gateLogs = decisionLogs
+    .filter((item) => /^llm_gate_/i.test(item.action || ""))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const since24h = Date.now() - 24 * 60 * 60 * 1000;
+  const recentGateLogs = gateLogs.filter((item) => new Date(item.createdAt || 0).getTime() >= since24h);
+  const gateCounts = recentGateLogs.reduce(
+    (counts, item) => {
+      counts.total += 1;
+      if (item.action === "llm_gate_allowed") counts.allowed += 1;
+      if (item.action === "llm_gate_blocked") counts.blocked += 1;
+      if (item.action === "llm_gate_corrected_time") counts.corrected += 1;
+      if (item.action === "llm_gate_escalated") counts.escalated += 1;
+      if (item.action === "llm_gate_failed") counts.failed += 1;
+      return counts;
+    },
+    { total: 0, allowed: 0, blocked: 0, corrected: 0, escalated: 0, failed: 0 }
+  );
   return {
     ok: true,
     checkedAt: new Date().toISOString(),
@@ -1513,12 +1531,24 @@ async function integrationStatus() {
       slackBotErrorsChannel: config.slack.botErrorsChannel,
       slackBookingChannel: config.slack.bookingChannel,
       slackSendInDryRun: config.slack.sendInDryRun,
-      llmFallbackEnabled: config.llm.fallbackEnabled
+      llmFallbackEnabled: config.llm.fallbackEnabled,
+      llmDecisionGateEnabled: Boolean(config.llm.decisionGateEnabled),
+      llmDecisionGateModel: config.llm.decisionGateModel,
+      llmDecisionGateMinConfidence: config.llm.decisionGateMinConfidence
     },
     checks: {
       ghl,
       openaiBatch,
       slack
+    },
+    llmDecisionGate: {
+      enabled: Boolean(config.llm.decisionGateEnabled && config.llm.apiKey),
+      model: config.llm.decisionGateModel,
+      minConfidence: config.llm.decisionGateMinConfidence,
+      lastDecisionAt: gateLogs[0]?.createdAt || null,
+      lastDecisionAction: gateLogs[0]?.action || "",
+      lastDecisionReason: gateLogs[0]?.reason || gateLogs[0]?.meta?.reason || "",
+      counts24h: gateCounts
     },
     lastHumanOutboundWebhook: lastHumanOutboundWebhook?.value || null
   };

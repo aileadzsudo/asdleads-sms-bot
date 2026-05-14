@@ -72,6 +72,7 @@
         const ghl = checks.ghl || {};
         const openai = checks.openaiBatch || {};
         const slack = checks.slack || {};
+        const gate = data.llmDecisionGate || {};
 
         $("ghlState").textContent = stateText(ghl, "GHL read access works.", "GHL read access needs attention.");
         $("ghlFacts").innerHTML = facts([
@@ -85,6 +86,14 @@
         $("openaiFacts").innerHTML = facts([
           ["API key", configured.openaiKey ? "configured" : "missing"],
           ["LLM fallback", configured.llmFallbackEnabled ? "on" : "off"],
+          ["Decision gate", gate.enabled ? "on" : "off"],
+          ["Gate model", gate.model || "-"],
+          ["Gate min confidence", gate.minConfidence ?? "-"],
+          ["Gate decisions 24h", gate.counts24h?.total ?? 0],
+          ["Allowed / blocked", `${gate.counts24h?.allowed ?? 0} / ${gate.counts24h?.blocked ?? 0}`],
+          ["Corrected / escalated", `${gate.counts24h?.corrected ?? 0} / ${gate.counts24h?.escalated ?? 0}`],
+          ["Gate failures 24h", gate.counts24h?.failed ?? 0],
+          ["Last gate action", gate.lastDecisionAction || "-"],
           ["Batch status", openai.value?.batch?.status || openai.error || "-"],
           ["Batch total", openai.value?.batch?.request_counts?.total ?? "-"]
         ]);
@@ -94,6 +103,8 @@
           ["Bot token", configured.slackToken ? "configured" : "missing"],
           ["Escalations channel", configured.slackChannel || "missing"],
           ["Bot errors channel", configured.slackBotErrorsChannel || "missing"],
+          ["Bot error delivery", configured.slackToken && configured.slackBotErrorsChannel ? "enabled" : "missing setup"],
+          ["Duplicate error throttle", "30 minutes"],
           ["Booking channel", configured.slackBookingChannel || "missing"],
           ["Slack during dry run", configured.slackSendInDryRun ? "enabled" : "blocked"],
           ["Team", slack.value?.team || "-"],
