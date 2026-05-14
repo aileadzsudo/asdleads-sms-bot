@@ -222,6 +222,27 @@ function classifyHumanContextIntent(text, progress) {
   return null;
 }
 
+function classifyLeadPauseIntent(text, progress) {
+  const t = normalize(text);
+  if (!t) return null;
+  const asksToWaitForLead =
+    /\b(i'?ll|ill|i will|i can|i'll)\s+(txt|text|message|msg|call|reach out|get back|respond|reply|let you know|hit you up)\b/.test(t) ||
+    /\b(text|txt|message|msg|call|reach out|get back|respond|reply)\s+(when|once|later)\b/.test(t);
+  const asksNotToBeBothered =
+    /\b(don'?t|dont|do not|please don'?t|pls don'?t|please dont|pls dont)\s+(blow up|keep texting|keep messaging|keep calling|spam|bother)\b/.test(t) ||
+    /\b(stop|quit)\s+(blowing up|spamming|bothering)\b/.test(t);
+  const badTime = /\b(not a good time|not good time|bad time|wrong time)\b/.test(t);
+  const temporaryLanguage = /\b(when i'?m free|when im free|when i am free|when available|when i'?m available|when im available|when i can|later|not now|not right now|busy)\b/.test(t);
+  const hasAnswer = hasExpectedAnswerSignal(progress, t);
+  const hasSchedulingSignal = hasClockTimeSignal(t) || /\b(today|tomorrow|morning|afternoon|evening|tonight|noon)\b/.test(t);
+
+  if (hasAnswer || hasSchedulingSignal) return null;
+  if (asksNotToBeBothered) return { intent: "lead_requested_pause", confidence: 0.96 };
+  if (badTime && (asksToWaitForLead || temporaryLanguage)) return { intent: "lead_requested_pause", confidence: 0.94 };
+  if (asksToWaitForLead && temporaryLanguage) return { intent: "lead_requested_pause", confidence: 0.9 };
+  return null;
+}
+
 function isCallNow(text) {
   const t = normalize(text);
   if (
@@ -441,6 +462,7 @@ module.exports = {
   parseFaultAnswer,
   parseMedicalAnswer,
   classifyHumanContextIntent,
+  classifyLeadPauseIntent,
   parseCallTime,
   parseExpectedAnswer,
   isCallNow,

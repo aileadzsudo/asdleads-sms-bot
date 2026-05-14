@@ -8,6 +8,7 @@ const {
   parseCallTime,
   escalationReason,
   classifyHumanContextIntent,
+  classifyLeadPauseIntent,
   isCallNow,
   isDocumentOrReport
 } = require("../src/classifier");
@@ -142,6 +143,19 @@ test("moves ambiguous past time-only replies to the next day", () => {
 test("detects human context before treating yes as qualification answer", () => {
   const intent = classifyHumanContextIntent("I'm sorry yes I'm currently busy", QUALIFICATION.NEEDS_MEDICAL);
   assert.equal(intent.intent, "busy_now");
+});
+
+test("detects lead-requested pause without treating it as opt-out", () => {
+  const intent = classifyLeadPauseIntent(
+    "Not a good time. I'll txt when I'm free. Pls dont blow up my phone",
+    QUALIFICATION.NEEDS_FAULT
+  );
+  assert.equal(intent.intent, "lead_requested_pause");
+  assert.equal(isOptOut("Not a good time. I'll txt when I'm free. Pls dont blow up my phone"), false);
+});
+
+test("does not pause when a busy message includes an actual call time", () => {
+  assert.equal(classifyLeadPauseIntent("Not a good time, tomorrow at 3 works", QUALIFICATION.NEEDS_CALL_TIME), null);
 });
 
 test("does not block real medical answers that include context", () => {

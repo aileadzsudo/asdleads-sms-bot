@@ -24,6 +24,7 @@ const {
   isOptOut,
   escalationReason,
   classifyHumanContextIntent,
+  classifyLeadPauseIntent,
   parseAccidentDate,
   parseMedicalAnswer,
   parseCallTime,
@@ -439,7 +440,7 @@ function callAskTemplateForTime(contact, config, now = new Date()) {
   const local = getLocalParts(now, timeZone);
   const lateEvening = local.hour >= 20;
   if (!isWithinTextingWindow(contact, config, now) || lateEvening) {
-    return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with an Accident Support Desk Specialist who can create a compensation gameplan for you. What time works best tomorrow or the next day? 📞";
+    return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with an Accident Support Desk Specialist who can create a compensation gameplan for you. What call time works best tomorrow or the next day? 📞";
   }
   if (local.hour >= 18) {
     return "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with an Accident Support Desk Specialist who can create a compensation gameplan for you. Are you open for a call this evening or tomorrow? 📞";
@@ -2664,6 +2665,57 @@ class SmsBot {
     });
   }
 
+  async pauseUntilLeadReplies(contact, message, intent = {}) {
+    const now = new Date().toISOString();
+    const updated = await this.store.upsertContact({
+      ...contact,
+      automationPaused: true,
+      automationPauseReason: "lead_requested_pause",
+      humanEscalationStatus: false,
+      humanEscalationStage: "lead_requested_pause",
+      currentSequenceName: "lead_requested_pause",
+      currentSequenceSlot: "wait_for_lead",
+      lastLeadRequestedPauseAt: now,
+      lastLeadRequestedPauseMessage: message
+    });
+    await this.store.cancelJobsForContact(updated.id, "lead requested no follow-up");
+    await this.recordDecision(updated, "paused", "lead_requested_pause", {
+      trigger: "inbound_sms",
+      message,
+      meta: { confidence: intent.confidence || "" }
+    });
+    await this.writeGhlNote(updated, "SMS bot paused: lead asked us not to keep texting", {
+      Message: message,
+      "Bot action": "Paused all automation until the lead texts back."
+    });
+    await this.sendBotMessage(updated, render(qualificationTemplates.leadRequestedPause, updated), {
+      bypassQuietHours: true,
+      skipTerminalTagCheck: true
+    });
+    return this.store.getContact(updated.id);
+  }
+
+  async resumeFromLeadRequestedPause(contact, message) {
+    const updated = await this.store.upsertContact({
+      ...contact,
+      automationPaused: false,
+      automationPauseReason: "",
+      humanEscalationStage:
+        contact.humanEscalationStage === "lead_requested_pause" ? "lead_replied_after_pause" : contact.humanEscalationStage,
+      currentSequenceName:
+        contact.currentSequenceName === "lead_requested_pause" ? "" : contact.currentSequenceName,
+      currentSequenceSlot:
+        contact.currentSequenceSlot === "wait_for_lead" ? "" : contact.currentSequenceSlot,
+      lastLeadPauseResumeAt: new Date().toISOString(),
+      lastLeadPauseResumeMessage: message
+    });
+    await this.recordDecision(updated, "repaired", "lead_replied_after_pause", {
+      trigger: "inbound_sms",
+      message
+    });
+    return updated;
+  }
+
   async scheduleColdOutreach(contact) {
     const sentKeys = new Set(contact.sentColdTemplateKeys || []);
     const existingJobs = await this.store.listJobs(contact.id);
@@ -3205,6 +3257,16 @@ class SmsBot {
       return this.stopForManualHoldTag(contact);
     }
     contact = await this.applyTimezoneCorrection(contact, inbound.lastInboundMessage);
+    const leadPauseIntent = classifyLeadPauseIntent(inbound.lastInboundMessage, contact.qualificationProgress);
+    if (contact.automationPaused && contact.automationPauseReason === "lead_requested_pause") {
+      if (leadPauseIntent) {
+        return this.pauseUntilLeadReplies(contact, inbound.lastInboundMessage, leadPauseIntent);
+      }
+      contact = await this.resumeFromLeadRequestedPause(contact, inbound.lastInboundMessage);
+    }
+    if (leadPauseIntent) {
+      return this.pauseUntilLeadReplies(contact, inbound.lastInboundMessage, leadPauseIntent);
+    }
     if (isSoftRefusal(inbound.lastInboundMessage)) {
       return this.escalate(contact, "soft_refusal");
     }

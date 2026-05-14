@@ -49,6 +49,7 @@ const qualificationTemplates = {
   callAsk: "Based on what you’ve shared, we can definitely help you out! 💰 The next step is to connect you with an Accident Support Desk Specialist who can create a compensation gameplan for you. Are you open for a call now or later today? 📞",
   clarify: "I want to make sure I understood you correctly 🙏 Can you answer that last question with a quick yes, no, or not sure?",
   optOutConfirm: "No problem, we won't text you again. If you change your mind, please feel free to reach back out.",
+  leadRequestedPause: "No worries, I won't keep texting you. Text me whenever you're free and I'll pick it back up from there 🙏",
   existingRepresentation: "No worries at all 🙏 We're always here to help. If you ever feel unsatisfied or unhappy with your current representation, please feel free to reach back out any time. We'd be happy to give you a second opinion on your case and see if we can help.",
   injuryContextCallAsk: "Got it, that definitely matters 🤕 Even if you have not treated yet, injuries are important. The next step is getting you with a Specialist. What time works best for a quick call today or tomorrow? 📞",
   callNowNoAnswer: "Hey [NAME], looks like we just tried giving you a call but missed you. No worries if you're busy 🙏 What time works best later today or tomorrow so we can reach you? 📞",

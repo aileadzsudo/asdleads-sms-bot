@@ -211,6 +211,60 @@ test("busy context does not count yes as a medical answer", async () => {
   assert.match(store.getContact("busy-1").lastOutboundMessage, /medical treatment/i);
 });
 
+test("lead asked not to be blown up pauses all bot follow-up until they reply", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "pause-me",
+    ghlContactId: "pause-me",
+    name: "Lynda",
+    phone: "+15550000052",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+  store.addJob({ type: "send_cold_template", contactId: "pause-me", runAt: new Date().toISOString(), payload: {} });
+  store.addJob({ type: "warm_followup", contactId: "pause-me", runAt: new Date().toISOString(), payload: {} });
+  store.addJob({ type: "appointment_reminder", contactId: "pause-me", runAt: new Date().toISOString(), payload: {} });
+
+  const contact = await bot.handleInboundSms({
+    contactId: "pause-me",
+    message: "Not a good time. I'll txt when I'm free. Pls dont blow up my phone"
+  });
+
+  assert.equal(contact.automationPaused, true);
+  assert.equal(contact.automationPauseReason, "lead_requested_pause");
+  assert.equal(contact.humanEscalationStatus, false);
+  assert.equal(contact.optOutStatus, undefined);
+  assert.equal(contact.currentSequenceName, "lead_requested_pause");
+  assert.match(contact.lastOutboundMessage, /won't keep texting/i);
+  assert.equal(
+    Object.values(store.data.jobs).every((job) => job.contactId !== "pause-me" || job.status === "cancelled"),
+    true
+  );
+  assert.equal(store.listDecisionLogs("pause-me").some((log) => log.reason === "lead_requested_pause"), true);
+});
+
+test("lead-requested pause resumes only after the lead texts again", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "pause-resume",
+    ghlContactId: "pause-resume",
+    name: "Lynda",
+    phone: "+15550000053",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  await bot.handleInboundSms({
+    contactId: "pause-resume",
+    message: "Not a good time. I'll txt when I'm free. Pls dont blow up my phone"
+  });
+  const contact = await bot.handleInboundSms({ contactId: "pause-resume", message: "I'm free now" });
+
+  assert.equal(contact.automationPaused, false);
+  assert.equal(contact.automationPauseReason, "");
+  assert.equal(store.listDecisionLogs("pause-resume").some((log) => log.reason === "lead_replied_after_pause"), true);
+});
+
 test("long fault answer is saved instead of escalated as detailed information", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
