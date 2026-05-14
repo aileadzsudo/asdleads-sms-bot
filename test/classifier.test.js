@@ -54,6 +54,16 @@ test("parses call now and simple scheduled time", () => {
   assert.equal(parseCallTime("Now is ok", contact, config).type, "now");
   assert.equal(isCallNow("not right now. I'm sorry."), false);
   assert.equal(parseCallTime("not right now. I'm sorry.", contact, config).type, "needs_specific_time");
+  assert.equal(isCallNow("Yes. Sorry working right now"), false);
+  assert.equal(isCallNow("I'm at work right now but 7 pm works"), false);
+  const workingNowWithFutureTime = parseCallTime(
+    "Yes. Sorry working right now\nBut yes tonight at 7 pm",
+    { timezone: "America/Denver" },
+    config,
+    new Date("2026-05-14T23:34:00.000Z")
+  );
+  assert.equal(workingNowWithFutureTime.type, "scheduled");
+  assert.equal(workingNowWithFutureTime.startsAt, "2026-05-15T01:00:00.000Z");
   assert.equal(parseCallTime("anytime", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("can you call back later?", contact, config).type, "needs_specific_time");
   assert.equal(parseCallTime("tomorrow morning", contact, config, new Date("2026-05-07T15:00:00Z")).type, "needs_specific_time");
