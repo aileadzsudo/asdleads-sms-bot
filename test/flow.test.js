@@ -2468,6 +2468,29 @@ test("SMS escalation Slack copy stays compact without unknown qualification fiel
   assert.doesNotMatch(result.text, /Medical:/);
 });
 
+test("SMS escalation Slack skips notifications without a real inbound message", async () => {
+  const baseConfig = testConfig("");
+  const result = await slack.sendEscalation(
+    {
+      ...baseConfig,
+      dryRun: true,
+      ghl: { ...baseConfig.ghl, locationId: "loc-1" },
+      slack: { token: "", channel: "#sms", botErrorsChannel: "#bot-errors", bookingChannel: "#booking" }
+    },
+    {
+      id: "slack-empty-copy",
+      ghlContactId: "slack-empty-copy",
+      name: "Slack Empty",
+      phone: "+15550000062",
+      lastInboundMessage: ""
+    },
+    "third_no_show"
+  );
+
+  assert.equal(result.skipped, true);
+  assert.match(result.reason, /no inbound message/i);
+});
+
 test("booking Slack copy does not include qualification answer noise", async () => {
   const result = await slack.sendAppointmentBooked(
     { ...testConfig(""), dryRun: true, slack: { token: "", channel: "#sms", botErrorsChannel: "#bot-errors", bookingChannel: "#booking" } },

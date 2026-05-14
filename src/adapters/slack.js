@@ -47,6 +47,10 @@ async function postSlack(config, text, channel = config.slack.channel) {
 }
 
 async function sendEscalation(config, contact, reason, extra = {}) {
+  const message = String(contact.lastInboundMessage || "").trim();
+  if (!message || message.toLowerCase() === "unknown") {
+    return { ok: true, skipped: true, reason: "Slack escalation skipped because no inbound message was available" };
+  }
   return postSlack(config, smsEscalationText(config, contact));
 }
 
