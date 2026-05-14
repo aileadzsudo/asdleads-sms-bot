@@ -161,6 +161,16 @@ Use the HTTPS ngrok URL as the base URL in GHL webhook settings.
 
 Do not deploy this MVP as serverless. It has a scheduler and writes bot memory to `data/store.json`, so use one always-on Node service with persistent storage.
 
+## Handoff Package
+
+If another operator or developer needs to clone this system into another GoHighLevel account, start with:
+
+```text
+docs/handoff/README.md
+```
+
+That folder explains how to hand over the repo, environment variables, database snapshot, GoHighLevel webhooks, Slack setup, validation tests, and future update strategy without exposing live secrets.
+
 Minimum deployment requirements:
 
 - Node 20+
