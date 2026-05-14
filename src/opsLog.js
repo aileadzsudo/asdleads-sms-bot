@@ -11,9 +11,13 @@ function compact(value, max = 500) {
 }
 
 function errorSignature(title, details = {}) {
+  const rawError = String(details.Error || details.error || "");
+  const normalizedError = /Invalid Private Integration token|statusCode"?\s*:\s*401|HTTP 401/i.test(rawError)
+    ? "GHL_AUTH_401"
+    : rawError;
   return [
     title,
-    details.Error || details.error || "",
+    normalizedError,
     details.Path || "",
     details.Type || "",
     details["Contact ID"] || details["GHL contact"] || details.Phone || ""
