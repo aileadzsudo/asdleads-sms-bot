@@ -6112,7 +6112,49 @@ class SmsBot {
         }
       );
       if (gate.decision === "correct_time" && gate.corrected_time_text) {
-        return this.handleReschedule(updated, gate.corrected_time_text, { skipDecisionGate: true });
+        if (oldStartsAt) {
+          await this.store.cancelJobsForContact(updated.id, "manual appointment sync corrected to existing appointment", (job) =>
+            job.type === "appointment_reminder" && job.payload?.appointmentIso === startsAt
+          );
+          const restoredDisplay = contact.preferredCallTime || formatForContact(new Date(oldStartsAt), contact, this.config);
+          const restored = await this.store.upsertContact({
+            ...updated,
+            engagementStatus: contact.engagementStatus || updated.engagementStatus,
+            qualificationProgress: contact.qualificationProgress || updated.qualificationProgress,
+            preferredCallTime: restoredDisplay,
+            preferredCallTimeIso: oldStartsAt,
+            appointmentId: oldAppointmentId || updated.appointmentId,
+            appointmentRescheduledAt: contact.appointmentRescheduledAt || "",
+            lastAppointmentSyncSuppressedAt: new Date().toISOString(),
+            lastAppointmentSyncSuppressedReason: "llm_gate_corrected_to_existing_appointment",
+            lastAppointmentSyncSuppressedRawStart: textValue(rawStartsAt),
+            lastAppointmentSyncSuppressedResolvedStart: startsAt,
+            lastAppointmentSyncSuppressedCorrectedText: gate.corrected_time_text
+          });
+          await this.scheduleAppointmentReminders(restored);
+          await this.recordDecision(restored, "skipped", "manual_appointment_sync_corrected_to_existing_time", {
+            trigger: "appointment_sync",
+            meta: {
+              proposedStartIso: startsAt,
+              proposedDisplay: display,
+              restoredStartIso: oldStartsAt,
+              restoredDisplay,
+              correctedTimeText: gate.corrected_time_text,
+              reason: gate.reason || ""
+            }
+          });
+          return restored;
+        }
+        return this.handleDecisionGateStop(
+          updated,
+          {
+            ...gate,
+            decision: "block_escalate",
+            reason: `Manual appointment confirmation returned a corrected time but there was no existing appointment to restore. ${gate.reason || ""}`.trim()
+          },
+          "manual_appointment_confirmation",
+          updated.lastInboundMessage || updated.lastHumanOutboundMessage || ""
+        );
       }
       if (gate.decision === "switch_to_reschedule") {
         return this.handleReschedule(updated, gate.corrected_time_text || updated.lastInboundMessage || "", { skipDecisionGate: true });

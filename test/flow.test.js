@@ -3815,6 +3815,63 @@ test("manual GHL appointment sync adopts appointment and schedules reminders", a
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "backup_time_timeout" && job.status === "pending"), false);
 });
 
+test("manual appointment sync LLM correction restores existing time without rolling to next week", async () => {
+  const { bot, store } = makeBot();
+  const originalHandleReschedule = bot.handleReschedule.bind(bot);
+  const oldStart = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const proposedStart = new Date(oldStart.getTime() + 15 * 60 * 1000);
+  const oldDisplay = "Today 9:00 PM PST";
+  bot.handleReschedule = async () => {
+    throw new Error("manual sync correction should not call handleReschedule");
+  };
+  bot.evaluateDecisionGate = async () => ({
+    decision: "correct_time",
+    confidence: 0.9,
+    reason: "No lead confirmation of the changed manual appointment time.",
+    corrected_time_text: oldDisplay,
+    risk_flags: ["time_mismatch"]
+  });
+
+  try {
+    store.upsertContact({
+      id: "manual-sync-correct-existing",
+      ghlContactId: "manual-sync-correct-existing",
+      name: "Manual Correct",
+      phone: "+15550001075",
+      timezone: "America/Los_Angeles",
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.COMPLETE,
+      preferredCallTime: oldDisplay,
+      preferredCallTimeIso: oldStart.toISOString(),
+      appointmentId: "existing-appt",
+      lastInboundMessage: "Ok"
+    });
+
+    const contact = await bot.syncAppointment({
+      contactId: "manual-sync-correct-existing",
+      appointmentId: "existing-appt",
+      startTime: proposedStart.toISOString(),
+      status: "confirmed"
+    });
+    const jobs = Object.values(store.data.jobs);
+
+    assert.equal(contact.preferredCallTimeIso, oldStart.toISOString());
+    assert.equal(contact.preferredCallTime, oldDisplay);
+    assert.equal(contact.lastAppointmentSyncSuppressedReason, "llm_gate_corrected_to_existing_appointment");
+    assert.equal(store.data.messages.length, 0);
+    assert.equal(
+      jobs.some((job) => job.status === "pending" && job.payload?.appointmentIso === proposedStart.toISOString()),
+      false
+    );
+    assert.equal(
+      store.data.decisionLogs.some((log) => log.reason === "manual_appointment_sync_corrected_to_existing_time"),
+      true
+    );
+  } finally {
+    bot.handleReschedule = originalHandleReschedule;
+  }
+});
+
 test("date replies can also save medical treatment details for later qualification memory", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
