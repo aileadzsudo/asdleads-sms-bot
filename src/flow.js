@@ -289,6 +289,14 @@ function isAppointmentSupportContext(contact = {}) {
   );
 }
 
+function canRunAppointmentSupportJob(contact = {}, jobType = "") {
+  if (!contact || !isAppointmentSupportJobType(jobType) || !isAppointmentSupportContext(contact)) return false;
+  if (contact.optOutStatus || hasSignedTag(contact) || hasNqTag(contact) || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) return false;
+  if (["admin_pause", "lead_requested_pause", "bad_appointment_review", "nq_tag", "signed_tag"].includes(contact.automationPauseReason)) return false;
+  if (hasNoShowAutomationHoldTag(contact) && !contact.appointmentSyncedAt) return false;
+  return true;
+}
+
 function actionFromTags(tags) {
   const normalizedTags = normalizeTags(tags).map((tag) => tag.replace(/^#/, "").replace(/[-\s]+/g, "_"));
   if (normalizedTags.some((tag) => ["call_drop", "call_dropped", "dropped_call"].includes(tag))) {
@@ -6363,18 +6371,16 @@ class SmsBot {
     for (const raw of contacts) {
       let contact = raw;
       const jobs = contact?.id ? await this.store.listJobs(contact.id) : [];
+      const canRepairAppointmentReminders = canRunAppointmentSupportJob(contact, "appointment_reminder");
+      const canRepairNoShowRecovery = canRunAppointmentSupportJob(contact, "missed_call_followup");
       const terminalOrHardPaused =
         !contact ||
         contact.optOutStatus ||
         hasSignedTag(contact) ||
         hasNqTag(contact) ||
-        hasManualHumanHoldTag(contact) ||
+        (hasManualHumanHoldTag(contact) && !canRepairAppointmentReminders && !canRepairNoShowRecovery) ||
         contact.engagementStatus === ENGAGEMENT.OPTED_OUT ||
-        (contact.automationPaused &&
-          !(
-            isAppointmentSupportContext(contact) &&
-            ["contract_pending_tag", "contract_pending_appointment_support"].includes(contact.automationPauseReason)
-          ));
+        (contact.automationPaused && !canRepairAppointmentReminders && !canRepairNoShowRecovery);
 
       if (!terminalOrHardPaused) {
         const appointmentDate = contact.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
@@ -6385,7 +6391,7 @@ class SmsBot {
         );
         const shouldHaveReminders =
           appointmentFuture &&
-          !contact.humanEscalationStatus &&
+          canRepairAppointmentReminders &&
           (contact.appointmentId ||
             contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
             contact.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
@@ -6400,7 +6406,7 @@ class SmsBot {
         const hasNoShowRecoveryJob = jobs.some(
           (job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)
         );
-        if (noShowActive && !contact.humanEscalationStatus && !hasNoShowRecoveryJob) {
+        if (noShowActive && canRepairNoShowRecovery && !hasNoShowRecoveryJob) {
           const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(contact);
           await this.scheduleNoShowFollowUps(contact, { skipEarlySameDay: hasBackupReminderPlan });
           await this.recordDecision(contact, "repaired", "missing_no_show_recovery_jobs_recreated", {
@@ -6599,8 +6605,8 @@ class SmsBot {
       }
     }
     const appointmentSupportJob = isAppointmentSupportJobType(job.type);
-    const manualHoldAppointmentSupport =
-      appointmentSupportJob && isAppointmentSupportContext(contact) && Boolean(contact?.appointmentSyncedAt);
+    const appointmentSupportAllowed = canRunAppointmentSupportJob(contact, job.type);
+    const manualHoldAppointmentSupport = appointmentSupportAllowed && hasManualHumanHoldTag(contact);
     if (contact && hasSignedTag(contact)) await this.stopForSignedTag(contact);
     if (contact && hasNqTag(contact)) await this.stopForNqTag(contact);
     if (contact && hasContractPendingTag(contact) && !appointmentSupportJob) {
@@ -6632,23 +6638,18 @@ class SmsBot {
     if (
       !contact ||
       contact.optOutStatus ||
-      (contact.automationPaused &&
-        !(
-          appointmentSupportJob &&
-          isAppointmentSupportContext(contact) &&
-          ["contract_pending_tag", "contract_pending_appointment_support"].includes(contact.automationPauseReason)
-        )) ||
+      (contact.automationPaused && !appointmentSupportAllowed) ||
       contact.engagementStatus === ENGAGEMENT.OPTED_OUT ||
       contact.automationPauseReason === "nq_tag" ||
       contact.automationPauseReason === "signed_tag" ||
-      (contact.automationPauseReason === "manual_hold_tag" && !manualHoldAppointmentSupport) ||
-      (contact.humanEscalationStatus && HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type)) ||
+      (contact.automationPauseReason === "manual_hold_tag" && !appointmentSupportAllowed) ||
+      (contact.humanEscalationStatus && HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type) && !appointmentSupportAllowed) ||
       hasSignedTag(contact) ||
       hasNqTag(contact) ||
-      (hasManualHumanHoldTag(contact) && !manualHoldAppointmentSupport)
+      (hasManualHumanHoldTag(contact) && !appointmentSupportAllowed)
     ) {
       const skipReason =
-        contact?.humanEscalationStatus && HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type)
+        contact?.humanEscalationStatus && HUMAN_ESCALATION_BLOCKED_JOB_TYPES.includes(job.type) && !appointmentSupportAllowed
           ? "human_escalation_active"
           : "blocked_by_contact_state";
       await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString(), skipReason });

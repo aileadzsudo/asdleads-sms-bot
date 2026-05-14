@@ -1588,6 +1588,34 @@ test("stuck-state healer recreates missing appointment reminders for scheduled c
   assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
 });
 
+test("stuck-state healer recreates missing appointment reminders for human-booked appointments", async () => {
+  const { bot, store } = makeBot();
+  const startsAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "human-booked-missing-reminder",
+    ghlContactId: "human-booked-missing-reminder",
+    name: "Human Booked",
+    phone: "+15550000243",
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_working",
+    automationPaused: true,
+    automationPauseReason: "human_working",
+    preferredCallTime: "Today at 2:00 PM MST",
+    preferredCallTimeIso: startsAt,
+    appointmentId: "appt-human-booked",
+    appointmentSyncedAt: new Date().toISOString()
+  });
+
+  const healed = await bot.healStuckContacts();
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "human-booked-missing-reminder");
+
+  assert.deepEqual(healed, [{ contactId: "human-booked-missing-reminder", action: "scheduled_missing_appointment_reminders" }]);
+  assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
+});
+
 test("scheduled call can be rescheduled and old reminders are replaced", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
