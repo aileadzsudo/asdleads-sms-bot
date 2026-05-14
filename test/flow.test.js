@@ -1152,6 +1152,86 @@ test("call time range after tomorrow clarification books primary and backup", as
   }
 });
 
+test("natural time window suggests a clean reschedule slot instead of repeating exact-time asks", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "natural-window-reschedule",
+    ghlContactId: "natural-window-reschedule",
+    name: "Derick",
+    phone: "+15550000189",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTime: "Wed, May 13, 3:00 PM CST",
+    preferredCallTimeIso: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "appt-natural-window",
+    awaitingSpecificCallTime: true,
+    callTimeClarificationDay: "tomorrow",
+    callTimeClarificationMode: "reschedule",
+    callTimeClarificationAskedAt: new Date().toISOString()
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "natural-window-reschedule", message: "After 330 before 5" });
+
+  assert.equal(contact.qualificationProgress, QUALIFICATION.NEEDS_CALL_TIME);
+  assert.equal(contact.awaitingSpecificCallTime, true);
+  assert.equal(contact.availabilitySuggestionMode, "reschedule");
+  assert.match(contact.lastOutboundMessage, /4:00 PM/);
+  assert.match(contact.lastOutboundMessage, /4:30 PM.*backup/);
+  assert.doesNotMatch(contact.lastOutboundMessage, /exact time/i);
+  assert.equal(
+    Object.values(store.data.jobs).some(
+      (job) => job.contactId === "natural-window-reschedule" && job.type === "warm_followup" && job.status === "pending"
+    ),
+    true
+  );
+});
+
+test("yes to a suggested reschedule slot updates the existing appointment with backup", async () => {
+  const { bot, store } = makeBot();
+  const originalUpdateAppointment = ghl.updateAppointment;
+  ghl.updateAppointment = async () => ({ id: "appt-natural-window" });
+  try {
+    const localTomorrow = getLocalParts(addDays(new Date(), 1), "America/Chicago");
+    const primaryIso = localDateToUtc(
+      { year: localTomorrow.year, month: localTomorrow.month, day: localTomorrow.day, hour: 16, minute: 0 },
+      "America/Chicago"
+    ).toISOString();
+    const backupIso = localDateToUtc(
+      { year: localTomorrow.year, month: localTomorrow.month, day: localTomorrow.day, hour: 16, minute: 30 },
+      "America/Chicago"
+    ).toISOString();
+    store.upsertContact({
+      id: "natural-window-confirm",
+      ghlContactId: "natural-window-confirm",
+      name: "Derick",
+      phone: "+15550000190",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      preferredCallTime: "Wed, May 13, 3:00 PM CST",
+      preferredCallTimeIso: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      appointmentId: "appt-natural-window",
+      awaitingSpecificCallTime: true,
+      availabilitySuggestionMode: "reschedule",
+      availabilitySuggestedPrimaryIso: primaryIso,
+      availabilitySuggestedPrimaryText: "4:00 PM",
+      availabilitySuggestedSecondaryIso: backupIso,
+      availabilitySuggestedSecondaryText: "4:30 PM"
+    });
+
+    const contact = await bot.handleCallTime(store.getContact("natural-window-confirm"), "yes");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
+    assert.equal(contact.appointmentId, "appt-natural-window");
+    assert.equal(contact.backupCallTimeType, "exact");
+    assert.match(contact.backupCallTime, /4:30 PM/);
+    assert.match(contact.lastOutboundMessage, /moved your Specialist call/i);
+  } finally {
+    ghl.updateAppointment = originalUpdateAppointment;
+  }
+});
+
 test("human outbound time can complete scheduling and create reminders", async () => {
   const { bot, store } = makeBot();
   const originalCreateAppointment = ghl.createAppointment;

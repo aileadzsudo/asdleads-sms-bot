@@ -459,6 +459,22 @@ function humanReturnTemplate(contact, config) {
 }
 
 function warmFollowUpTemplate(contact, step, config) {
+  if (
+    contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME &&
+    contact.awaitingSpecificCallTime &&
+    contact.availabilitySuggestedPrimaryText
+  ) {
+    const backup = contact.availabilitySuggestedSecondaryText ? ` If that is not good, ${contact.availabilitySuggestedSecondaryText} can work as backup.` : "";
+    const suggested = {
+      1: `Quick check, can I lock you in for ${contact.availabilitySuggestedPrimaryText}?${backup} 📞`,
+      2: `I do not want to keep guessing times. Does ${contact.availabilitySuggestedPrimaryText} work for your Specialist call?`,
+      3: `[NAME], I can still use ${contact.availabilitySuggestedPrimaryText} if that works. Just reply yes or send a better time.`,
+      4: `Still here with you. Should I keep ${contact.availabilitySuggestedPrimaryText}, or is there a better time?`,
+      5: `I do not want this to fall through. Can I put you down for ${contact.availabilitySuggestedPrimaryText}?`,
+      6: `Last check for now. If ${contact.availabilitySuggestedPrimaryText} works, reply yes and I’ll keep it moving.`
+    };
+    return suggested[step] || suggested[1];
+  }
   const key =
     contact.qualificationProgress === QUALIFICATION.NEEDS_CALL_TIME && contact.awaitingSpecificCallTime
       ? "needs_call_time_specific"
@@ -917,6 +933,8 @@ function clearAvailabilityCluePatch() {
   return {
     availabilityClue: "",
     availabilityClueIso: "",
+    availabilityWindowEndIso: "",
+    availabilitySuggestionMode: "",
     availabilitySuggestedPrimaryIso: "",
     availabilitySuggestedPrimaryText: "",
     availabilitySuggestedSecondaryIso: "",
@@ -1051,6 +1069,99 @@ function parseStandaloneCallWindow(text) {
     return null;
   }
   return parseBackupWindow(t);
+}
+
+function parseWindowTimeToken(value) {
+  const raw = normalize(value).replace(/\s+/g, "");
+  const match = raw.match(/^(\d{1,4})(?::?(\d{2}))?(am|pm)?$/);
+  if (!match) return null;
+  let hour = 0;
+  let minute = 0;
+  if (!match[2] && match[1].length >= 3) {
+    hour = Number(match[1].slice(0, -2));
+    minute = Number(match[1].slice(-2));
+  } else {
+    hour = Number(match[1]);
+    minute = Number(match[2] || 0);
+  }
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 1 || hour > 12 || minute > 59) return null;
+  return { hour, minute, meridiem: match[3] || "" };
+}
+
+function callWindowDayOffset(text, contact) {
+  const t = normalize(text);
+  if (/\btoday\b/.test(t)) return 0;
+  if (/\btomorrow\b/.test(t)) return 1;
+  if (hasFreshCallTimeClarification(contact)) {
+    if (contact.callTimeClarificationDay === "tomorrow") return 1;
+    if (contact.callTimeClarificationDay === "weekday" && contact.callTimeClarificationDayLabel) {
+      const weekdayMap = {
+        sunday: 0,
+        monday: 1,
+        tuesday: 2,
+        wednesday: 3,
+        thursday: 4,
+        friday: 5,
+        saturday: 6
+      };
+      const local = getLocalParts(new Date(), contact.timezone || "America/Chicago");
+      const current = new Date(Date.UTC(local.year, local.month - 1, local.day)).getUTCDay();
+      const target = weekdayMap[contact.callTimeClarificationDayLabel];
+      return Number.isFinite(target) ? (target - current + 7) % 7 || 7 : 0;
+    }
+  }
+  return 0;
+}
+
+function parseNaturalCallWindow(text, contact, config) {
+  const normalized = normalize(String(text || "").replace(/[–—]/g, "-"));
+  const timeToken = String.raw`\d{1,4}(?::\d{2})?\s*(?:am|pm)?`;
+  const patterns = [
+    new RegExp(String.raw`\b(?:after|around|about|from)\s+(${timeToken})\s+(?:and|to|-|through|until|before)\s+(${timeToken})\b`),
+    new RegExp(String.raw`\bbetween\s+(${timeToken})\s+(?:and|to|-)\s+(${timeToken})\b`)
+  ];
+  const match = patterns.map((pattern) => normalized.match(pattern)).find(Boolean);
+  if (!match) return null;
+  const startParts = parseWindowTimeToken(match[1]);
+  const endParts = parseWindowTimeToken(match[2]);
+  if (!startParts || !endParts) return null;
+  const sharedMeridiem = endParts.meridiem || startParts.meridiem;
+  const to24Hour = (parts) => {
+    let hour = parts.hour;
+    const meridiem = parts.meridiem || sharedMeridiem;
+    if (meridiem === "pm" && hour < 12) hour += 12;
+    if (meridiem === "am" && hour === 12) hour = 0;
+    if (!meridiem && hour >= 1 && hour <= 7) hour += 12;
+    return { hour, minute: parts.minute };
+  };
+  const start = to24Hour(startParts);
+  const end = to24Hour(endParts);
+  if (!endParts.meridiem && end.hour <= start.hour && end.hour < 12) end.hour += 12;
+  if (end.hour * 60 + end.minute <= start.hour * 60 + start.minute) return null;
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  const local = getLocalParts(new Date(), timeZone);
+  let dayOffset = callWindowDayOffset(text, { ...contact, timezone: timeZone });
+  let startDate = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, ...start }, timeZone);
+  let endDate = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, ...end }, timeZone);
+  if (startDate <= new Date() && !/\btoday\b/.test(normalized) && dayOffset === 0) {
+    dayOffset = 1;
+    startDate = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, ...start }, timeZone);
+    endDate = localDateToUtc({ year: local.year, month: local.month, day: local.day + dayOffset, ...end }, timeZone);
+  }
+  const halfHour = 30 * 60 * 1000;
+  const midpoint = startDate.getTime() + (endDate.getTime() - startDate.getTime()) / 2;
+  let primary = new Date(Math.floor(midpoint / halfHour) * halfHour);
+  if (primary <= startDate) primary = addMinutes(startDate, 30);
+  if (primary >= endDate) primary = new Date(endDate.getTime() - halfHour);
+  if (primary <= startDate || primary >= endDate || Number.isNaN(primary.getTime())) primary = startDate;
+  const backup = addMinutes(primary, 30);
+  return {
+    startIso: startDate.toISOString(),
+    endIso: endDate.toISOString(),
+    primaryIso: primary.toISOString(),
+    backupIso: backup < endDate ? backup.toISOString() : "",
+    sourceText: text
+  };
 }
 
 function backupFromWindowEnd(window, contact, config, primaryStartsAt) {
@@ -4236,11 +4347,7 @@ class SmsBot {
       return this.store.getContact(contact.id) || contact;
     }
     if (contact.availabilitySuggestedPrimaryIso && isAffirmativeConfirmation(text)) {
-      const withClearedClue = await this.store.upsertContact({
-        ...contact,
-        ...clearAvailabilityCluePatch()
-      });
-      return this.handleCallTime(withClearedClue, contact.availabilitySuggestedPrimaryText || contact.availabilityClue || "later today");
+      return this.finalizeSuggestedCallWindow(contact, text, options);
     }
     if (isUnavailableForImmediateCall(text) && !hasClockTimeSignal(text) && !/\btomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday\b/i.test(text)) {
       const updated = await this.store.upsertContact({
@@ -4260,6 +4367,10 @@ class SmsBot {
     const resolvedTimezone = resolveContactTimezone(contact, this.config);
     if (resolvedTimezone && resolvedTimezone !== contact.timezone) {
       contact = await this.store.upsertContact({ ...contact, timezone: resolvedTimezone });
+    }
+    const naturalWindow = parseNaturalCallWindow(text, contact, this.config);
+    if (naturalWindow) {
+      return this.suggestCallWindowSlot(contact, text, naturalWindow, "booking");
     }
     const standaloneCallWindow = parseStandaloneCallWindow(text);
     let parsed = parseCallTime(text, contact, this.config);
@@ -4699,7 +4810,250 @@ class SmsBot {
     return afterBackupAsk;
   }
 
+  async finalizeSuggestedCallWindow(contact, text, options = {}) {
+    const primaryDate = new Date(contact.availabilitySuggestedPrimaryIso);
+    if (Number.isNaN(primaryDate.getTime())) {
+      const withClearedClue = await this.store.upsertContact({
+        ...contact,
+        ...clearAvailabilityCluePatch()
+      });
+      return contact.availabilitySuggestionMode === "reschedule"
+        ? this.handleReschedule(withClearedClue, text, options)
+        : this.handleCallTime(withClearedClue, text, options);
+    }
+
+    const startsAt = primaryDate.toISOString();
+    const endsAt = addMinutes(primaryDate, 15).toISOString();
+    const display = formatForContact(primaryDate, contact, this.config);
+    const backupDate = contact.availabilitySuggestedSecondaryIso
+      ? new Date(contact.availabilitySuggestedSecondaryIso)
+      : null;
+    const hasBackup = backupDate && !Number.isNaN(backupDate.getTime());
+    const backupDisplay = hasBackup ? formatForContact(backupDate, contact, this.config) : "";
+    const mode = contact.availabilitySuggestionMode === "reschedule" ? "reschedule" : "booking";
+    const appointmentType = contact.appointmentType || "initial";
+    const appointmentTitle = appointmentTitleForType(appointmentType, contact);
+    const gateAction = mode === "reschedule" ? "reschedule_appointment" : "create_appointment";
+    const gate = await this.evaluateDecisionGate(
+      contact,
+      gateAction,
+      text,
+      {
+        parsedType: "suggested_window_confirmation",
+        proposedStartIso: startsAt,
+        proposedDisplay: display,
+        proposedBackupIso: hasBackup ? backupDate.toISOString() : "",
+        proposedBackupDisplay: backupDisplay,
+        currentAppointmentTime: contact.preferredCallTime || "",
+        currentAppointmentIso: contact.preferredCallTimeIso || "",
+        appointmentId: contact.appointmentId || "",
+        appointmentType
+      },
+      options
+    );
+    if (gate.decision === "correct_time" && gate.corrected_time_text) {
+      return mode === "reschedule"
+        ? this.handleReschedule(contact, gate.corrected_time_text, { skipDecisionGate: true })
+        : this.handleCallTime(contact, gate.corrected_time_text, { skipDecisionGate: true });
+    }
+    if (gate.decision === "switch_to_reschedule") {
+      return this.handleReschedule(contact, gate.corrected_time_text || text, { skipDecisionGate: true });
+    }
+    if (gate.decision === "switch_to_call_now") {
+      return this.handleCallTime(contact, "call me now", { skipDecisionGate: true });
+    }
+    if (gate.decision !== "allow") {
+      return this.handleDecisionGateStop(contact, gate, gateAction, text);
+    }
+
+    let appointment = null;
+    const appointmentPayload = {
+      ...contact,
+      preferredCallTime: display,
+      preferredCallTimeIso: startsAt,
+      appointmentType,
+      appointmentTitle,
+      backupCallTime: backupDisplay,
+      backupCallTimeIso: hasBackup ? backupDate.toISOString() : "",
+      backupCallTimeType: hasBackup ? "exact" : "",
+      backupWindowStartHour: "",
+      backupWindowStartMinute: "",
+      backupWindowEndHour: "",
+      backupWindowEndMinute: ""
+    };
+    try {
+      if (mode === "reschedule" && contact.appointmentId) {
+        appointment = await ghl.updateAppointment(
+          this.config,
+          appointmentPayload,
+          contact.appointmentId,
+          startsAt,
+          endsAt,
+          appointmentNotes(appointmentPayload, {
+            backupTime: backupDisplay || "none",
+            reason: "Rescheduled from contact-confirmed time window."
+          })
+        );
+      } else {
+        appointment = await ghl.createAppointment(
+          this.config,
+          appointmentPayload,
+          startsAt,
+          endsAt,
+          appointmentNotes(appointmentPayload, {
+            backupTime: backupDisplay || "none",
+            reason: "Booked from contact-confirmed time window."
+          })
+        );
+      }
+    } catch (error) {
+      await this.notifyBotError(mode === "reschedule" ? "GHL appointment reschedule failed" : "GHL appointment booking failed", {
+        Name: contact.name || "unknown",
+        Phone: contact.phone || "unknown",
+        "GHL contact": contact.ghlContactId || contact.id,
+        "Appointment ID": contact.appointmentId || "new",
+        "Requested start": startsAt,
+        Error: error.message
+      });
+      return this.escalate(contact, mode === "reschedule" ? "appointment_reschedule_failed" : "appointment_booking_failed", {
+        "Requested start": startsAt,
+        Error: error.message
+      });
+    }
+
+    let updated = await this.store.upsertContact({
+      ...appointmentPayload,
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: hasBackup ? QUALIFICATION.COMPLETE : QUALIFICATION.CALL_BOOKED,
+      appointmentId: appointment?.id || appointment?.appointment?.id || contact.appointmentId || "",
+      awaitingBackupTime: !hasBackup,
+      awaitingSpecificCallTime: false,
+      currentSequenceName: mode === "reschedule" ? "call_scheduled" : contact.currentSequenceName || "",
+      appointmentSuppressedAt: "",
+      appointmentSuppressionReason: "",
+      appointmentRescheduledAt: mode === "reschedule" ? new Date().toISOString() : contact.appointmentRescheduledAt || "",
+      lastAppointmentBookingError: "",
+      ...clearCallTimeClarificationPatch(),
+      ...clearAvailabilityCluePatch()
+    });
+    await this.store.cancelJobsForContact(updated.id, "suggested call window confirmed", (job) =>
+      ["appointment_reminder", "backup_time_timeout", "backup_no_show_reminder", "warm_followup", "enter_reengagement"].includes(job.type)
+    );
+    if (hasBackup) {
+      await this.syncAppointmentNotes(updated, {
+        backupTime: backupDisplay,
+        reason: mode === "reschedule" ? "Backup saved from reschedule window." : "Backup saved from call window."
+      });
+    }
+    const message = hasBackup
+      ? mode === "reschedule"
+        ? `Done, I moved your Specialist call to ${display} with ${backupDisplay} as backup. 📅 We'll send you a reminder before the call, and they'll call from a local number.`
+        : render(qualificationTemplates.bookingConfirmedWithBackup, updated, {
+            primaryTime: display,
+            backupTime: backupDisplay
+          })
+      : mode === "reschedule"
+        ? render(qualificationTemplates.rescheduleConfirmed, updated, { time: display })
+        : render(qualificationTemplates.backupAsk, updated, { time: display });
+    const sent = await this.sendBotMessage(updated, message, { bypassQuietHours: true });
+    updated = sent || (await this.store.getContact(updated.id)) || updated;
+    await this.notifyAppointmentBooked(updated, {
+      Title: mode === "reschedule" ? appointmentNoticeTitle(updated.appointmentType || "initial", "rescheduled") : undefined,
+      "Primary call time": updated.preferredCallTime,
+      "Backup time": updated.backupCallTime || "none",
+      Timezone: updated.timezone,
+      "GHL appointment": updated.appointmentId || (mode === "reschedule" ? "updated" : "created"),
+      Action: mode === "reschedule" ? "rescheduled" : "booked"
+    });
+    await this.scheduleAppointmentReminders(updated);
+    if (!hasBackup) {
+      await this.store.addJob({
+        type: "backup_time_timeout",
+        contactId: updated.id,
+        runAt: addMinutes(new Date(), 15).toISOString(),
+        payload: {}
+      });
+    }
+    await this.writeGhlNote(updated, mode === "reschedule" ? "Appointment rescheduled by SMS bot" : "Appointment booked by SMS bot", {
+      "Primary time": updated.preferredCallTime || display,
+      "Backup time": updated.backupCallTime || "none",
+      "Appointment ID": updated.appointmentId || "unknown",
+      "Lead confirmation": text
+    });
+    await this.recordDecision(updated, "booked", mode === "reschedule" ? "suggested_window_rescheduled" : "suggested_window_booked", {
+      trigger: "inbound_sms",
+      message: text,
+      meta: {
+        startsAt,
+        backupIso: hasBackup ? backupDate.toISOString() : "",
+        appointmentId: updated.appointmentId || ""
+      }
+    });
+    return this.store.getContact(updated.id) || updated;
+  }
+
+  async suggestCallWindowSlot(contact, text, window, mode = "booking") {
+    const primaryDate = new Date(window.primaryIso);
+    const backupDate = window.backupIso ? new Date(window.backupIso) : null;
+    const primaryDisplay = formatForContact(primaryDate, contact, this.config);
+    const primaryShort = formatTimeOnly(primaryDate, contact, this.config);
+    const backupShort = backupDate ? formatTimeOnly(backupDate, contact, this.config) : "";
+    if (mode === "reschedule") {
+      await this.store.cancelJobsForContact(contact.id, "reschedule window suggested", (job) =>
+        ["appointment_reminder", "backup_time_timeout", "backup_no_show_reminder"].includes(job.type)
+      );
+    }
+    const updated = await this.store.upsertContact({
+      ...contact,
+      engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      awaitingSpecificCallTime: true,
+      awaitingBackupTime: false,
+      currentSequenceName: mode === "reschedule" ? "reschedule_requested" : contact.currentSequenceName || "",
+      appointmentSuppressedAt: mode === "reschedule" ? new Date().toISOString() : contact.appointmentSuppressedAt || "",
+      appointmentSuppressionReason: mode === "reschedule" ? "contact_requested_reschedule" : contact.appointmentSuppressionReason || "",
+      availabilityClue: text,
+      availabilityClueIso: window.startIso,
+      availabilityWindowEndIso: window.endIso,
+      availabilitySuggestionMode: mode,
+      availabilitySuggestedPrimaryIso: window.primaryIso,
+      availabilitySuggestedPrimaryText: primaryShort,
+      availabilitySuggestedSecondaryIso: window.backupIso || "",
+      availabilitySuggestedSecondaryText: backupShort,
+      availabilityClueAskedAt: new Date().toISOString(),
+      ...callTimeClarificationPatch(contact, { type: "needs_specific_time" }, text, mode)
+    });
+    const backupCopy = backupShort ? ` If that is tight, I can use ${backupShort} as backup.` : "";
+    const message =
+      mode === "reschedule"
+        ? `Got it, I can move your Specialist call to ${primaryDisplay}. Does that work?${backupCopy}`
+        : `Got it, ${primaryDisplay} fits that window. Should I put you down for then?${backupCopy}`;
+    await this.writeGhlNote(updated, mode === "reschedule" ? "Reschedule window captured" : "Call window captured", {
+      "Lead message": text,
+      "Suggested primary": primaryDisplay,
+      "Suggested backup": backupShort || "none"
+    });
+    const sent = await this.sendBotMessage(updated, message, { bypassQuietHours: true });
+    const latest = sent || (await this.store.getContact(updated.id)) || updated;
+    await this.scheduleWarmFollowUps(latest, !isWithinTextingWindow(latest, this.config));
+    await this.recordDecision(latest, "queued", mode === "reschedule" ? "reschedule_window_slot_suggested" : "call_window_slot_suggested", {
+      trigger: "inbound_sms",
+      message: text,
+      meta: {
+        windowStartIso: window.startIso,
+        windowEndIso: window.endIso,
+        suggestedPrimaryIso: window.primaryIso,
+        suggestedBackupIso: window.backupIso || ""
+      }
+    });
+    return latest;
+  }
+
   async handleReschedule(contact, text, options = {}) {
+    const naturalWindow = parseNaturalCallWindow(text, contact, this.config);
+    if (naturalWindow) {
+      return this.suggestCallWindowSlot(contact, text, naturalWindow, "reschedule");
+    }
     let parsed = parseCallTime(text, contact, this.config);
     parsed = anchorScheduledTimeToClarifiedDay(parsed, text, contact, this.config);
     if (!parsed || parsed.type === "now") {
