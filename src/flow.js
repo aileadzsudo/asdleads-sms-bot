@@ -293,10 +293,56 @@ function isAppointmentSupportContext(contact = {}) {
   );
 }
 
+function isThirdNoShowEscalated(contact = {}) {
+  return Boolean(
+    Number(contact.noShowCount || 0) >= 3 ||
+      contact.escalationReason === "third_no_show" ||
+      contact.automationPauseReason === "third_no_show" ||
+      contact.currentSequenceName === "third_no_show_escalated"
+  );
+}
+
+function hasDuplicateTerminalHold(contact = {}) {
+  const stage = String(contact.humanEscalationStage || "");
+  const reason = String(contact.escalationReason || contact.automationPauseReason || "");
+  return stage === "duplicate_terminal_contact" || /^duplicate_/.test(reason);
+}
+
+function canRepairNoShowRecoveryForContact(contact = {}) {
+  if (!contact || !isNoShowRecoveryContact(contact)) return false;
+  if (contact.optOutStatus || hasSignedTag(contact) || hasNqTag(contact) || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) return false;
+  if (isThirdNoShowEscalated(contact) || hasDuplicateTerminalHold(contact)) return false;
+  if (contact.humanEscalationStatus || contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) return false;
+  if (hasNoShowAutomationHoldTag(contact)) return false;
+  if (
+    [
+      "admin_pause",
+      "lead_requested_pause",
+      "bad_appointment_review",
+      "nq_tag",
+      "signed_tag",
+      "manual_hold_tag",
+      "third_no_show"
+    ].includes(contact.automationPauseReason)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function hasMeaningfulInboundMessage(contact = {}) {
+  const message = textValue(contact.lastInboundMessage);
+  return Boolean(message && message.toLowerCase() !== "unknown");
+}
+
 function canRunAppointmentSupportJob(contact = {}, jobType = "") {
   if (!contact || !isAppointmentSupportJobType(jobType) || !isAppointmentSupportContext(contact)) return false;
   if (contact.optOutStatus || hasSignedTag(contact) || hasNqTag(contact) || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) return false;
+  if (isThirdNoShowEscalated(contact) || hasDuplicateTerminalHold(contact)) return false;
   if (["admin_pause", "lead_requested_pause", "bad_appointment_review", "nq_tag", "signed_tag"].includes(contact.automationPauseReason)) return false;
+  if (["missed_call_followup", "backup_no_show_reminder", "backup_time_timeout"].includes(jobType)) {
+    return canRepairNoShowRecoveryForContact(contact);
+  }
   if (hasNoShowAutomationHoldTag(contact) && !contact.appointmentSyncedAt) return false;
   return true;
 }
@@ -5953,12 +5999,31 @@ class SmsBot {
       existing?.appointmentNoShowAt &&
       webhookAppointmentId &&
       existing.appointmentId === webhookAppointmentId &&
-      existing.currentSequenceName === "appointment_no_show"
+      isNoShowRecoveryContact(existing)
     ) {
       const jobs = await this.store.listJobs(existing.id);
       const hasNoShowRecoveryJob = jobs.some(
         (job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)
       );
+      if (!canRepairNoShowRecoveryForContact(existing)) {
+        await this.recordNoShowWebhook(payload, {
+          resolvedContactId: existing.id,
+          appointmentId: webhookAppointmentId,
+          status: webhookStatus,
+          result: "duplicate_no_show_ignored_terminal_or_held"
+        });
+        await this.recordDecision(existing, "skipped", "duplicate_no_show_recovery_not_repaired", {
+          trigger: "appointment_no_show",
+          meta: {
+            appointmentId: webhookAppointmentId,
+            noShowCount: existing.noShowCount || 0,
+            escalationReason: existing.escalationReason || "",
+            humanEscalationStage: existing.humanEscalationStage || "",
+            automationPauseReason: existing.automationPauseReason || ""
+          }
+        });
+        return existing;
+      }
       if (!hasNoShowRecoveryJob) {
         const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(existing);
         await this.scheduleNoShowFollowUps(existing, { skipEarlySameDay: hasBackupReminderPlan });
@@ -6043,8 +6108,16 @@ class SmsBot {
     });
     if (noShowCount >= 3) {
       await this.store.cancelJobsForContact(contact.id, "third no-show escalated");
+      contact = await this.store.upsertContact({
+        ...contact,
+        automationPaused: true,
+        automationPauseReason: "third_no_show",
+        currentSequenceName: "third_no_show_escalated",
+        currentSequenceSlot: "human_review",
+        thirdNoShowEscalatedAt: new Date().toISOString()
+      });
       await this.recordNoShowWebhook(payload, { resolvedContactId: contact.id, appointmentId, status: webhookStatus, result: "third_no_show_escalated" });
-      return this.escalate(contact, "third_no_show");
+      return this.escalate(contact, "third_no_show", { notifySlack: false, source: "appointment_no_show" });
     }
     await this.store.cancelJobsForContact(contact.id, "appointment marked no-show", (job) =>
       [
@@ -6542,16 +6615,26 @@ class SmsBot {
       message: updated.lastInboundMessage || "",
       meta: extra
     });
-    try {
-      await slack.sendEscalation(this.config, updated, reason, extra);
-    } catch (error) {
-      await this.notifyBotError("Slack lead escalation alert failed", {
-        Name: updated.name || "unknown",
-        Phone: updated.phone || "unknown",
-        "GHL contact": updated.ghlContactId || updated.id,
-        Reason: reason,
-        Error: error.message
+    if (extra.notifySlack === false || !hasMeaningfulInboundMessage(updated)) {
+      await this.recordDecision(updated, "skipped", "human_escalation_slack_suppressed_no_inbound", {
+        trigger: "bot_escalation",
+        beforeStatus: updated.engagementStatus || "",
+        afterStatus: updated.engagementStatus || "",
+        message: updated.lastInboundMessage || "",
+        meta: { reason, notifySlack: extra.notifySlack !== false, hasInbound: hasMeaningfulInboundMessage(updated) }
       });
+    } else {
+      try {
+        await slack.sendEscalation(this.config, updated, reason, extra);
+      } catch (error) {
+        await this.notifyBotError("Slack lead escalation alert failed", {
+          Name: updated.name || "unknown",
+          Phone: updated.phone || "unknown",
+          "GHL contact": updated.ghlContactId || updated.id,
+          Reason: reason,
+          Error: error.message
+        });
+      }
     }
     await this.scheduleHumanEscalationWatchdog(updated, reason);
     return updated;
@@ -6658,6 +6741,8 @@ class SmsBot {
         contact.optOutStatus ||
         hasSignedTag(contact) ||
         hasNqTag(contact) ||
+        isThirdNoShowEscalated(contact) ||
+        hasDuplicateTerminalHold(contact) ||
         (hasManualHumanHoldTag(contact) && !canRepairAppointmentReminders && !canRepairNoShowRecovery) ||
         contact.engagementStatus === ENGAGEMENT.OPTED_OUT ||
         (contact.automationPaused && !canRepairAppointmentReminders && !canRepairNoShowRecovery);

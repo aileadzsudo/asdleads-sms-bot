@@ -4428,6 +4428,80 @@ test("third no-show escalates instead of continuing blind automation", async () 
   assert.equal(Object.values(store.data.jobs).some((job) => job.contactId === "third-no-show" && job.type === "missed_call_followup" && job.status === "pending"), false);
 });
 
+test("third no-show does not send unknown-message Slack escalation or resurrect jobs", async () => {
+  const { bot, store } = makeBot();
+  const originalSendEscalation = slack.sendEscalation;
+  let escalationPosts = 0;
+  slack.sendEscalation = async () => {
+    escalationPosts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "third-no-show-no-inbound",
+      ghlContactId: "third-no-show-no-inbound",
+      name: "No Inbound Third",
+      phone: "+15550000190",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.CALL_BOOKED,
+      appointmentId: "third-no-show-no-inbound-appt",
+      noShowCount: 2
+    });
+
+    const contact = await bot.markNoShow({
+      contactId: "third-no-show-no-inbound",
+      appointmentId: "third-no-show-no-inbound-appt",
+      status: "no_show"
+    });
+    const healed = await bot.healStuckContacts();
+    const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "third-no-show-no-inbound");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+    assert.equal(contact.escalationReason, "third_no_show");
+    assert.equal(store.getContact("third-no-show-no-inbound").automationPauseReason, "third_no_show");
+    assert.equal(store.getContact("third-no-show-no-inbound").currentSequenceName, "third_no_show_escalated");
+    assert.equal(escalationPosts, 0);
+    assert.equal(healed.some((item) => item.contactId === "third-no-show-no-inbound"), false);
+    assert.equal(jobs.some((job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)), false);
+  } finally {
+    slack.sendEscalation = originalSendEscalation;
+  }
+});
+
+test("duplicate third no-show webhook does not repair terminal no-show recovery", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "duplicate-third-no-show",
+    ghlContactId: "duplicate-third-no-show",
+    name: "Duplicate Third",
+    phone: "+15550000191",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    humanEscalationStatus: true,
+    humanEscalationStage: "human_review_pending",
+    escalationReason: "third_no_show",
+    automationPaused: true,
+    automationPauseReason: "third_no_show",
+    currentSequenceName: "third_no_show_escalated",
+    appointmentNoShowAt: new Date().toISOString(),
+    appointmentId: "duplicate-third-no-show-appt",
+    noShowCount: 3
+  });
+
+  const contact = await bot.markNoShow({
+    contactId: "duplicate-third-no-show",
+    appointmentId: "duplicate-third-no-show-appt",
+    status: "no_show"
+  });
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "duplicate-third-no-show");
+
+  assert.equal(contact.escalationReason, "third_no_show");
+  assert.equal(store.getSetting("last_no_show_webhook").value.result, "duplicate_no_show_ignored_terminal_or_held");
+  assert.equal(jobs.some((job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)), false);
+});
+
 test("manual appointment edit after no-show replaces recovery with normal reminders", async () => {
   const { bot, store } = makeBot();
   const primary = new Date(Date.now() - 20 * 60 * 1000).toISOString();
