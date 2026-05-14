@@ -8,6 +8,9 @@ Include:
 
 - Full repo or private fork.
 - `docs/handoff/`
+- `docs/handoff/Accident_Support_Desk_Complete_Handoff_Guide.pdf`
+- `docs/handoff/COMPLETE_HANDOFF_GUIDE.md`
+- `docs/handoff/HANDOFF_ENV_TEMPLATE.env`
 - `README.md`
 - `RENDER_DEPLOY_GUIDE.md`
 - `GO_LIVE_GUIDE.md`
@@ -55,9 +58,8 @@ It should contain instructions and templates only.
 
 Tell them:
 
-1. Start with `docs/handoff/README.md`.
+1. Start with `docs/handoff/Accident_Support_Desk_Complete_Handoff_Guide.pdf`.
 2. Use `RECIPIENT_SETUP_CHECKLIST.md`.
 3. Use `HANDOFF_ENV_TEMPLATE.env` for variables.
 4. Configure GHL workflows exactly from `GHL_WORKFLOWS_AND_WEBHOOKS.md`.
 5. Do not go live until `VALIDATION_TEST_PLAN.md` passes.
-

@@ -26,6 +26,8 @@ Those values are secrets. Share them only through a password manager or another 
 
 ## Handoff Folder Contents
 
+- `COMPLETE_HANDOFF_GUIDE.md`: one centralized Markdown handoff containing the full package.
+- `Accident_Support_Desk_Complete_Handoff_Guide.pdf`: one centralized PDF for non-technical handoff/review.
 - `IMPLEMENTATION_MANIFEST.md`: what exists in the app and why.
 - `OWNER_EXPORT_CHECKLIST.md`: what Collins/operator must collect before giving this to someone.
 - `RECIPIENT_SETUP_CHECKLIST.md`: step-by-step setup checklist for the receiving team.
@@ -35,6 +37,22 @@ Those values are secrets. Share them only through a password manager or another 
 - `DATABASE_TRANSFER.md`: how to export/import the Postgres database safely.
 - `REPO_UPDATE_STRATEGY.md`: how another operator can receive future repo updates.
 - `VALIDATION_TEST_PLAN.md`: how to prove the clone works before live traffic.
+
+## Centralized PDF
+
+To rebuild the one-file handoff PDF after editing any Markdown file in this folder:
+
+```bash
+python3 scripts/build_complete_handoff_pdf.py
+```
+
+That command creates:
+
+- `docs/handoff/COMPLETE_HANDOFF_GUIDE.md`
+- `docs/handoff/Complete_Handoff_Guide.html`
+- `docs/handoff/Accident_Support_Desk_Complete_Handoff_Guide.pdf`
+
+The PDF includes visible links to the repo and production site, plus a placeholder for the secure database export link. Do not put live database URLs or secrets into the PDF.
 
 ## Recommended Handoff Model
 
@@ -91,4 +109,3 @@ The receiving operator needs:
 7. Recipient runs the validation plan.
 8. Recipient switches to `DRY_RUN=false`.
 9. Monitor Slack, dashboard, and `/health` for the first live day.
-

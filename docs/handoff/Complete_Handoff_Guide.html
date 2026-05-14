@@ -1,0 +1,1627 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Accident Support Desk Complete Handoff Guide</title>
+  <style>
+    @page { margin: 0.55in 0.55in 0.65in; }
+    body {
+      color: #172033;
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", Arial, sans-serif;
+      font-size: 10.5px;
+      line-height: 1.42;
+    }
+    h1 {
+      color: #235e54;
+      font-size: 28px;
+      line-height: 1.1;
+      margin: 0 0 18px;
+      border-bottom: 6px solid #b6500b;
+      padding-bottom: 14px;
+    }
+    h2 {
+      break-before: page;
+      color: #235e54;
+      font-size: 21px;
+      line-height: 1.15;
+      margin: 0 0 12px;
+      border-bottom: 3px solid #d7dfdc;
+      padding-bottom: 8px;
+    }
+    h3 {
+      color: #b6500b;
+      font-size: 15px;
+      margin: 18px 0 7px;
+    }
+    h4, h5, h6 { color: #235e54; margin: 13px 0 6px; }
+    p { margin: 6px 0; }
+    ul, ol { margin: 6px 0 10px 22px; padding: 0; }
+    li { margin: 3px 0; }
+    code {
+      background: #eef3f2;
+      border-radius: 3px;
+      color: #172033;
+      font-family: "IBM Plex Mono", Menlo, Consolas, monospace;
+      font-size: 9.5px;
+      padding: 1px 3px;
+    }
+    pre {
+      background: #f6f8f8;
+      border: 1px solid #d7dfdc;
+      border-radius: 6px;
+      overflow-wrap: anywhere;
+      padding: 10px;
+      white-space: pre-wrap;
+    }
+    pre code {
+      background: transparent;
+      padding: 0;
+      white-space: pre-wrap;
+    }
+    table {
+      border-collapse: collapse;
+      margin: 8px 0 14px;
+      width: 100%;
+      table-layout: fixed;
+    }
+    th {
+      background: #235e54;
+      color: white;
+      font-weight: 700;
+    }
+    th, td {
+      border: 1px solid #d7dfdc;
+      padding: 5px 6px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    a { color: #0b5cab; text-decoration: none; }
+    </style>
+</head>
+<body>
+<h1 id="accident-support-desk-complete-handoff-guide">Accident Support Desk Complete Handoff Guide</h1>
+<p>This is the centralized handoff guide for cloning or transferring the Accident Support Desk SMS bot into another GoHighLevel account that is running the same personal-injury intake model.</p>
+<p>The smaller Markdown files in this folder remain the editable source references. This file and the PDF are the one-file handoff version.</p>
+<h2 id="master-links">Master Links</h2>
+<ul>
+<li>GitHub repo: <a href="https://github.com/aileadzsudo/asdleads-sms-bot">https://github.com/aileadzsudo/asdleads-sms-bot</a></li>
+<li>Current production URL: <a href="https://asdleads-sms-bot.onrender.com/">https://asdleads-sms-bot.onrender.com/</a></li>
+<li>Secure database export link: SECURE_DB_EXPORT_LINK_TO_BE_FILLED_BY_OWNER</li>
+<li>Local handoff folder: docs/handoff/</li>
+<li>Sanitized env template: docs/handoff/HANDOFF_ENV_TEMPLATE.env</li>
+</ul>
+<h2 id="critical-security-rule">Critical Security Rule</h2>
+<p>Do not put live API keys, Slack tokens, GoHighLevel tokens, database URLs, Render secrets, or full customer/contact exports inside GitHub or this PDF.</p>
+<p>The PDF explains how to transfer the system. The live contacts/messages database should be transferred separately as an encrypted Postgres dump through a secure link or password manager.</p>
+<h2 id="what-to-hand-to-another-operator">What To Hand To Another Operator</h2>
+<ol>
+<li>Access to the private GitHub repo or a private fork.</li>
+<li>This PDF and the docs/handoff folder.</li>
+<li>The sanitized env template.</li>
+<li>A secure encrypted database dump link, if cloning historical data is required.</li>
+<li>Their own GHL token, Slack token, OpenAI key, hosting account, Postgres database, calendar ID, and webhook secret.</li>
+<li>The validation test plan, completed before DRY_RUN is turned off.</li>
+</ol>
+<h2 id="update-strategy-summary">Update Strategy Summary</h2>
+<p>Best option: give the recipient a private fork of this repo and keep your repo as upstream. They can pull new tagged releases from you without sharing your production secrets or database.</p>
+<p>Do not give a recipient automatic live deploys from your main branch unless they are part of your same internal company and you trust every change to hit their production immediately.</p>
+<h2 id="table-of-contents">Table Of Contents</h2>
+<ul>
+<li><a href="#quick-start">Quick Start</a></li>
+<li><a href="#implementation-manifest">Implementation Manifest</a></li>
+<li><a href="#owner-export-checklist">Owner Export Checklist</a></li>
+<li><a href="#recipient-setup-checklist">Recipient Setup Checklist</a></li>
+<li><a href="#environment-variables">Environment Variables</a></li>
+<li><a href="#gohighlevel-workflows-and-webhooks">GoHighLevel Workflows And Webhooks</a></li>
+<li><a href="#database-transfer">Database Transfer</a></li>
+<li><a href="#validation-test-plan">Validation Test Plan</a></li>
+<li><a href="#repo-update-strategy">Repo Update Strategy</a></li>
+<li><a href="#export-package-checklist">Export Package Checklist</a></li>
+</ul>
+<h2 id="quick-start">Quick Start</h2>
+<p>Source file: docs/handoff/QUICK_START_FOR_NEW_OPERATOR.md</p>
+<h1 id="quick-start-for-a-new-operator">Quick Start For A New Operator</h1>
+<p>This is the shortest possible version.</p>
+<h2 id="what-you-need">What You Need</h2>
+<ul>
+<li>A copy/fork of this repo.</li>
+<li>Render account.</li>
+<li>Render Postgres database.</li>
+<li>GHL location ID.</li>
+<li>GHL private integration token.</li>
+<li>GHL calendar ID.</li>
+<li>Slack bot token and channel IDs.</li>
+<li>OpenAI API key.</li>
+</ul>
+<h2 id="steps">Steps</h2>
+<ol>
+<li>Deploy repo on Render.</li>
+<li>Add Postgres and <code>DATABASE_URL</code>.</li>
+<li>Add every env var from <code>HANDOFF_ENV_TEMPLATE.env</code>.</li>
+<li>Keep <code>DRY_RUN=true</code>.</li>
+<li>Open <code>/health</code>.</li>
+<li>Open <code>/integrations</code>.</li>
+<li>Create GHL ping webhook and confirm <code>/webhooks/ghl/ping-status</code>.</li>
+<li>Create all GHL workflows from <code>GHL_WORKFLOWS_AND_WEBHOOKS.md</code>.</li>
+<li>Test one fake lead through:</li>
+</ol>
+<ul>
+<li>NR enrollment</li>
+<li>inbound reply</li>
+<li>booking</li>
+<li>reminder</li>
+<li>no-show</li>
+<li>human outbound SMS</li>
+<li>STOP</li>
+</ul>
+<ol>
+<li>Set <code>DRY_RUN=false</code>.</li>
+<li>Test one real contact owned by your team.</li>
+<li>Start small batch only.</li>
+</ol>
+<h2 id="if-something-looks-wrong">If Something Looks Wrong</h2>
+<ol>
+<li>Set <code>DRY_RUN=true</code>.</li>
+<li>Pause GHL workflows.</li>
+<li>Check <code>/health</code>.</li>
+<li>Check <code>/integrations</code>.</li>
+<li>Check dashboard issue page.</li>
+<li>Check Render logs.</li>
+<li>Run <code>npm test</code> locally before changing code.</li>
+</ol>
+<h2 id="implementation-manifest">Implementation Manifest</h2>
+<p>Source file: docs/handoff/IMPLEMENTATION_MANIFEST.md</p>
+<h1 id="implementation-manifest">Implementation Manifest</h1>
+<p>This file explains what has been built so another developer can understand the system quickly.</p>
+<h2 id="core-runtime">Core Runtime</h2>
+<ul>
+<li>Runtime: Node.js 20+.</li>
+<li>Server entry: <code>src/server.js</code>.</li>
+<li>Start command: <code>npm start</code>.</li>
+<li>Build command: <code>npm run build</code>.</li>
+<li>Tests: <code>npm test</code>.</li>
+<li>Production storage: Postgres through <code>src/postgresStore.js</code>.</li>
+<li>Local/dev storage: JSON store through <code>src/store.js</code> when <code>DATABASE_URL</code> is not set.</li>
+</ul>
+<h2 id="data-model">Data Model</h2>
+<p>Production Postgres creates these tables automatically:</p>
+<ul>
+<li><code>contacts</code>: full bot memory per GHL contact.</li>
+<li><code>jobs</code>: scheduled outbound messages, reminders, re-engagement jobs, no-show jobs, watchdogs.</li>
+<li><code>messages</code>: inbound, outbound, and human outbound messages.</li>
+<li><code>escalations</code>: human escalation records and notification events.</li>
+<li><code>decision_logs</code>: explanation of why the bot sent, skipped, paused, escalated, booked, or repaired.</li>
+<li><code>webhook_events</code>: idempotency/dedupe for webhook events.</li>
+<li><code>settings</code>: operational logs such as webhook diagnostics and integration checks.</li>
+</ul>
+<p>Most detailed state lives inside JSONB <code>data</code> columns so new fields can be added without manual migrations.</p>
+<h2 id="contact-state-stored">Contact State Stored</h2>
+<p>Important contact fields include:</p>
+<ul>
+<li><code>id</code>, <code>ghlContactId</code>, <code>name</code>, <code>phone</code></li>
+<li><code>timezone</code>, <code>timezoneSource</code></li>
+<li><code>leadSource</code></li>
+<li><code>engagementStatus</code></li>
+<li><code>qualificationProgress</code></li>
+<li><code>accidentDate</code></li>
+<li><code>faultAnswer</code></li>
+<li><code>medicalTreatmentAnswer</code></li>
+<li><code>preferredCallTime</code>, <code>preferredCallTimeIso</code></li>
+<li><code>backupCallTime</code>, <code>backupCallTimeIso</code></li>
+<li><code>appointmentId</code>, <code>appointmentType</code>, <code>appointmentTitle</code></li>
+<li><code>lastInboundMessage</code>, <code>lastOutboundMessage</code></li>
+<li><code>lastResponseTimestamp</code>, <code>lastOutboundTimestamp</code></li>
+<li><code>optOutStatus</code></li>
+<li><code>humanEscalationStatus</code>, <code>humanEscalationStage</code></li>
+<li><code>automationPaused</code>, <code>automationPauseReason</code></li>
+<li><code>currentSequenceName</code>, <code>currentSequenceDay</code>, <code>currentSequenceSlot</code></li>
+<li><code>noShowCount</code>, <code>repeatNoShow</code>, <code>previousAppointmentMissed</code></li>
+<li><code>lastLlmGateDecision</code>, <code>lastLlmGateReason</code>, and related LLM fields</li>
+</ul>
+<h2 id="main-bot-flows">Main Bot Flows</h2>
+<h3 id="nr-no-response-enrollment">NR / No-Response Enrollment</h3>
+<p>Trigger:</p>
+<ul>
+<li>GHL no-response disposition.</li>
+<li>GHL <code>NR</code> tag.</li>
+</ul>
+<p>Behavior:</p>
+<ul>
+<li>Checks terminal/pause tags.</li>
+<li>Sends Day 1 initial cold SMS immediately for fresh NR.</li>
+<li>Queues same-day aggressive follow-up and long-term cold outreach.</li>
+<li>Does not resend the initial cold SMS if the lead is already enrolled.</li>
+</ul>
+<h3 id="cold-outreach">Cold Outreach</h3>
+<p>Used when the lead has not replied yet.</p>
+<ul>
+<li>Day 1 fresh leads can receive aggressive same-day messages if legally allowed.</li>
+<li>Long-term cold cadence continues up to 21 days.</li>
+<li>PM slot is 6 PM local time.</li>
+<li>Stop conditions: reply, opt-out, signed, NQ, manual hold, DND/SMS block, appointment, human escalation.</li>
+</ul>
+<h3 id="inbound-sms-router">Inbound SMS Router</h3>
+<p>Trigger:</p>
+<ul>
+<li><code>/webhooks/ghl/inbound-sms</code></li>
+</ul>
+<p>Behavior:</p>
+<ul>
+<li>Buffers quick consecutive messages.</li>
+<li>Checks STOP/opt-out first.</li>
+<li>Checks signed/NQ/manual hold.</li>
+<li>Detects lead-requested pause messages like &quot;not a good time, I&#x27;ll text when free, don&#x27;t blow up my phone.&quot;</li>
+<li>Resumes from qualification memory instead of restarting.</li>
+<li>Uses deterministic parsers first.</li>
+<li>Uses LLM fallback/gate only where needed.</li>
+</ul>
+<h3 id="lead-requested-pause">Lead-Requested Pause</h3>
+<p>Messages like &quot;not a good time&quot; plus &quot;I&#x27;ll text when I&#x27;m free&quot; or &quot;don&#x27;t blow up my phone&quot; do this:</p>
+<ul>
+<li>Send one polite acknowledgement.</li>
+<li>Cancel pending bot jobs.</li>
+<li>Create a human-visible escalation/Slack alert.</li>
+<li>Do not mark opt-out.</li>
+<li>Resume only when the lead texts back again.</li>
+</ul>
+<h3 id="qualification-memory">Qualification Memory</h3>
+<p>Current simplified flow:</p>
+<ul>
+<li>Accident date can be captured from cold replies.</li>
+<li>Fault.</li>
+<li>Medical treatment.</li>
+<li>Call timing.</li>
+</ul>
+<p>The bot should not ask for a field that was already answered.</p>
+<h3 id="warm-follow-up-re-engagement">Warm Follow-Up / Re-Engagement</h3>
+<p>Used when someone started replying but stops mid-flow.</p>
+<ul>
+<li>Warm follow-up is faster than cold outreach.</li>
+<li>If still no response, the bot enters a question-specific re-engagement sequence.</li>
+<li>Progress is not reset.</li>
+</ul>
+<h3 id="booking">Booking</h3>
+<p>The bot books through the GHL calendar when it has a safe call time.</p>
+<p>High-risk booking/reschedule/confirmation actions go through the LLM decision gate where enabled.</p>
+<p>Appointment types:</p>
+<ul>
+<li><code>initial</code>: bot-created first specialist call.</li>
+<li><code>qualified_follow_up</code>: human-created follow-up after intake looks qualified.</li>
+<li><code>contract_review</code>: human-created agreement/contract review call.</li>
+</ul>
+<h3 id="appointment-reminders">Appointment Reminders</h3>
+<p>Reminder jobs are built from <code>preferredCallTimeIso</code>.</p>
+<ul>
+<li>Future-day appointments: morning, 1-hour, 5-minute reminders when timing allows.</li>
+<li>Same-day appointments: 1-hour and 5-minute reminders when timing allows.</li>
+<li>Very near appointments may only receive the 5-minute reminder.</li>
+<li>Appointment sync/update cancels stale reminders and rebuilds current reminders.</li>
+</ul>
+<h3 id="no-show-recovery">No-Show Recovery</h3>
+<p>Trigger:</p>
+<ul>
+<li>GHL no-show webhook or dashboard/admin mark-no-show.</li>
+</ul>
+<p>Behavior:</p>
+<ul>
+<li>Sets <code>engagementStatus=missed_call</code>.</li>
+<li>Cancels normal appointment reminders.</li>
+<li>Uses backup time flow if backup exists and is still upcoming.</li>
+<li>Otherwise starts no-show recovery follow-up.</li>
+<li>Rebooked no-shows are tagged/stored as no-show rebooks.</li>
+<li>Third no-show escalates to human.</li>
+</ul>
+<h3 id="human-escalation">Human Escalation</h3>
+<p>Escalation pauses the bot and alerts Slack.</p>
+<p>The bot can notify on new inbound replies while still paused so humans see additional PC responses.</p>
+<p>Some soft escalations can auto-return after timeout if safe, but hard human work states remain paused.</p>
+<h3 id="human-manual-text-human-call-activity">Human Manual Text / Human Call Activity</h3>
+<p>These require GHL webhooks.</p>
+<ul>
+<li>Human outbound SMS tells the bot a human took over.</li>
+<li>Human call activity pauses the bot.</li>
+<li>Short/unknown-duration calls require an outcome tag.</li>
+<li>Missing call outcome creates a dashboard/Slack alert.</li>
+</ul>
+<h3 id="call-outcome-tags">Call Outcome Tags</h3>
+<p>Team-facing tags/actions:</p>
+<ul>
+<li><code>call_no_answer</code></li>
+<li><code>call_drop</code></li>
+<li><code>call_connected_follow_up</code></li>
+<li><code>return_to_bot</code></li>
+<li><code>NQ</code></li>
+<li><code>contract_sent</code>, <code>contract</code>, <code>contract_set</code></li>
+<li><code>signed</code>, <code>contract_signed</code></li>
+<li><code>follow_up</code>, <code>QR</code>, <code>human_hold</code></li>
+</ul>
+<h2 id="safety-stops">Safety Stops</h2>
+<p>Hard stops:</p>
+<ul>
+<li>STOP / opt-out language.</li>
+<li><code>signed</code> / <code>contract_signed</code>.</li>
+<li><code>NQ</code>.</li>
+<li>GHL unsubscribed/DND/SMS blocked.</li>
+<li>Duplicate terminal same-phone contacts.</li>
+</ul>
+<p>Manual pause/hold:</p>
+<ul>
+<li><code>follow_up</code></li>
+<li><code>QR</code></li>
+<li><code>human_hold</code></li>
+<li><code>call_connected_follow_up</code></li>
+<li><code>admin_pause</code></li>
+</ul>
+<p>Contract pending:</p>
+<ul>
+<li><code>contract_sent</code>, <code>contract</code>, <code>contract_set</code> stop intake/cold outreach but still allow appointment reminders and no-show recovery.</li>
+</ul>
+<h2 id="slack-channels">Slack Channels</h2>
+<p>Expected Slack channels:</p>
+<ul>
+<li>SMS escalation channel: general human escalation.</li>
+<li>Leads channel: urgent &quot;call now&quot; alerts.</li>
+<li>Booking channel: appointments, no-shows, rebooks.</li>
+<li>Bot errors channel: true system failures only.</li>
+</ul>
+<p>Expected non-urgent items should go to dashboard, not Slack:</p>
+<ul>
+<li>DND/SMS blocked.</li>
+<li>Skipped jobs.</li>
+<li>Operational warnings where no human action is needed immediately.</li>
+</ul>
+<h2 id="admin-ui">Admin UI</h2>
+<p>Main dashboard is under:</p>
+<ul>
+<li><code>/dashboard</code></li>
+</ul>
+<p>Utility pages:</p>
+<ul>
+<li><code>/tester</code></li>
+<li><code>/backfill</code></li>
+<li><code>/integrations</code></li>
+<li><code>/training-status</code></li>
+<li><code>/review</code></li>
+<li><code>/dashboard-legacy</code></li>
+</ul>
+<p>Important dashboard concepts:</p>
+<ul>
+<li>Command center.</li>
+<li>Conversations/contact drilldown.</li>
+<li>Issues/stuck states.</li>
+<li>Appointments.</li>
+<li>Performance.</li>
+<li>Templates/A-B testing.</li>
+<li>Pause audit.</li>
+<li>Lifecycle map.</li>
+</ul>
+<h2 id="owner-export-checklist">Owner Export Checklist</h2>
+<p>Source file: docs/handoff/OWNER_EXPORT_CHECKLIST.md</p>
+<h1 id="owner-export-checklist">Owner Export Checklist</h1>
+<p>Use this checklist before handing the system to another operator or developer.</p>
+<h2 id="1-decide-what-you-are-giving-them">1. Decide What You Are Giving Them</h2>
+<p>Choose one:</p>
+<ul>
+<li><strong>Code only:</strong> they get the bot logic and build their own database.</li>
+<li><strong>Code plus empty database:</strong> best for a new operator.</li>
+<li><strong>Code plus cloned database:</strong> only if they are legally allowed to receive the historical contacts/messages.</li>
+<li><strong>Code plus GHL workflow instructions:</strong> usually required.</li>
+<li><strong>Full managed setup:</strong> you deploy and operate it for them.</li>
+</ul>
+<h2 id="2-protect-private-data">2. Protect Private Data</h2>
+<p>The database can contain:</p>
+<ul>
+<li>Names.</li>
+<li>Phone numbers.</li>
+<li>Emails.</li>
+<li>SMS conversations.</li>
+<li>Injury details.</li>
+<li>Legal/insurance context.</li>
+<li>Appointment history.</li>
+<li>Internal notes and decision logs.</li>
+</ul>
+<p>Do not share a raw database unless you have permission and compliance approval.</p>
+<p>If the recipient does not need historical data, give them an empty database.</p>
+<h2 id="3-things-to-export">3. Things To Export</h2>
+<p>Give them:</p>
+<ul>
+<li>Repo access or a private fork.</li>
+<li>This <code>docs/handoff/</code> folder.</li>
+<li>A sanitized env template, not your real <code>.env</code>.</li>
+<li>GoHighLevel workflow setup instructions.</li>
+<li>Slack channel setup instructions.</li>
+<li>Appointment title/tag guide from <code>docs/call-disposition-guide.md</code>.</li>
+<li>A database dump only if approved.</li>
+<li>A separate secrets package through a password manager.</li>
+</ul>
+<p>Do not give them:</p>
+<ul>
+<li>Your live <code>.env</code>.</li>
+<li>Your live database URL in chat.</li>
+<li>Your OpenAI key in a document.</li>
+<li>Your Slack bot token in a document.</li>
+<li>Your GHL API token in a document.</li>
+<li>Your Render admin password in a document.</li>
+</ul>
+<h2 id="4-secrets-they-need-to-provide-or-receive-securely">4. Secrets They Need To Provide Or Receive Securely</h2>
+<ul>
+<li><code>DATABASE_URL</code></li>
+<li><code>ADMIN_PASSWORD</code></li>
+<li><code>WEBHOOK_SECRET</code></li>
+<li><code>GHL_API_TOKEN</code></li>
+<li><code>GHL_LOCATION_ID</code></li>
+<li><code>GHL_CALENDAR_ID</code></li>
+<li><code>SLACK_BOT_TOKEN</code></li>
+<li><code>SLACK_ESCALATION_CHANNEL</code></li>
+<li><code>SLACK_LEADS_CHANNEL</code></li>
+<li><code>SLACK_BOT_ERRORS_CHANNEL</code></li>
+<li><code>SLACK_BOOKING_CHANNEL</code></li>
+<li><code>OPENAI_API_KEY</code></li>
+</ul>
+<h2 id="5-gohighlevel-items-to-collect">5. GoHighLevel Items To Collect</h2>
+<p>From their GHL:</p>
+<ul>
+<li>Location/sub-account ID.</li>
+<li>Calendar ID.</li>
+<li>Private integration token or OAuth app installation.</li>
+<li>List of tags they use for states/firms.</li>
+<li>Timezone/state tag naming convention.</li>
+<li>Existing NR/no-response workflow location.</li>
+<li>Appointment workflow access.</li>
+<li>Ability to create webhooks in workflows.</li>
+<li>Ability to install Marketplace app/webhook for outbound message events if they need human manual text detection.</li>
+</ul>
+<h2 id="6-slack-items-to-collect">6. Slack Items To Collect</h2>
+<p>From their Slack:</p>
+<ul>
+<li>Workspace.</li>
+<li>Slack app bot token.</li>
+<li>Channel IDs for escalation, leads, booking, bot errors.</li>
+<li>Confirmation that bot was added to private channels.</li>
+</ul>
+<h2 id="7-deployment-items-to-collect">7. Deployment Items To Collect</h2>
+<p>From Render/Railway/VPS:</p>
+<ul>
+<li>Public HTTPS app URL.</li>
+<li>Postgres connection string.</li>
+<li>Logs access.</li>
+<li>Environment variable access.</li>
+<li>Auto-deploy preference.</li>
+<li>Uptime monitor.</li>
+</ul>
+<h2 id="8-handoff-safety-before-they-go-live">8. Handoff Safety Before They Go Live</h2>
+<p>Ask them to prove:</p>
+<ul>
+<li><code>/health</code> is green.</li>
+<li><code>/integrations</code> shows GHL, Slack, OpenAI, and calendar checks passing.</li>
+<li>GHL ping webhook lands in <code>/webhooks/ghl/ping-status</code>.</li>
+<li>Inbound SMS test is received.</li>
+<li>NR enrollment test sends exactly one first message.</li>
+<li>Appointment sync creates reminders.</li>
+<li>No-show webhook creates no-show jobs.</li>
+<li>STOP cancels everything.</li>
+<li>NQ/signed/follow-up/human_hold tags stop or pause as expected.</li>
+</ul>
+<h2 id="recipient-setup-checklist">Recipient Setup Checklist</h2>
+<p>Source file: docs/handoff/RECIPIENT_SETUP_CHECKLIST.md</p>
+<h1 id="recipient-setup-checklist">Recipient Setup Checklist</h1>
+<p>This is the step-by-step checklist for the receiving team.</p>
+<h2 id="phase-1-get-the-code">Phase 1: Get The Code</h2>
+<ol>
+<li>Get access to the repo or a private fork.</li>
+<li>Clone it:</li>
+</ol>
+<pre><code class="language-bash">git clone &lt;repo-url&gt;
+cd asdleads-sms-bot
+npm ci
+npm test
+npm run build</code></pre>
+<ol>
+<li>Confirm tests pass before changing anything.</li>
+</ol>
+<h2 id="phase-2-create-hosting">Phase 2: Create Hosting</h2>
+<p>Recommended:</p>
+<ul>
+<li>Render Web Service.</li>
+<li>Render managed Postgres.</li>
+</ul>
+<p>Required settings:</p>
+<ul>
+<li>Runtime: Node 20+</li>
+<li>Build command: <code>npm ci --include=dev &amp;&amp; npm run build</code></li>
+<li>Start command: <code>npm start</code></li>
+<li>Health check path: <code>/health</code></li>
+<li>Auto deploy: on for production branch if you want automatic updates.</li>
+</ul>
+<p>Do not deploy as serverless. The bot has scheduled jobs and needs an always-on process.</p>
+<h2 id="phase-3-create-database">Phase 3: Create Database</h2>
+<ol>
+<li>Create managed Postgres.</li>
+<li>Add <code>DATABASE_URL</code> to the app service.</li>
+<li>If importing an existing database snapshot, restore it before turning live SMS on.</li>
+<li>If starting fresh, the app creates tables automatically at startup.</li>
+</ol>
+<h2 id="phase-4-add-environment-variables">Phase 4: Add Environment Variables</h2>
+<p>Use <code>HANDOFF_ENV_TEMPLATE.env</code> as the checklist.</p>
+<p>Keep <code>DRY_RUN=true</code> first.</p>
+<p>Only set <code>DRY_RUN=false</code> after the validation plan passes.</p>
+<h2 id="phase-5-slack-setup">Phase 5: Slack Setup</h2>
+<ol>
+<li>Create Slack app.</li>
+<li>Add bot token scopes needed to post messages, usually <code>chat:write</code>.</li>
+<li>Install app to workspace.</li>
+<li>Add bot to private channels.</li>
+<li>Copy channel IDs into env vars:</li>
+</ol>
+<ul>
+<li><code>SLACK_ESCALATION_CHANNEL</code></li>
+<li><code>SLACK_LEADS_CHANNEL</code></li>
+<li><code>SLACK_BOT_ERRORS_CHANNEL</code></li>
+<li><code>SLACK_BOOKING_CHANNEL</code></li>
+</ul>
+<ol>
+<li>Test from <code>/integrations</code>.</li>
+</ol>
+<h2 id="phase-6-gohighlevel-setup">Phase 6: GoHighLevel Setup</h2>
+<ol>
+<li>Create or obtain private integration token.</li>
+<li>Add <code>GHL_API_TOKEN</code>, <code>GHL_LOCATION_ID</code>, and <code>GHL_CALENDAR_ID</code>.</li>
+<li>Create all workflows in <code>GHL_WORKFLOWS_AND_WEBHOOKS.md</code>.</li>
+<li>Include <code>webhookSecret</code> or <code>x-webhook-secret</code> with every webhook.</li>
+<li>Test each webhook one by one.</li>
+</ol>
+<h2 id="phase-7-openai-setup">Phase 7: OpenAI Setup</h2>
+<ol>
+<li>Create OpenAI API key.</li>
+<li>Add <code>OPENAI_API_KEY</code>.</li>
+<li>Use <code>gpt-5-mini</code> unless you intentionally choose another model.</li>
+<li>Keep LLM fallback and decision gate enabled for risky actions:</li>
+</ol>
+<pre><code class="language-text">LLM_FALLBACK_ENABLED=true
+LLM_DECISION_GATE_ENABLED=true
+LLM_DECISION_GATE_MODEL=gpt-5-mini</code></pre>
+<h2 id="phase-8-local-hosted-validation">Phase 8: Local/Hosted Validation</h2>
+<ol>
+<li>Visit <code>/health</code>.</li>
+<li>Visit <code>/integrations</code>.</li>
+<li>Visit <code>/tester</code>.</li>
+<li>Visit <code>/dashboard</code>.</li>
+<li>Run the validation plan in <code>VALIDATION_TEST_PLAN.md</code>.</li>
+</ol>
+<h2 id="phase-9-go-live">Phase 9: Go Live</h2>
+<ol>
+<li>Confirm only one bot service is connected live to the same GHL account.</li>
+<li>Set <code>DRY_RUN=false</code>.</li>
+<li>Trigger a real test contact only.</li>
+<li>Watch Slack and dashboard.</li>
+<li>Start with a small batch before any bulk NR activation.</li>
+</ol>
+<h2 id="environment-variables">Environment Variables</h2>
+<p>Source file: docs/handoff/ENVIRONMENT_VARIABLES.md</p>
+<h1 id="environment-variables">Environment Variables</h1>
+<p>Never commit real values. Put production values in Render/Railway/VPS environment variables.</p>
+<h2 id="required-app-variables">Required App Variables</h2>
+<table>
+<thead><tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Example</th>
+<th>Notes</th>
+</tr></thead><tbody>
+<tr>
+<td><code>NODE_ENV</code></td>
+<td>yes</td>
+<td><code>production</code></td>
+<td>Production store requires <code>DATABASE_URL</code>.</td>
+</tr>
+<tr>
+<td><code>PORT</code></td>
+<td>platform</td>
+<td><code>3000</code></td>
+<td>Render supplies this automatically.</td>
+</tr>
+<tr>
+<td><code>HOST</code></td>
+<td>yes</td>
+<td><code>0.0.0.0</code></td>
+<td>Use <code>0.0.0.0</code> in hosted production.</td>
+</tr>
+<tr>
+<td><code>PUBLIC_BASE_URL</code></td>
+<td>yes</td>
+<td><code><a href="https://your-app.onrender.com">https://your-app.onrender.com</a></code></td>
+<td>Public app URL used in links and webhook docs.</td>
+</tr>
+<tr>
+<td><code>ADMIN_PASSWORD</code></td>
+<td>yes</td>
+<td>secure random string</td>
+<td>Protects admin APIs/dashboard.</td>
+</tr>
+<tr>
+<td><code>WEBHOOK_SECRET</code></td>
+<td>yes</td>
+<td>secure random string</td>
+<td>Must match GHL webhook custom data/header.</td>
+</tr>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td>yes</td>
+<td>Postgres URL</td>
+<td>Use managed Postgres. Do not share publicly.</td>
+</tr>
+<tr>
+<td><code>DRY_RUN</code></td>
+<td>yes</td>
+<td><code>true</code> then <code>false</code></td>
+<td>Start true. Production live SMS requires false.</td>
+</tr>
+</tbody></table>
+<h2 id="gohighlevel-variables">GoHighLevel Variables</h2>
+<table>
+<thead><tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Notes</th>
+</tr></thead><tbody>
+<tr>
+<td><code>GHL_API_TOKEN</code></td>
+<td>yes</td>
+<td>Private integration token or API token with contact, conversation, calendar, notes access.</td>
+</tr>
+<tr>
+<td><code>GHL_LOCATION_ID</code></td>
+<td>yes</td>
+<td>The GHL sub-account/location ID.</td>
+</tr>
+<tr>
+<td><code>GHL_CALENDAR_ID</code></td>
+<td>yes</td>
+<td>Calendar where Specialist calls are booked.</td>
+</tr>
+<tr>
+<td><code>GHL_API_BASE</code></td>
+<td>yes</td>
+<td>Usually <code><a href="https://services.leadconnectorhq.com">https://services.leadconnectorhq.com</a></code>.</td>
+</tr>
+<tr>
+<td><code>GHL_APP_BASE_URL</code></td>
+<td>optional</td>
+<td>Usually <code><a href="https://app.gohighlevel.com">https://app.gohighlevel.com</a></code>.</td>
+</tr>
+</tbody></table>
+<h2 id="slack-variables">Slack Variables</h2>
+<table>
+<thead><tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Notes</th>
+</tr></thead><tbody>
+<tr>
+<td><code>SLACK_BOT_TOKEN</code></td>
+<td>yes</td>
+<td>Bot token beginning with <code>xoxb-</code>.</td>
+</tr>
+<tr>
+<td><code>SLACK_ESCALATION_CHANNEL</code></td>
+<td>yes</td>
+<td>SMS/human escalation channel ID or name.</td>
+</tr>
+<tr>
+<td><code>SLACK_LEADS_CHANNEL</code></td>
+<td>yes</td>
+<td>Urgent call-now leads channel ID.</td>
+</tr>
+<tr>
+<td><code>SLACK_BOT_ERRORS_CHANNEL</code></td>
+<td>yes</td>
+<td>True system errors only.</td>
+</tr>
+<tr>
+<td><code>SLACK_BOOKING_CHANNEL</code></td>
+<td>yes</td>
+<td>Booking/no-show/rebook notices.</td>
+</tr>
+<tr>
+<td><code>SLACK_SEND_IN_DRY_RUN</code></td>
+<td>optional</td>
+<td>Usually <code>false</code>.</td>
+</tr>
+</tbody></table>
+<p>Use channel IDs for private channels. The Slack bot must be invited into each private channel.</p>
+<h2 id="openai-variables">OpenAI Variables</h2>
+<table>
+<thead><tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Recommended</th>
+</tr></thead><tbody>
+<tr>
+<td><code>OPENAI_API_KEY</code></td>
+<td>yes if LLM enabled</td>
+<td>Use recipient&#x27;s own key.</td>
+</tr>
+<tr>
+<td><code>OPENAI_CLASSIFIER_MODEL</code></td>
+<td>yes</td>
+<td><code>gpt-5-mini</code></td>
+</tr>
+<tr>
+<td><code>LLM_FALLBACK_ENABLED</code></td>
+<td>yes</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td><code>LLM_MIN_CONFIDENCE</code></td>
+<td>optional</td>
+<td><code>0.85</code></td>
+</tr>
+<tr>
+<td><code>LLM_CLARIFY_CONFIDENCE</code></td>
+<td>optional</td>
+<td><code>0.60</code></td>
+</tr>
+<tr>
+<td><code>LLM_DECISION_GATE_ENABLED</code></td>
+<td>yes</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td><code>LLM_DECISION_GATE_MODEL</code></td>
+<td>yes</td>
+<td><code>gpt-5-mini</code></td>
+</tr>
+<tr>
+<td><code>LLM_DECISION_GATE_MIN_CONFIDENCE</code></td>
+<td>optional</td>
+<td><code>0.82</code></td>
+</tr>
+</tbody></table>
+<h2 id="texting-window-variables">Texting Window Variables</h2>
+<table>
+<thead><tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Example</th>
+</tr></thead><tbody>
+<tr>
+<td><code>DEFAULT_TIMEZONE</code></td>
+<td>yes</td>
+<td><code>America/Chicago</code></td>
+</tr>
+<tr>
+<td><code>DEFAULT_TEXTING_START</code></td>
+<td>yes</td>
+<td><code>08:00</code></td>
+</tr>
+<tr>
+<td><code>DEFAULT_TEXTING_END</code></td>
+<td>yes</td>
+<td><code>21:00</code></td>
+</tr>
+<tr>
+<td><code>STATE_TEXTING_WINDOWS_JSON</code></td>
+<td>optional</td>
+<td><code>{}</code></td>
+</tr>
+<tr>
+<td><code>BOT_NAME</code></td>
+<td>yes</td>
+<td><code>William</code></td>
+</tr>
+</tbody></table>
+<p><code>STATE_TEXTING_WINDOWS_JSON</code> can be used for stricter state rules.</p>
+<p>Example:</p>
+<pre><code class="language-json">{&quot;FL&quot;:{&quot;start&quot;:&quot;08:00&quot;,&quot;end&quot;:&quot;20:00&quot;},&quot;OK&quot;:{&quot;start&quot;:&quot;08:00&quot;,&quot;end&quot;:&quot;20:00&quot;}}</code></pre>
+<h2 id="training-batch-variables">Training/Batch Variables</h2>
+<p>Only needed if importing historical SMS for training/audit:</p>
+<table>
+<thead><tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Notes</th>
+</tr></thead><tbody>
+<tr>
+<td><code>TRAINING_DB_PATH</code></td>
+<td>optional</td>
+<td>Defaults to <code>data/training.sqlite</code>.</td>
+</tr>
+<tr>
+<td><code>AUTO_APPLY_LLM_BATCH</code></td>
+<td>optional</td>
+<td>Usually <code>false</code>.</td>
+</tr>
+<tr>
+<td><code>BATCH_POLL_INTERVAL_MS</code></td>
+<td>optional</td>
+<td>Batch polling interval.</td>
+</tr>
+</tbody></table>
+<h2 id="secret-rotation-rule">Secret Rotation Rule</h2>
+<p>When handing this system to another party:</p>
+<ol>
+<li>Create new keys for them.</li>
+<li>Do not give your existing keys.</li>
+<li>If you accidentally shared a key in chat/email, rotate it immediately.</li>
+</ol>
+<h2 id="gohighlevel-workflows-and-webhooks">GoHighLevel Workflows And Webhooks</h2>
+<p>Source file: docs/handoff/GHL_WORKFLOWS_AND_WEBHOOKS.md</p>
+<h1 id="gohighlevel-workflows-and-webhooks">GoHighLevel Workflows And Webhooks</h1>
+<p>Every webhook should be a <code>POST</code> request to the recipient&#x27;s deployed bot URL.</p>
+<p>Base URL example:</p>
+<pre><code class="language-text">https://your-app.onrender.com</code></pre>
+<p>If GHL lets you add headers, add:</p>
+<pre><code class="language-text">x-webhook-secret: &lt;WEBHOOK_SECRET&gt;
+Content-Type: application/json</code></pre>
+<p>If GHL does not let you add headers, add this custom data field:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;</code></pre>
+<p>The bot accepts either.</p>
+<h2 id="required-workflow-1-test-ping">Required Workflow 1: Test Ping</h2>
+<p>Purpose:</p>
+<ul>
+<li>Confirms GHL can reach the bot and the secret works.</li>
+</ul>
+<p>Webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/ghl/ping</code></pre>
+<p>Custom data:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+name = {{contact.name}}
+phone = {{contact.phone}}</code></pre>
+<p>Check result:</p>
+<pre><code class="language-text">GET /webhooks/ghl/ping-status</code></pre>
+<h2 id="required-workflow-2-nr-no-response-enrollment">Required Workflow 2: NR / No Response Enrollment</h2>
+<p>Purpose:</p>
+<ul>
+<li>Starts the cold outreach flow after the team calls twice and marks the lead no response.</li>
+</ul>
+<p>Preferred trigger:</p>
+<ul>
+<li>Opportunity moved to No Response stage, or</li>
+<li>Contact tag added <code>NR</code>, or</li>
+<li>Custom disposition <code>no response</code> / <code>NR</code>.</li>
+</ul>
+<p>Webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/ghl/disposition</code></pre>
+<p>Aliases also accepted:</p>
+<pre><code class="language-text">POST /webhooks/ghl/tag
+POST /webhooks/ghl/nr-tag</code></pre>
+<p>Custom data:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+name = {{contact.name}}
+phone = {{contact.phone}}
+email = {{contact.email}}
+disposition = NR
+tags = {{contact.tags}}
+leadSource = {{contact.source}}
+timezone = {{contact.timezone}}
+state = {{contact.state}}</code></pre>
+<p>Important:</p>
+<ul>
+<li>This should only fire after the team has actually made the required calls.</li>
+<li>Do not fire this for signed, NQ, QR, follow_up, or human_hold contacts.</li>
+</ul>
+<h2 id="required-workflow-3-inbound-sms">Required Workflow 3: Inbound SMS</h2>
+<p>Purpose:</p>
+<ul>
+<li>Lets the bot see the PC&#x27;s replies.</li>
+</ul>
+<p>Trigger:</p>
+<ul>
+<li>Customer replied / inbound SMS / conversation message received.</li>
+</ul>
+<p>Webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/ghl/inbound-sms</code></pre>
+<p>Custom data:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+name = {{contact.name}}
+phone = {{contact.phone}}
+email = {{contact.email}}
+message = {{message.body}}
+tags = {{contact.tags}}
+leadSource = {{contact.source}}
+timezone = {{contact.timezone}}
+state = {{contact.state}}</code></pre>
+<p>If GHL uses different merge fields, map the latest inbound body into any of these accepted keys:</p>
+<ul>
+<li><code>message</code></li>
+<li><code>body</code></li>
+<li><code>text</code></li>
+<li><code>messageBody</code></li>
+<li><code>message_body</code></li>
+</ul>
+<h2 id="required-workflow-4-appointment-created-updated">Required Workflow 4: Appointment Created / Updated</h2>
+<p>Purpose:</p>
+<ul>
+<li>Lets the bot know when the team manually creates or edits an appointment.</li>
+<li>Rebuilds reminders.</li>
+<li>Sends booking Slack notice.</li>
+</ul>
+<p>Trigger:</p>
+<ul>
+<li>Appointment created.</li>
+<li>Appointment updated.</li>
+<li>Calendar appointment created/updated.</li>
+</ul>
+<p>Webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/ghl/appointment-sync</code></pre>
+<p>Aliases also accepted:</p>
+<pre><code class="language-text">POST /webhooks/ghl/appointment
+POST /webhooks/ghl/appointment-created
+POST /webhooks/ghl/appointment-updated
+POST /webhooks/ghl/calendar-appointment</code></pre>
+<p>Custom data:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+appointmentId = {{appointment.id}}
+startTime = {{appointment.start_time}}
+status = {{appointment.status}}
+title = {{appointment.title}}
+tags = {{contact.tags}}
+timezone = {{contact.timezone}}</code></pre>
+<p>Accepted appointment start fields:</p>
+<ul>
+<li><code>startTime</code></li>
+<li><code>start_time</code></li>
+<li><code>startsAt</code></li>
+<li><code>starts_at</code></li>
+<li><code>scheduledTime</code></li>
+<li><code>appointmentTime</code></li>
+<li><code>appointmentStartTime</code></li>
+<li><code>startDate</code></li>
+<li><code>appointment.startTime</code></li>
+<li><code>event.startTime</code></li>
+</ul>
+<p>Appointment title conventions:</p>
+<ul>
+<li><code>ASD Initial Specialist Call - [Name]</code></li>
+<li><code>ASD Qualified Follow-Up Call - [Name]</code></li>
+<li><code>ASD Contract Review Call - [Name]</code></li>
+</ul>
+<h2 id="required-workflow-5-appointment-no-show">Required Workflow 5: Appointment No-Show</h2>
+<p>Purpose:</p>
+<ul>
+<li>Starts no-show recovery when the team marks an appointment no-show.</li>
+</ul>
+<p>Trigger:</p>
+<ul>
+<li>Appointment status changed to no-show / missed / did not show.</li>
+</ul>
+<p>Recommended webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/asd/no-show</code></pre>
+<p>Aliases also accepted:</p>
+<pre><code class="language-text">POST /webhooks/ghl/no-show
+POST /webhooks/ghl/appointment-no-show
+POST /webhooks/asd/appointment-no-show</code></pre>
+<p>Custom data:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+appointmentId = {{appointment.id}}
+startTime = {{appointment.start_time}}
+status = no_show
+title = {{appointment.title}}
+tags = {{contact.tags}}
+timezone = {{contact.timezone}}</code></pre>
+<p>Check no-show diagnostics:</p>
+<pre><code class="language-text">GET /api/admin/no-show-webhooks</code></pre>
+<p>Use the admin password header if required:</p>
+<pre><code class="language-text">x-admin-password: &lt;ADMIN_PASSWORD&gt;</code></pre>
+<h2 id="required-workflow-6-bot-control-tags">Required Workflow 6: Bot Control Tags</h2>
+<p>Purpose:</p>
+<ul>
+<li>Lets human team tags control bot behavior.</li>
+</ul>
+<p>Trigger:</p>
+<ul>
+<li>Contact tag added.</li>
+</ul>
+<p>Webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/ghl/bot-control</code></pre>
+<p>Simple setup:</p>
+<ul>
+<li>Make one workflow per important tag.</li>
+<li>Hardcode the <code>action</code> value for that tag.</li>
+</ul>
+<p>Custom data:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+name = {{contact.name}}
+phone = {{contact.phone}}
+tags = {{contact.tags}}
+action = &lt;TAG_OR_ACTION_NAME&gt;
+actor = {{user.name}}</code></pre>
+<p>Supported action/tag values:</p>
+<ul>
+<li><code>call_no_answer</code></li>
+<li><code>call_drop</code></li>
+<li><code>call_connected_follow_up</code></li>
+<li><code>return_to_bot</code></li>
+<li><code>NQ</code></li>
+<li><code>contract_sent</code></li>
+<li><code>contract</code></li>
+<li><code>contract_set</code></li>
+<li><code>signed</code></li>
+<li><code>contract_signed</code></li>
+<li><code>follow_up</code></li>
+<li><code>QR</code></li>
+<li><code>human_hold</code></li>
+<li><code>pause_bot</code></li>
+<li><code>urgent_call_now</code></li>
+<li><code>mark_no_show</code></li>
+<li><code>ensure_appointment_reminders</code></li>
+<li><code>refresh_timezone</code></li>
+</ul>
+<p>Use <code>NQ</code>, not <code>not_qualified</code>.</p>
+<h2 id="required-workflow-7-human-call-activity">Required Workflow 7: Human Call Activity</h2>
+<p>Purpose:</p>
+<ul>
+<li>Pauses the bot when a human places a call.</li>
+<li>Requires the team to record an outcome if the call is short or unclear.</li>
+</ul>
+<p>Trigger:</p>
+<ul>
+<li>Outbound call activity.</li>
+<li>Manual call started/completed.</li>
+</ul>
+<p>Webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/ghl/human-active</code></pre>
+<p>Custom data:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+action = manual_call
+callStatus = {{call.status}}
+callDuration = {{call.duration}}
+callDirection = outbound
+actor = {{user.name}}</code></pre>
+<p>If duration is missing or under 60 seconds, the bot treats it as needing a call outcome.</p>
+<h2 id="required-workflow-8-human-manual-text-outbound-message">Required Workflow 8: Human Manual Text / Outbound Message</h2>
+<p>Purpose:</p>
+<ul>
+<li>Lets the bot know a human manually texted the PC.</li>
+<li>Without this, the bot cannot reliably know what the human said.</li>
+</ul>
+<p>Preferred method:</p>
+<ul>
+<li>GHL Marketplace app webhook event for outbound conversation messages.</li>
+</ul>
+<p>Webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/asd/human-outbound</code></pre>
+<p>Alias also accepted:</p>
+<pre><code class="language-text">POST /webhooks/ghl/human-outbound</code></pre>
+<p>Required event:</p>
+<pre><code class="language-text">OutboundMessage</code></pre>
+<p>Required app/webhook scope:</p>
+<pre><code class="language-text">conversations/message.readonly</code></pre>
+<p>If using a normal GHL workflow instead of Marketplace webhook, custom data should include:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+type = OutboundMessage
+message = {{message.body}}
+messageType = SMS
+actor = {{user.name}}</code></pre>
+<p>If GHL does not expose a normal &quot;manual SMS sent&quot; workflow trigger, use the Marketplace app event. If that is not installed, the fallback is for the team to tag <code>call_connected_follow_up</code>, <code>return_to_bot</code>, or another bot-control tag manually.</p>
+<h2 id="optional-workflow-9-missed-call">Optional Workflow 9: Missed Call</h2>
+<p>Purpose:</p>
+<ul>
+<li>Starts missed-call follow-up if a scheduled call was missed outside the no-show workflow.</li>
+</ul>
+<p>Webhook URL:</p>
+<pre><code class="language-text">POST /webhooks/ghl/missed-call</code></pre>
+<p>Custom data:</p>
+<pre><code class="language-text">webhookSecret = &lt;WEBHOOK_SECRET&gt;
+contactId = {{contact.id}}
+appointmentId = {{appointment.id}}
+callTime = {{appointment.start_time}}
+status = missed</code></pre>
+<h2 id="testing-each-webhook">Testing Each Webhook</h2>
+<p>For every workflow:</p>
+<ol>
+<li>Trigger it on a test contact only.</li>
+<li>Check Render logs.</li>
+<li>Check <code>/integrations</code>.</li>
+<li>Check dashboard contact timeline.</li>
+<li>Check Slack if it is supposed to alert.</li>
+<li>Confirm no duplicate messages were sent.</li>
+</ol>
+<h2 id="database-transfer">Database Transfer</h2>
+<p>Source file: docs/handoff/DATABASE_TRANSFER.md</p>
+<h1 id="database-transfer-guide">Database Transfer Guide</h1>
+<p>This bot uses Postgres in production.</p>
+<p>The database contains private lead/contact/SMS data. Treat it as sensitive.</p>
+<h2 id="what-is-in-the-database">What Is In The Database</h2>
+<p>Tables:</p>
+<ul>
+<li><code>contacts</code></li>
+<li><code>jobs</code></li>
+<li><code>messages</code></li>
+<li><code>escalations</code></li>
+<li><code>decision_logs</code></li>
+<li><code>webhook_events</code></li>
+<li><code>settings</code></li>
+</ul>
+<p>The <code>contacts</code> and <code>messages</code> tables can contain personal, medical, legal, and insurance information.</p>
+<h2 id="option-a-start-with-empty-database">Option A: Start With Empty Database</h2>
+<p>Best for a new operator.</p>
+<p>Steps:</p>
+<ol>
+<li>Create new Postgres database.</li>
+<li>Set <code>DATABASE_URL</code>.</li>
+<li>Start app.</li>
+<li>App creates tables automatically.</li>
+<li>Configure GHL workflows.</li>
+<li>Start live traffic after testing.</li>
+</ol>
+<p>No historical contacts/messages are transferred.</p>
+<h2 id="option-b-clone-full-database">Option B: Clone Full Database</h2>
+<p>Use only if the recipient is allowed to receive all historical data.</p>
+<h3 id="export">Export</h3>
+<p>Run from a trusted machine with Postgres tools installed:</p>
+<pre><code class="language-bash">mkdir -p private-handoff
+pg_dump &quot;$DATABASE_URL&quot; \
+  --format=custom \
+  --no-owner \
+  --no-acl \
+  --file &quot;private-handoff/asdleads_sms_bot_$(date +%Y-%m-%d).dump&quot;</code></pre>
+<p>Encrypt before sending:</p>
+<pre><code class="language-bash">gpg -c --cipher-algo AES256 &quot;private-handoff/asdleads_sms_bot_$(date +%Y-%m-%d).dump&quot;</code></pre>
+<p>Send the <code>.gpg</code> file separately from the password.</p>
+<p>Do not commit database dumps.</p>
+<h3 id="restore">Restore</h3>
+<p>On the recipient environment:</p>
+<pre><code class="language-bash">gpg -o private-handoff/asdleads_sms_bot.dump -d private-handoff/asdleads_sms_bot_YYYY-MM-DD.dump.gpg
+pg_restore \
+  --clean \
+  --if-exists \
+  --no-owner \
+  --dbname &quot;$NEW_DATABASE_URL&quot; \
+  private-handoff/asdleads_sms_bot.dump</code></pre>
+<p>Then start the app and check:</p>
+<pre><code class="language-text">GET /health
+GET /dashboard</code></pre>
+<h2 id="option-c-clone-only-bot-logic-not-contacts">Option C: Clone Only Bot Logic, Not Contacts</h2>
+<p>Recommended if the second operator has their own GHL leads.</p>
+<p>Steps:</p>
+<ol>
+<li>Do not restore old contacts/messages/jobs.</li>
+<li>Deploy code.</li>
+<li>Configure new GHL location and calendar.</li>
+<li>Start with fresh NR enrollment.</li>
+</ol>
+<h2 id="important-cutover-warning">Important Cutover Warning</h2>
+<p>Never have two live services sending SMS for the same GHL location/contact list.</p>
+<p>Safe migration:</p>
+<ol>
+<li>Old bot stays live.</li>
+<li>New bot is deployed with <code>DRY_RUN=true</code>.</li>
+<li>New bot webhooks tested on test contact only.</li>
+<li>Old bot webhooks disabled.</li>
+<li>New bot <code>DRY_RUN=false</code>.</li>
+<li>GHL workflows switched to new URL.</li>
+</ol>
+<h2 id="jobs-table-warning">Jobs Table Warning</h2>
+<p>The <code>jobs</code> table contains pending scheduled messages.</p>
+<p>If cloning a database for another operator, decide whether pending jobs should come over:</p>
+<ul>
+<li>If they are cloning the same live operation, keep jobs.</li>
+<li>If they are starting a new operation, clear pending jobs before live use.</li>
+</ul>
+<p>Clear jobs only if you are sure:</p>
+<pre><code class="language-sql">update jobs
+set status = &#x27;cancelled&#x27;,
+    data = data || &#x27;{&quot;cancelReason&quot;:&quot;handoff reset&quot;}&#x27;::jsonb,
+    updated_at = now()
+where status = &#x27;pending&#x27;;</code></pre>
+<h2 id="training-database">Training Database</h2>
+<p>Historical training import may also exist locally:</p>
+<pre><code class="language-text">data/training.sqlite</code></pre>
+<p>This is not the production bot memory. Transfer it only if they need the review/training examples.</p>
+<p>It may also contain private SMS text, so treat it as sensitive.</p>
+<h2 id="validation-test-plan">Validation Test Plan</h2>
+<p>Source file: docs/handoff/VALIDATION_TEST_PLAN.md</p>
+<h1 id="validation-test-plan">Validation Test Plan</h1>
+<p>Run this before switching <code>DRY_RUN=false</code>.</p>
+<h2 id="1-local-code-checks">1. Local Code Checks</h2>
+<pre><code class="language-bash">npm ci
+npm test
+npm run build</code></pre>
+<p>Expected:</p>
+<ul>
+<li>All tests pass.</li>
+<li>Dashboard build succeeds.</li>
+</ul>
+<h2 id="2-health-check">2. Health Check</h2>
+<p>Open:</p>
+<pre><code class="language-text">https://YOUR-APP/health</code></pre>
+<p>Expected:</p>
+<ul>
+<li><code>ok: true</code></li>
+<li>storage type is <code>postgres</code></li>
+<li>no database errors</li>
+</ul>
+<h2 id="3-integration-page">3. Integration Page</h2>
+<p>Open:</p>
+<pre><code class="language-text">https://YOUR-APP/integrations</code></pre>
+<p>Expected:</p>
+<ul>
+<li>GHL read access works.</li>
+<li>Slack token valid.</li>
+<li>Calendar configured.</li>
+<li>OpenAI configured.</li>
+<li>Dry run status is clear.</li>
+</ul>
+<h2 id="4-ghl-ping-test">4. GHL Ping Test</h2>
+<p>Trigger <code>/webhooks/ghl/ping</code>.</p>
+<p>Then open:</p>
+<pre><code class="language-text">https://YOUR-APP/webhooks/ghl/ping-status</code></pre>
+<p>Expected:</p>
+<ul>
+<li><code>authorized: true</code></li>
+<li>contact id present</li>
+<li>payload keys visible</li>
+</ul>
+<h2 id="5-nr-enrollment-test">5. NR Enrollment Test</h2>
+<p>Use a test GHL contact.</p>
+<p>Trigger NR/no-response workflow.</p>
+<p>Expected:</p>
+<ul>
+<li>Contact appears in dashboard.</li>
+<li>One initial SMS is sent or queued.</li>
+<li>No duplicate initial SMS.</li>
+<li>Cold outreach jobs exist.</li>
+</ul>
+<h2 id="6-inbound-reply-test">6. Inbound Reply Test</h2>
+<p>Reply as the PC:</p>
+<pre><code class="language-text">May 10th</code></pre>
+<p>Expected:</p>
+<ul>
+<li>Accident date saved.</li>
+<li>Bot asks next needed qualification question.</li>
+</ul>
+<p>Reply:</p>
+<pre><code class="language-text">The other driver</code></pre>
+<p>Expected:</p>
+<ul>
+<li>Fault saved as not at fault.</li>
+<li>Bot asks medical question.</li>
+</ul>
+<p>Reply:</p>
+<pre><code class="language-text">Yes I went to the hospital</code></pre>
+<p>Expected:</p>
+<ul>
+<li>Medical saved.</li>
+<li>Bot asks for call timing.</li>
+</ul>
+<h2 id="7-call-now-test">7. Call Now Test</h2>
+<p>Reply:</p>
+<pre><code class="language-text">Call me now</code></pre>
+<p>Expected:</p>
+<ul>
+<li>Urgent Slack alert goes to leads channel.</li>
+<li>Bot does not keep asking qualification questions.</li>
+<li>Human team calls.</li>
+</ul>
+<h2 id="8-exact-booking-test">8. Exact Booking Test</h2>
+<p>Reply:</p>
+<pre><code class="language-text">Tomorrow at 3pm</code></pre>
+<p>Expected:</p>
+<ul>
+<li>GHL appointment created.</li>
+<li>Booking Slack notice sent.</li>
+<li>Reminder jobs scheduled.</li>
+<li>Timezone looks correct.</li>
+</ul>
+<h2 id="9-manual-appointment-sync-test">9. Manual Appointment Sync Test</h2>
+<p>Human creates appointment in GHL.</p>
+<p>Expected:</p>
+<ul>
+<li><code>/webhooks/ghl/appointment-sync</code> processes it.</li>
+<li>Contact becomes <code>call_scheduled</code>.</li>
+<li>Reminders are scheduled.</li>
+<li>Booking Slack notice sent once.</li>
+</ul>
+<h2 id="10-no-show-test">10. No-Show Test</h2>
+<p>Mark test appointment no-show in GHL.</p>
+<p>Expected:</p>
+<ul>
+<li><code>/webhooks/asd/no-show</code> receives the event.</li>
+<li>Contact becomes <code>missed_call</code>.</li>
+<li>Old reminders are cancelled.</li>
+<li>No-show follow-up jobs are scheduled.</li>
+<li>Dashboard no-show log shows <code>jobs_scheduled</code> or <code>backup_flow_started</code>.</li>
+</ul>
+<h2 id="11-human-manual-text-test">11. Human Manual Text Test</h2>
+<p>Human sends an SMS manually from GHL.</p>
+<p>Expected:</p>
+<ul>
+<li><code>/webhooks/asd/human-outbound</code> receives the event.</li>
+<li>Message is stored as <code>human_outbound</code>.</li>
+<li>Bot pauses and schedules human reply timeout.</li>
+<li>If the human text contains a call time in a scheduling state, bot can assist booking.</li>
+</ul>
+<h2 id="12-human-call-activity-test">12. Human Call Activity Test</h2>
+<p>Human places short outbound call.</p>
+<p>Expected:</p>
+<ul>
+<li><code>/webhooks/ghl/human-active</code> receives it.</li>
+<li>Bot pauses.</li>
+<li>Call outcome watchdog is scheduled.</li>
+<li>If no outcome tag is added, dashboard/Slack shows no call disposition recorded.</li>
+</ul>
+<h2 id="13-stop-nq-signed-tests">13. Stop/NQ/Signed Tests</h2>
+<p>STOP:</p>
+<ul>
+<li>Reply <code>STOP</code>.</li>
+<li>Expected: opted out, jobs cancelled, no Slack error for expected GHL unsubscribe block.</li>
+</ul>
+<p>NQ:</p>
+<ul>
+<li>Add <code>NQ</code>.</li>
+<li>Expected: bot stops, no more follow-up.</li>
+</ul>
+<p>Signed:</p>
+<ul>
+<li>Add <code>signed</code>.</li>
+<li>Expected: terminal stop, reminders/no-show recovery cancelled.</li>
+</ul>
+<h2 id="14-lead-requested-pause-test">14. Lead-Requested Pause Test</h2>
+<p>Reply:</p>
+<pre><code class="language-text">Not a good time. I&#x27;ll text when I&#x27;m free. Please don&#x27;t blow up my phone</code></pre>
+<p>Expected:</p>
+<ul>
+<li>One polite acknowledgement.</li>
+<li>All pending jobs cancelled.</li>
+<li>Team gets an escalation/alert.</li>
+<li>Bot does not opt them out.</li>
+<li>Bot resumes only when lead texts again.</li>
+</ul>
+<h2 id="15-duplicate-safety-test">15. Duplicate Safety Test</h2>
+<p>Create or simulate duplicate same-phone contacts where one is NQ/signed.</p>
+<p>Expected:</p>
+<ul>
+<li>Bot does not continue texting the wrong duplicate.</li>
+<li>Dashboard shows duplicate issue if needed.</li>
+</ul>
+<h2 id="go-live-gate">Go-Live Gate</h2>
+<p>Only set <code>DRY_RUN=false</code> after all required tests pass.</p>
+<p>After go-live:</p>
+<ul>
+<li>Watch Slack for 1 hour.</li>
+<li>Watch dashboard issues.</li>
+<li>Send only a small first batch.</li>
+<li>Do not bulk enroll hundreds of contacts until duplicate and DND behavior looks clean.</li>
+</ul>
+<h2 id="repo-update-strategy">Repo Update Strategy</h2>
+<p>Source file: docs/handoff/REPO_UPDATE_STRATEGY.md</p>
+<h1 id="repo-update-strategy">Repo Update Strategy</h1>
+<p>This explains how another operator can receive future updates while protecting production.</p>
+<h2 id="option-1-same-private-repo-separate-environment">Option 1: Same Private Repo, Separate Environment</h2>
+<p>How it works:</p>
+<ul>
+<li>Add recipient/dev as GitHub collaborator.</li>
+<li>They deploy the same repo to their own Render service.</li>
+<li>Their environment variables point to their own GHL, Slack, OpenAI, and database.</li>
+<li>Auto-deploy from <code>main</code> can update them automatically.</li>
+</ul>
+<p>Pros:</p>
+<ul>
+<li>Easiest to keep updated.</li>
+<li>One source of truth.</li>
+<li>Every push can deploy everywhere if configured.</li>
+</ul>
+<p>Cons:</p>
+<ul>
+<li>They see the full repo history.</li>
+<li>A bad push could affect all connected auto-deploy environments.</li>
+<li>Harder to customize per recipient.</li>
+</ul>
+<p>Use this only with trusted collaborators and good test discipline.</p>
+<h2 id="option-2-private-fork-with-upstream">Option 2: Private Fork With Upstream</h2>
+<p>How it works:</p>
+<ul>
+<li>Recipient forks the repo privately.</li>
+<li>Their deployment points to their fork.</li>
+<li>Original repo is added as <code>upstream</code>.</li>
+<li>They pull updates when ready.</li>
+</ul>
+<p>Commands:</p>
+<pre><code class="language-bash">git remote add upstream &lt;original-repo-url&gt;
+git fetch upstream
+git merge upstream/main
+npm test
+npm run build
+git push origin main</code></pre>
+<p>Pros:</p>
+<ul>
+<li>Safer for production.</li>
+<li>Recipient controls when updates deploy.</li>
+<li>Recipient can customize without changing your production.</li>
+</ul>
+<p>Cons:</p>
+<ul>
+<li>Someone must pull/merge updates.</li>
+<li>Merge conflicts are possible.</li>
+</ul>
+<p>Recommended for most outside operators.</p>
+<h2 id="option-3-release-tags">Option 3: Release Tags</h2>
+<p>How it works:</p>
+<ul>
+<li>You create stable release tags:</li>
+</ul>
+<pre><code class="language-bash">git tag handoff-2026-05-14
+git push origin handoff-2026-05-14</code></pre>
+<ul>
+<li>Recipient deploys a specific tag or branch.</li>
+</ul>
+<p>Pros:</p>
+<ul>
+<li>Stable.</li>
+<li>Easy rollback.</li>
+<li>Good for multiple clients/operators.</li>
+</ul>
+<p>Cons:</p>
+<ul>
+<li>Requires release discipline.</li>
+</ul>
+<p>Recommended if this becomes a repeatable product.</p>
+<h2 id="option-4-template-repo">Option 4: Template Repo</h2>
+<p>How it works:</p>
+<ul>
+<li>Create a clean template repo without client-specific docs/history.</li>
+<li>New operators create a repo from the template.</li>
+</ul>
+<p>Pros:</p>
+<ul>
+<li>Cleanest handoff.</li>
+<li>No accidental client-specific files.</li>
+</ul>
+<p>Cons:</p>
+<ul>
+<li>More work to maintain.</li>
+<li>Updates need a release/merge strategy.</li>
+</ul>
+<h2 id="strong-recommendation">Strong Recommendation</h2>
+<p>For one trusted operator:</p>
+<ul>
+<li>Use a private fork.</li>
+<li>Keep your repo as upstream.</li>
+<li>Pull updates manually after tests pass.</li>
+</ul>
+<p>For many operators:</p>
+<ul>
+<li>Create a clean product/template repo.</li>
+<li>Use release tags.</li>
+<li>Keep each operator on their own database and env vars.</li>
+</ul>
+<h2 id="auto-deploy-warning">Auto-Deploy Warning</h2>
+<p>Auto-deploy is powerful but risky.</p>
+<p>If a recipient points Render directly to <code>main</code>, every push to <code>main</code> can deploy to their production.</p>
+<p>Safer:</p>
+<ul>
+<li>Deploy from a <code>production</code> branch.</li>
+<li>Merge into <code>production</code> only after tests.</li>
+<li>Keep <code>main</code> as active development.</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">git checkout -b production
+git push origin production</code></pre>
+<p>Then set Render branch to <code>production</code>.</p>
+<h2 id="rollback">Rollback</h2>
+<p>If a deploy breaks:</p>
+<ol>
+<li>Go to Render deploy history.</li>
+<li>Roll back to previous deploy.</li>
+<li>Or revert the Git commit:</li>
+</ol>
+<pre><code class="language-bash">git revert &lt;bad-commit-sha&gt;
+git push</code></pre>
+<ol>
+<li>Verify <code>/health</code>, <code>/dashboard</code>, and a test webhook.</li>
+</ol>
+<h2 id="export-package-checklist">Export Package Checklist</h2>
+<p>Source file: docs/handoff/EXPORT_PACKAGE_CHECKLIST.md</p>
+<h1 id="export-package-checklist">Export Package Checklist</h1>
+<p>Use this when preparing a complete handoff.</p>
+<h2 id="files-folders-to-include">Files/Folders To Include</h2>
+<p>Include:</p>
+<ul>
+<li>Full repo or private fork.</li>
+<li><code>docs/handoff/</code></li>
+<li><code>docs/handoff/Accident_Support_Desk_Complete_Handoff_Guide.pdf</code></li>
+<li><code>docs/handoff/COMPLETE_HANDOFF_GUIDE.md</code></li>
+<li><code>docs/handoff/HANDOFF_ENV_TEMPLATE.env</code></li>
+<li><code>README.md</code></li>
+<li><code>RENDER_DEPLOY_GUIDE.md</code></li>
+<li><code>GO_LIVE_GUIDE.md</code></li>
+<li><code>docs/PRODUCTION_RUNBOOK.md</code></li>
+<li><code>docs/call-disposition-guide.md</code></li>
+<li><code>docs/team-guide.md</code></li>
+<li><code>docs/bot-logic-audit.md</code></li>
+<li><code>docs/lead-lifecycle-map.md</code></li>
+<li><code>render.yaml</code></li>
+<li><code>.env.example</code></li>
+</ul>
+<p>Do not include:</p>
+<ul>
+<li><code>.env</code></li>
+<li><code>data/</code></li>
+<li><code>reports/</code> if reports contain private info</li>
+<li>database dumps unless encrypted and approved</li>
+<li>screenshots with private keys/tokens</li>
+</ul>
+<h2 id="suggested-private-handoff-folder">Suggested Private Handoff Folder</h2>
+<p>Create this outside the repo:</p>
+<pre><code class="language-text">private-handoff/
+  database/
+  secrets/
+  screenshots/
+  ghl-workflow-notes/</code></pre>
+<p>Keep <code>private-handoff/</code> out of Git.</p>
+<h2 id="suggested-public-safe-handoff-folder">Suggested Public/Safe Handoff Folder</h2>
+<p>This repo folder is safe to commit:</p>
+<pre><code class="language-text">docs/handoff/</code></pre>
+<p>It should contain instructions and templates only.</p>
+<h2 id="what-to-tell-the-recipient">What To Tell The Recipient</h2>
+<p>Tell them:</p>
+<ol>
+<li>Start with <code>docs/handoff/Accident_Support_Desk_Complete_Handoff_Guide.pdf</code>.</li>
+<li>Use <code>RECIPIENT_SETUP_CHECKLIST.md</code>.</li>
+<li>Use <code>HANDOFF_ENV_TEMPLATE.env</code> for variables.</li>
+<li>Configure GHL workflows exactly from <code>GHL_WORKFLOWS_AND_WEBHOOKS.md</code>.</li>
+<li>Do not go live until <code>VALIDATION_TEST_PLAN.md</code> passes.</li>
+</ol>
+<h2 id="sanitized-environment-template">Sanitized Environment Template</h2>
+<p>Copy this into the recipient hosting service and fill in their own values. Never reuse Collins&#x27; live secrets.</p>
+<pre><code class="language-env">NODE_ENV=production
+HOST=0.0.0.0
+PUBLIC_BASE_URL=https://YOUR-APP-DOMAIN.example
+ADMIN_PASSWORD=REPLACE_WITH_SECURE_PASSWORD
+WEBHOOK_SECRET=REPLACE_WITH_SECURE_RANDOM_SECRET
+DATABASE_URL=REPLACE_WITH_POSTGRES_CONNECTION_STRING
+DRY_RUN=true
+
+GHL_API_TOKEN=REPLACE_WITH_GHL_PRIVATE_INTEGRATION_TOKEN
+GHL_LOCATION_ID=REPLACE_WITH_GHL_LOCATION_ID
+GHL_CALENDAR_ID=REPLACE_WITH_GHL_CALENDAR_ID
+GHL_API_BASE=https://services.leadconnectorhq.com
+GHL_APP_BASE_URL=https://app.gohighlevel.com
+
+SLACK_BOT_TOKEN=REPLACE_WITH_SLACK_BOT_TOKEN
+SLACK_ESCALATION_CHANNEL=REPLACE_WITH_CHANNEL_ID_OR_NAME
+SLACK_LEADS_CHANNEL=REPLACE_WITH_CHANNEL_ID_OR_NAME
+SLACK_BOT_ERRORS_CHANNEL=REPLACE_WITH_CHANNEL_ID_OR_NAME
+SLACK_BOOKING_CHANNEL=REPLACE_WITH_CHANNEL_ID_OR_NAME
+SLACK_SEND_IN_DRY_RUN=false
+
+OPENAI_API_KEY=REPLACE_WITH_OPENAI_API_KEY
+OPENAI_CLASSIFIER_MODEL=gpt-5-mini
+LLM_FALLBACK_ENABLED=true
+LLM_MIN_CONFIDENCE=0.85
+LLM_CLARIFY_CONFIDENCE=0.60
+LLM_DECISION_GATE_ENABLED=true
+LLM_DECISION_GATE_MODEL=gpt-5-mini
+LLM_DECISION_GATE_MIN_CONFIDENCE=0.82
+
+DEFAULT_TIMEZONE=America/Chicago
+DEFAULT_TEXTING_START=08:00
+DEFAULT_TEXTING_END=21:00
+STATE_TEXTING_WINDOWS_JSON={}
+BOT_NAME=William</code></pre>
+<h2 id="final-handoff-checklist">Final Handoff Checklist</h2>
+<ul>
+<li>Repo access granted or private fork created.</li>
+<li>Recipient hosting and Postgres created.</li>
+<li>Recipient env vars entered with their own secrets.</li>
+<li>GHL workflows created and tested.</li>
+<li>Slack channels/app installed and tested.</li>
+<li>OpenAI API key added if LLM gate is enabled.</li>
+<li>Database restored only if needed and legally approved.</li>
+<li>DRY_RUN=true for all tests.</li>
+<li>Validation plan passed.</li>
+<li>DRY_RUN=false only after old automation conflicts are disabled.</li>
+<li>Uptime monitoring enabled on /health.</li>
+</ul>
+</body>
+</html>
