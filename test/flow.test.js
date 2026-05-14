@@ -1565,6 +1565,29 @@ test("admin action can ensure reminders for an already booked appointment", asyn
   );
 });
 
+test("stuck-state healer recreates missing appointment reminders for scheduled calls", async () => {
+  const { bot, store } = makeBot();
+  const startsAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "missing-reminder-heal",
+    ghlContactId: "missing-reminder-heal",
+    name: "Sidiki",
+    phone: "+15550000241",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Today at 4:00 PM CST",
+    preferredCallTimeIso: startsAt,
+    appointmentId: "appt-missing-reminders"
+  });
+
+  const healed = await bot.healStuckContacts();
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "missing-reminder-heal");
+
+  assert.deepEqual(healed, [{ contactId: "missing-reminder-heal", action: "scheduled_missing_appointment_reminders" }]);
+  assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
+});
+
 test("scheduled call can be rescheduled and old reminders are replaced", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -3668,6 +3691,30 @@ test("appointment no-show schedules reschedule recovery without restarting quali
 
   assert.match(store.getContact("no-show-1").lastOutboundMessage, /missed you|missed the call|rescheduled|calendar/i);
   assert.doesNotMatch(store.getContact("no-show-1").lastOutboundMessage, /date of the accident/i);
+});
+
+test("stuck-state healer recreates missing no-show recovery jobs", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "missing-no-show-heal",
+    ghlContactId: "missing-no-show-heal",
+    name: "No Show Heal",
+    phone: "+15550000242",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.MISSED_CALL,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    currentSequenceName: "appointment_no_show",
+    appointmentNoShowAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+    preferredCallTime: "Earlier today",
+    preferredCallTimeIso: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    appointmentId: "appt-missing-no-show"
+  });
+
+  const healed = await bot.healStuckContacts();
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "missing-no-show-heal");
+
+  assert.deepEqual(healed, [{ contactId: "missing-no-show-heal", action: "scheduled_missing_no_show_recovery" }]);
+  assert.equal(jobs.some((job) => job.type === "missed_call_followup" && job.status === "pending"), true);
 });
 
 test("appointment no-show schedules backup time reminders when backup exists", async () => {

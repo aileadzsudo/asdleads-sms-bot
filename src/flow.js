@@ -6362,14 +6362,59 @@ class SmsBot {
     const healed = [];
     for (const raw of contacts) {
       let contact = raw;
-      if (
+      const jobs = contact?.id ? await this.store.listJobs(contact.id) : [];
+      const terminalOrHardPaused =
         !contact ||
         contact.optOutStatus ||
-        contact.automationPaused ||
         hasSignedTag(contact) ||
         hasNqTag(contact) ||
         hasManualHumanHoldTag(contact) ||
         contact.engagementStatus === ENGAGEMENT.OPTED_OUT ||
+        (contact.automationPaused &&
+          !(
+            isAppointmentSupportContext(contact) &&
+            ["contract_pending_tag", "contract_pending_appointment_support"].includes(contact.automationPauseReason)
+          ));
+
+      if (!terminalOrHardPaused) {
+        const appointmentDate = contact.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
+        const appointmentFuture =
+          appointmentDate && !Number.isNaN(appointmentDate.getTime()) && appointmentDate > addMinutes(new Date(), 2);
+        const hasCurrentReminder = jobs.some(
+          (job) => job.status === "pending" && job.type === "appointment_reminder" && isCurrentAppointmentReminderJob(contact, job, this.config)
+        );
+        const shouldHaveReminders =
+          appointmentFuture &&
+          !contact.humanEscalationStatus &&
+          (contact.appointmentId ||
+            contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
+            contact.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
+            contact.qualificationProgress === QUALIFICATION.COMPLETE);
+        if (shouldHaveReminders && !hasCurrentReminder) {
+          await this.scheduleAppointmentReminders(contact);
+          healed.push({ contactId: contact.id, action: "scheduled_missing_appointment_reminders" });
+          continue;
+        }
+
+        const noShowActive = isNoShowRecoveryContact(contact);
+        const hasNoShowRecoveryJob = jobs.some(
+          (job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)
+        );
+        if (noShowActive && !contact.humanEscalationStatus && !hasNoShowRecoveryJob) {
+          const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(contact);
+          await this.scheduleNoShowFollowUps(contact, { skipEarlySameDay: hasBackupReminderPlan });
+          await this.recordDecision(contact, "repaired", "missing_no_show_recovery_jobs_recreated", {
+            trigger: "heal_stuck_contacts",
+            meta: { backupFlow: hasBackupReminderPlan }
+          });
+          healed.push({ contactId: contact.id, action: "scheduled_missing_no_show_recovery" });
+          continue;
+        }
+      }
+
+      if (
+        terminalOrHardPaused ||
+        contact.automationPaused ||
         contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
         contact.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
         contact.qualificationProgress === QUALIFICATION.COMPLETE ||
@@ -6378,7 +6423,6 @@ class SmsBot {
         continue;
       }
 
-      const jobs = await this.store.listJobs(contact.id);
       const lastInboundAt = contact.lastResponseTimestamp ? new Date(contact.lastResponseTimestamp).getTime() : 0;
       const lastOutboundAt = contact.lastOutboundTimestamp ? new Date(contact.lastOutboundTimestamp).getTime() : 0;
       if (

@@ -3,7 +3,15 @@ const assert = require("node:assert/strict");
 
 process.env.WEBHOOK_SECRET = "test-secret";
 
-const { contactIssueFlags, isPermanentSmsBlock, leadSourceInfo, requireWebhookSecret, safeText, scannerOutput } = require("../src/server");
+const {
+  contactIssueFlags,
+  isPermanentSmsBlock,
+  leadSourceInfo,
+  requireWebhookSecret,
+  safeText,
+  scannerOutput,
+  webhookEventId
+} = require("../src/server");
 
 test("webhook secret accepts header value", () => {
   const result = requireWebhookSecret({ headers: { "x-webhook-secret": "test-secret" } }, {});
@@ -23,6 +31,33 @@ test("webhook secret accepts nested GHL customData fallback", () => {
 test("webhook secret rejects missing value", () => {
   const result = requireWebhookSecret({ headers: {} }, {});
   assert.equal(result.ok, false);
+});
+
+test("appointment webhook dedupe keys do not let sync events suppress no-show events", () => {
+  const appointment = {
+    id: "appt-1",
+    contactId: "contact-1",
+    startTime: "2026-05-14T15:00:00",
+    status: "confirmed"
+  };
+  const noShow = {
+    id: "appt-1",
+    contactId: "contact-1",
+    status: "no_show"
+  };
+
+  assert.equal(
+    webhookEventId({ headers: {} }, appointment, "appointment-sync"),
+    "appointment-sync:appt-1:confirmed:2026-05-14T15:00:00:no-updated-at"
+  );
+  assert.equal(
+    webhookEventId({ headers: {} }, noShow, "appointment-no-show"),
+    "appointment-no-show:appt-1:no_show:no-start:no-updated-at"
+  );
+  assert.notEqual(
+    webhookEventId({ headers: {} }, appointment, "appointment-sync"),
+    webhookEventId({ headers: {} }, noShow, "appointment-no-show")
+  );
 });
 
 test("GHL SMS DND errors are treated as permanent send blocks", () => {

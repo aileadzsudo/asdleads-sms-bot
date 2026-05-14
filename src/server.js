@@ -216,9 +216,64 @@ function webhookEventId(req, payload, fallbackPrefix = "") {
     payload.idempotencyKey ||
     "";
   if (explicitId) return `${fallbackPrefix}:${explicitId}`;
+  if (fallbackPrefix && fallbackPrefix.startsWith("appointment")) {
+    const appointmentId = firstValue(payload, [
+      "appointmentId",
+      "appointment_id",
+      "calendarEventId",
+      "calendar_event_id",
+      "eventId",
+      "event_id",
+      "id",
+      "appointment.id",
+      "event.id",
+      "calendarEvent.id"
+    ]);
+    const status = firstValue(payload, [
+      "appointmentStatus",
+      "appointment_status",
+      "appointment.status",
+      "appointment.appointmentStatus",
+      "status",
+      "eventStatus",
+      "calendarEvent.status",
+      "outcome",
+      "disposition",
+      "result"
+    ]);
+    const start = firstValue(payload, [
+      "startTime",
+      "start_time",
+      "startsAt",
+      "starts_at",
+      "scheduledTime",
+      "scheduled_time",
+      "appointment.startTime",
+      "appointment.start",
+      "event.startTime",
+      "event.start",
+      "calendarEvent.start"
+    ]);
+    const updatedAt = firstValue(payload, [
+      "updatedAt",
+      "updated_at",
+      "appointment.updatedAt",
+      "appointment.updated_at",
+      "event.updatedAt",
+      "event.updated_at",
+      "calendarEvent.updatedAt",
+      "calendarEvent.updated_at"
+    ]);
+    if (appointmentId && (status || start || updatedAt)) {
+      return [fallbackPrefix, appointmentId, status || "no-status", start || "no-start", updatedAt || "no-updated-at"]
+        .map((part) => String(part).trim())
+        .join(":");
+    }
+    return "";
+  }
   if (fallbackPrefix === "disposition") return "";
   return (
-    payload.id ||
+    (payload.id && fallbackPrefix ? `${fallbackPrefix}:${payload.id}` : payload.id) ||
     ""
   );
 }
@@ -2800,6 +2855,7 @@ module.exports = {
   initApp,
   notifyBotError,
   requireWebhookSecret,
+  webhookEventId,
   isPermanentSmsBlock,
   contactIssueFlags,
   safeText,
