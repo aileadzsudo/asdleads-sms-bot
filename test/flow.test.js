@@ -236,6 +236,8 @@ test("lead asked not to be blown up pauses all bot follow-up until they reply", 
   assert.equal(contact.optOutStatus, undefined);
   assert.equal(contact.currentSequenceName, "lead_requested_pause");
   assert.match(contact.lastOutboundMessage, /won't keep texting/i);
+  assert.equal(store.data.escalations.filter((item) => item.contactId === "pause-me").length, 1);
+  assert.equal(store.data.escalations.find((item) => item.contactId === "pause-me").reason, "lead_requested_pause");
   assert.equal(
     Object.values(store.data.jobs).every((job) => job.contactId !== "pause-me" || job.status === "cancelled"),
     true
@@ -263,6 +265,29 @@ test("lead-requested pause resumes only after the lead texts again", async () =>
   assert.equal(contact.automationPaused, false);
   assert.equal(contact.automationPauseReason, "");
   assert.equal(store.listDecisionLogs("pause-resume").some((log) => log.reason === "lead_replied_after_pause"), true);
+});
+
+test("repeated lead-requested pause does not spam escalation alerts", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "pause-dedupe",
+    ghlContactId: "pause-dedupe",
+    name: "Lynda",
+    phone: "+15550000054",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+
+  await bot.handleInboundSms({
+    contactId: "pause-dedupe",
+    message: "Not a good time. I'll txt when I'm free. Pls dont blow up my phone"
+  });
+  await bot.handleInboundSms({
+    contactId: "pause-dedupe",
+    message: "Please don't blow up my phone"
+  });
+
+  assert.equal(store.data.escalations.filter((item) => item.contactId === "pause-dedupe").length, 1);
 });
 
 test("long fault answer is saved instead of escalated as detailed information", async () => {

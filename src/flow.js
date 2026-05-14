@@ -2667,7 +2667,7 @@ class SmsBot {
 
   async pauseUntilLeadReplies(contact, message, intent = {}) {
     const now = new Date().toISOString();
-    const updated = await this.store.upsertContact({
+    let updated = await this.store.upsertContact({
       ...contact,
       automationPaused: true,
       automationPauseReason: "lead_requested_pause",
@@ -2684,6 +2684,38 @@ class SmsBot {
       message,
       meta: { confidence: intent.confidence || "" }
     });
+    const shouldNotify = !updated.leadRequestedPauseEscalatedAt;
+    if (shouldNotify) {
+      await this.store.addEscalation({
+        contactId: updated.id,
+        reason: "lead_requested_pause",
+        lastInboundMessage: message,
+        extra: {
+          Action: "Lead asked us not to keep texting. Bot paused until the lead texts back."
+        }
+      });
+      await this.recordDecision(updated, "escalated", "lead_requested_pause", {
+        trigger: "inbound_sms",
+        message,
+        meta: { notificationOnly: true }
+      });
+      try {
+        await slack.sendEscalation(this.config, updated, "lead_requested_pause", {
+          Action: "Lead asked us not to keep texting. Bot paused until the lead texts back."
+        });
+      } catch (error) {
+        await this.notifyBotError("Slack lead pause alert failed", {
+          Name: updated.name || "unknown",
+          Phone: updated.phone || "unknown",
+          "GHL contact": updated.ghlContactId || updated.id,
+          Error: error.message
+        });
+      }
+      updated = await this.store.upsertContact({
+        ...updated,
+        leadRequestedPauseEscalatedAt: now
+      });
+    }
     await this.writeGhlNote(updated, "SMS bot paused: lead asked us not to keep texting", {
       Message: message,
       "Bot action": "Paused all automation until the lead texts back."
