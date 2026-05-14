@@ -179,6 +179,8 @@ test("does not block real call-time answers that include busy context", () => {
 test("flags common escalation messages", () => {
   assert.equal(escalationReason("Can I talk to a human?"), "human_request");
   assert.equal(escalationReason("How much can I get?"), "outside_question");
+  assert.equal(escalationReason("Will I have to pay anything?"), "outside_question");
+  assert.equal(escalationReason("Does this cost me anything?"), "outside_question");
   assert.equal(escalationReason("Who is this?"), "company_question");
   assert.equal(escalationReason("I was in an accident yesterday"), "");
   assert.equal(escalationReason("Your verification code for JustCall account login is - 162705"), "off_topic_verification_code");

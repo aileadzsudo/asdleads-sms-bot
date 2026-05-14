@@ -62,6 +62,10 @@ const CALL_OUTCOME_WATCHDOG_MINUTES = 10;
 const CALL_DURATION_SUCCESS_SECONDS = 60;
 const INBOUND_BUFFER_SECONDS = 30;
 const URGENT_CALL_NOW_FASTLANE_WINDOW_MINUTES = 10;
+const BOT_DUPLICATE_OUTBOUND_WINDOW_MINUTES = 60;
+const BOT_FLOOD_WINDOW_MINUTES = 15;
+const BOT_FLOOD_WINDOW_LIMIT = 3;
+const BOT_FLOOD_HOURLY_LIMIT = 6;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
 const NO_SHOW_SAME_DAY_MINUTES = [0, 15, 60, 120, 240, 360];
 const NO_SHOW_SAME_DAY_TEMPLATE_KEYS = [
@@ -707,13 +711,46 @@ function isHumanOutboundSmsPayload(payload = {}) {
   return messageType === "sms" || messageType === "type_sms" || messageType.includes("sms");
 }
 
+function comparableMessageText(text = "") {
+  return textValue(text).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function timestampWithinMinutes(value, minutes) {
+  const time = value ? new Date(value).getTime() : 0;
+  return Boolean(time && !Number.isNaN(time) && Date.now() - time < minutes * 60 * 1000);
+}
+
 function isLikelyBotOutboundEcho(contact = {}, text = "") {
-  const body = textValue(text).toLowerCase().replace(/\s+/g, " ").trim();
-  const lastBot = textValue(contact.lastOutboundMessage || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const body = comparableMessageText(text);
+  const lastBot = comparableMessageText(contact.lastOutboundMessage || "");
   if (!body || !lastBot || body !== lastBot) return false;
   const lastBotAt = contact.lastOutboundTimestamp ? new Date(contact.lastOutboundTimestamp).getTime() : 0;
   if (!lastBotAt || Number.isNaN(lastBotAt)) return true;
   return Date.now() - lastBotAt < 15 * 60 * 1000;
+}
+
+function hasRecentBotOutboundMessage(messages = [], text = "", minutes = BOT_DUPLICATE_OUTBOUND_WINDOW_MINUTES) {
+  const body = comparableMessageText(text);
+  if (!body) return false;
+  return messages.some((message) => {
+    if (message.direction !== "outbound") return false;
+    if (comparableMessageText(message.body) !== body) return false;
+    return timestampWithinMinutes(message.createdAt, minutes);
+  });
+}
+
+function recentOutboundCount(messages = [], minutes) {
+  return messages.filter((message) => message.direction === "outbound" && timestampWithinMinutes(message.createdAt, minutes)).length;
+}
+
+function hasPendingDuplicateSend(jobs = [], text = "") {
+  const body = comparableMessageText(text);
+  if (!body) return false;
+  return jobs.some((job) => {
+    if (job.status !== "pending") return false;
+    if (!["send_message", "initial_sms", "fresh_lead_followup", "warm_followup", "send_reengagement_template", "missed_call_followup"].includes(job.type)) return false;
+    return comparableMessageText(job.payload?.message || job.payload?.template || "") === body;
+  });
 }
 
 function canApplyAdminPause(controlMeta = {}) {
@@ -2341,6 +2378,89 @@ class SmsBot {
     }
   }
 
+  async listContactMessagesSafe(contactId) {
+    try {
+      const messages = this.store.listMessages ? await this.store.listMessages(contactId) : [];
+      return Array.isArray(messages) ? messages : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async listContactJobsSafe(contactId) {
+    try {
+      const jobs = this.store.listJobs ? await this.store.listJobs(contactId) : [];
+      return Array.isArray(jobs) ? jobs : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async outboundSafetyCheck(contact, message, options = {}) {
+    if (options.skipOutboundSafety || !contact?.id) return { ok: true };
+    const [messages, jobs] = await Promise.all([
+      this.listContactMessagesSafe(contact.id),
+      this.listContactJobsSafe(contact.id)
+    ]);
+
+    if (hasRecentBotOutboundMessage(messages, message)) {
+      await this.recordDecision(contact, "skipped", "duplicate_bot_message_recently_sent", {
+        message,
+        meta: {
+          templateGroup: options.templateGroup || "",
+          templateKey: options.templateKey || "",
+          windowMinutes: BOT_DUPLICATE_OUTBOUND_WINDOW_MINUTES
+        }
+      });
+      return { ok: false, reason: "duplicate_bot_message_recently_sent" };
+    }
+
+    if (hasPendingDuplicateSend(jobs, message)) {
+      await this.recordDecision(contact, "skipped", "duplicate_pending_bot_message", {
+        message,
+        meta: {
+          templateGroup: options.templateGroup || "",
+          templateKey: options.templateKey || ""
+        }
+      });
+      return { ok: false, reason: "duplicate_pending_bot_message" };
+    }
+
+    const recent15 = recentOutboundCount(messages, BOT_FLOOD_WINDOW_MINUTES);
+    const recent60 = recentOutboundCount(messages, 60);
+    if (recent15 >= BOT_FLOOD_WINDOW_LIMIT || recent60 >= BOT_FLOOD_HOURLY_LIMIT) {
+      const now = new Date().toISOString();
+      const paused = await this.store.upsertContact({
+        ...contact,
+        automationPaused: true,
+        automationPauseReason: "outbound_flood_guard",
+        lastOutboundFloodGuardAt: now,
+        humanEscalationStatus: true,
+        humanEscalationStage: "outbound_flood_guard",
+        escalationReason: "outbound_flood_guard",
+        engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN
+      });
+      await this.store.cancelJobsForContact(paused.id, "outbound flood guard", (job) =>
+        BOT_SEQUENCE_JOB_TYPES.includes(job.type) || job.type === "send_message"
+      );
+      await this.recordDecision(paused, "paused", "outbound_flood_guard_paused", {
+        message,
+        meta: { recent15, recent60, windowLimit: BOT_FLOOD_WINDOW_LIMIT, hourlyLimit: BOT_FLOOD_HOURLY_LIMIT }
+      });
+      await this.notifyBotError("Outbound flood guard paused contact", {
+        Name: paused.name || "unknown",
+        Phone: paused.phone || "unknown",
+        "GHL contact": paused.ghlContactId || paused.id,
+        "15 min outbound": recent15,
+        "60 min outbound": recent60,
+        "Blocked message": message
+      });
+      return { ok: false, reason: "outbound_flood_guard_paused" };
+    }
+
+    return { ok: true };
+  }
+
   async sendBotMessage(contact, message, options = {}) {
     message = localizeMessage(message, contact);
     if (isEmptyTextToken(message)) {
@@ -2385,6 +2505,8 @@ class SmsBot {
       if (duplicateTerminalContact) return null;
       message = localizeMessage(message, contact);
     }
+    const outboundSafety = await this.outboundSafetyCheck(contact, message, options);
+    if (!outboundSafety.ok) return null;
     if (!options.bypassQuietHours && !isWithinTextingWindow(contact, this.config)) {
       const job = await this.store.addJob({
         type: "send_message",
@@ -3975,7 +4097,8 @@ class SmsBot {
 
     const now = new Date().toISOString();
     const message = textValue(normalized.lastInboundMessage || payload.message || payload.body || payload.text) || "Manual human SMS sent";
-    if (isLikelyBotOutboundEcho(contact, message)) {
+    const recentMessages = await this.listContactMessagesSafe(contact.id);
+    if (isLikelyBotOutboundEcho(contact, message) || hasRecentBotOutboundMessage(recentMessages, message)) {
       await this.recordDecision(contact, "ignored", "human_outbound_bot_echo_ignored", {
         trigger: "human_outbound",
         message

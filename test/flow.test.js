@@ -686,6 +686,27 @@ test("insurance payment detail while asking fault escalates instead of repeating
   assert.doesNotMatch(store.getContact("yolanda-payment").lastOutboundMessage || "", /yes, no, or not sure/i);
 });
 
+test("payment and cost questions at call stage escalate instead of confirming a time", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "cost-question",
+    ghlContactId: "cost-question",
+    name: "Cost Question",
+    phone: "+15550000101",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    faultAnswer: "not_at_fault",
+    medicalTreatmentAnswer: "yes",
+    lastOutboundMessage: "What time works best for your Specialist call?"
+  });
+
+  const contact = await bot.handleInboundSms({ contactId: "cost-question", message: "Will I have to pay anything?" });
+
+  assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+  assert.equal(store.getContact("cost-question").escalationReason, "outside_question");
+  assert.doesNotMatch(store.getContact("cost-question").lastOutboundMessage || "", /got you down|locked in|exact time/i);
+});
+
 test("repeated low-confidence non-answer escalates after one clarification", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
@@ -2652,6 +2673,73 @@ test("human outbound webhook ignores the bot's own outbound SMS echo", async () 
     false
   );
   assert.equal(store.getContact("bot-echo").automationPaused, undefined);
+});
+
+test("human outbound webhook ignores recent stored bot SMS echoes even when contact state is stale", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "bot-echo-stale",
+    ghlContactId: "bot-echo-stale",
+    name: "Bot Echo Stale",
+    phone: "+15550000244",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    lastOutboundMessage: "Old bot message",
+    lastOutboundTimestamp: new Date().toISOString()
+  });
+  store.addMessage({
+    contactId: "bot-echo-stale",
+    direction: "outbound",
+    body: "Based on what you've shared, are you open for a call now or later today?"
+  });
+
+  await bot.handleHumanOutbound({
+    type: "OutboundMessage",
+    contactId: "bot-echo-stale",
+    messageType: "SMS",
+    messageTypeString: "TYPE_SMS",
+    body: "Based on what you've shared, are you open for a call now or later today?"
+  });
+
+  assert.equal(
+    Object.values(store.data.messages).some(
+      (message) => message.contactId === "bot-echo-stale" && message.direction === "human_outbound"
+    ),
+    false
+  );
+  assert.equal(store.getContact("bot-echo-stale").automationPaused, undefined);
+  assert.equal(store.listDecisionLogs("bot-echo-stale").some((log) => log.reason === "human_outbound_bot_echo_ignored"), true);
+});
+
+test("bot outbound safety blocks duplicate copies and pauses flood loops", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "outbound-safety",
+    ghlContactId: "outbound-safety",
+    name: "Outbound Safety",
+    phone: "+15550000245",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+
+  await bot.sendBotMessage(store.getContact("outbound-safety"), "Same message", { bypassQuietHours: true });
+  await bot.sendBotMessage(store.getContact("outbound-safety"), "Same message", { bypassQuietHours: true });
+
+  assert.equal(store.listMessages("outbound-safety").filter((message) => message.direction === "outbound").length, 1);
+  assert.equal(
+    store.listDecisionLogs("outbound-safety").some((log) => log.reason === "duplicate_bot_message_recently_sent"),
+    true
+  );
+
+  await bot.sendBotMessage(store.getContact("outbound-safety"), "Second unique message", { bypassQuietHours: true });
+  await bot.sendBotMessage(store.getContact("outbound-safety"), "Third unique message", { bypassQuietHours: true });
+  await bot.sendBotMessage(store.getContact("outbound-safety"), "Fourth unique message", { bypassQuietHours: true });
+
+  const updated = store.getContact("outbound-safety");
+  assert.equal(store.listMessages("outbound-safety").filter((message) => message.direction === "outbound").length, 3);
+  assert.equal(updated.automationPaused, true);
+  assert.equal(updated.automationPauseReason, "outbound_flood_guard");
+  assert.equal(store.listDecisionLogs("outbound-safety").some((log) => log.reason === "outbound_flood_guard_paused"), true);
 });
 
 test("human timeout uses a softer re-engagement message", async () => {
