@@ -1979,10 +1979,47 @@ function isPastAppointmentReminderJob(contact, job = {}, now = new Date()) {
   return Boolean(appointment && appointment <= now);
 }
 
-function nextPmCadenceRunAt(contact, config, now = new Date()) {
-  const todayPm = localSlotDate(contact, config, 0, "pm");
-  if (todayPm > now) return todayPm;
-  return localSlotDate(contact, config, 1, "pm");
+function localSlotDateFromBase(contact, config, dayOffset, slot, baseDate = new Date()) {
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  const local = getLocalParts(baseDate, timeZone);
+  const hour = slot === "am" ? 10 : 18;
+  return localDateToUtc(
+    {
+      year: local.year,
+      month: local.month,
+      day: local.day + dayOffset,
+      hour,
+      minute: 0
+    },
+    timeZone
+  );
+}
+
+function nextCadenceRunAt(contact, config, slot = "pm", now = new Date()) {
+  const targetSlot = slot === "am" ? "am" : "pm";
+  const todaySlot = localSlotDateFromBase(contact, config, 0, targetSlot, now);
+  if (todaySlot > now) return todaySlot;
+  if (targetSlot === "am") {
+    const timeZone = contact.timezone || config.texting.defaultTimezone;
+    const local = getLocalParts(now, timeZone);
+    const localMinutes = local.hour * 60 + local.minute;
+    if (localMinutes < 12 * 60 && isWithinTextingWindow(contact, config, now)) return addMinutes(now, 1);
+    const todayPm = localSlotDateFromBase(contact, config, 0, "pm", now);
+    if (todayPm > now) return todayPm;
+    return localSlotDateFromBase(contact, config, 1, "am", now);
+  }
+  return localSlotDateFromBase(contact, config, 1, "pm", now);
+}
+
+function cadenceJobPriority(job, targetSlot = "pm") {
+  if (job.type === "missed_call_followup") return 0;
+  if (job.type === "warm_followup") return 1;
+  if (job.type === "send_reengagement_template" || job.type === "enter_reengagement") return 2;
+  if (job.type === "fresh_lead_followup") return 3;
+  if (job.type === "send_cold_template" && job.payload?.slot === targetSlot) return 4;
+  if (job.type === "initial_sms") return 5;
+  if (job.type === "send_cold_template") return 6;
+  return 9;
 }
 
 function timezoneCorrectionFromText(text) {
@@ -2063,6 +2100,16 @@ class SmsBot {
   async preparePausedQueueForResume(options = {}) {
     const dryRun = Boolean(options.dryRun);
     const now = new Date();
+    const cadenceSlot = options.cadenceSlot === "am" ? "am" : "pm";
+    const pause = options.ignorePauseUntil ? { active: false } : await this.globalPauseState();
+    const pauseUntil = pause?.pauseUntil ? new Date(pause.pauseUntil) : null;
+    const referenceNow =
+      pause?.active &&
+      pauseUntil &&
+      !Number.isNaN(pauseUntil.getTime()) &&
+      pauseUntil > now
+        ? pauseUntil
+        : now;
     const jobs = this.store?.listJobs ? await this.store.listJobs() : [];
     const allContacts = this.store?.listContacts ? await this.store.listContacts() : [];
     const pending = jobs.filter((job) => job.status === "pending");
@@ -2070,6 +2117,7 @@ class SmsBot {
     const summary = {
       dryRun,
       generatedAt: now.toISOString(),
+      referenceTime: referenceNow.toISOString(),
       cancelledCount: 0,
       rescheduledCount: 0,
       rebuiltReminderCount: 0,
@@ -2123,7 +2171,7 @@ class SmsBot {
         Boolean(job.lastPausedAt) ||
         !runAt ||
         Number.isNaN(runAt.getTime()) ||
-        runAt <= now
+        runAt <= referenceNow
       );
     };
     const pmControlledTypes = new Set([
@@ -2135,7 +2183,21 @@ class SmsBot {
       "send_reengagement_template",
       "missed_call_followup"
     ]);
-    const perContactPmJob = new Map();
+    const dueCadenceJobs = pending
+      .filter((job) => pmControlledTypes.has(job.type) && dueOrHeld(job))
+      .sort((a, b) => {
+        const priority = cadenceJobPriority(a, cadenceSlot) - cadenceJobPriority(b, cadenceSlot);
+        if (priority !== 0) return priority;
+        return new Date(a.runAt || 0) - new Date(b.runAt || 0);
+      });
+    const chosenCadenceJobs = new Set();
+    const perContactCadenceJob = new Map();
+    for (const job of dueCadenceJobs) {
+      if (!job.contactId || perContactCadenceJob.has(job.contactId)) continue;
+      perContactCadenceJob.set(job.contactId, job.id);
+      chosenCadenceJobs.add(job.id);
+    }
+    perContactCadenceJob.clear();
 
     for (const job of pending) {
       const contact = await getContact(job.contactId);
@@ -2144,7 +2206,7 @@ class SmsBot {
         continue;
       }
       if (job.type === "appointment_reminder") {
-        if (isPastAppointmentReminderJob(contact, job, now)) {
+        if (isPastAppointmentReminderJob(contact, job, referenceNow)) {
           await cancelJob(job, "resume_prep_past_appointment_reminder", contact);
           continue;
         }
@@ -2163,22 +2225,27 @@ class SmsBot {
         summary.keptCount += 1;
         continue;
       }
-      if (job.type === "send_cold_template" && job.payload?.slot && job.payload.slot !== "pm") {
-        await cancelJob(job, "resume_prep_am_cadence_suppressed", contact);
-        continue;
-      }
-      const key = job.contactId;
-      if (perContactPmJob.has(key)) {
+      if (!chosenCadenceJobs.has(job.id)) {
         await cancelJob(job, "resume_prep_duplicate_due_cadence_suppressed", contact);
         continue;
       }
-      perContactPmJob.set(key, job.id);
-      await rescheduleJob(job, nextPmCadenceRunAt(contact, this.config, now), "resume_prep_pm_cadence_only", contact);
+      const key = job.contactId;
+      if (perContactCadenceJob.has(key)) {
+        await cancelJob(job, "resume_prep_duplicate_due_cadence_suppressed", contact);
+        continue;
+      }
+      perContactCadenceJob.set(key, job.id);
+      await rescheduleJob(
+        job,
+        nextCadenceRunAt(contact, this.config, cadenceSlot, referenceNow),
+        cadenceSlot === "am" ? "resume_prep_am_cadence_only" : "resume_prep_pm_cadence_only",
+        contact
+      );
     }
 
     for (const contact of allContacts) {
       const appointment = contact?.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
-      if (!appointment || Number.isNaN(appointment.getTime()) || appointment <= now) continue;
+      if (!appointment || Number.isNaN(appointment.getTime()) || appointment <= referenceNow) continue;
       if (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT || hasSignedTag(contact) || hasNqTag(contact)) {
         summary.skippedCount += 1;
         continue;
