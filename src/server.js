@@ -2210,11 +2210,25 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const payload = await readJson(req);
+      const prep = await bot.preparePausedQueueForResume({
+        dryRun: false
+      });
       const pause = await bot.clearGlobalPause({
         reason: payload.reason || "Global bot pause cleared from admin API",
         requestedBy: payload.requestedBy || "admin"
       });
-      send(res, 200, { ok: true, pause });
+      send(res, 200, { ok: true, pause, prep });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/admin/bot/prepare-resume") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      send(res, 200, { ok: true, prep: await bot.preparePausedQueueForResume({ dryRun: payload.dryRun !== false }) });
       return;
     }
 

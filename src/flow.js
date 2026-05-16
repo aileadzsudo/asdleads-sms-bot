@@ -1968,6 +1968,23 @@ function isCurrentAppointmentReminderJob(contact, job, config) {
   return Math.abs(runAt.getTime() - expected.getTime()) <= 90 * 1000;
 }
 
+function appointmentTimeForReminder(contact, job = {}) {
+  const value = contact?.preferredCallTimeIso || job.payload?.appointmentIso || "";
+  const appointment = value ? new Date(value) : null;
+  return appointment && !Number.isNaN(appointment.getTime()) ? appointment : null;
+}
+
+function isPastAppointmentReminderJob(contact, job = {}, now = new Date()) {
+  const appointment = appointmentTimeForReminder(contact, job);
+  return Boolean(appointment && appointment <= now);
+}
+
+function nextPmCadenceRunAt(contact, config, now = new Date()) {
+  const todayPm = localSlotDate(contact, config, 0, "pm");
+  if (todayPm > now) return todayPm;
+  return localSlotDate(contact, config, 1, "pm");
+}
+
 function timezoneCorrectionFromText(text) {
   const t = normalize(text);
   const timezoneAlias = t.match(/\b(pacific|pst|pdt|mountain|mst|mdt|central|cst|cdt|eastern|est|edt)\b/);
@@ -2041,6 +2058,143 @@ class SmsBot {
     };
     if (this.store?.setSetting) await this.store.setSetting(GLOBAL_BOT_PAUSE_SETTING, value);
     return value;
+  }
+
+  async preparePausedQueueForResume(options = {}) {
+    const dryRun = Boolean(options.dryRun);
+    const now = new Date();
+    const jobs = this.store?.listJobs ? await this.store.listJobs() : [];
+    const allContacts = this.store?.listContacts ? await this.store.listContacts() : [];
+    const pending = jobs.filter((job) => job.status === "pending");
+    const contacts = new Map();
+    const summary = {
+      dryRun,
+      generatedAt: now.toISOString(),
+      cancelledCount: 0,
+      rescheduledCount: 0,
+      rebuiltReminderCount: 0,
+      keptCount: 0,
+      skippedCount: 0,
+      actions: []
+    };
+    const getContact = async (contactId) => {
+      if (!contactId) return null;
+      if (!contacts.has(contactId)) contacts.set(contactId, await this.store.getContact(contactId));
+      return contacts.get(contactId);
+    };
+    const remember = (action) => {
+      summary.actions.push(action);
+      if (summary.actions.length > 200) summary.actions.shift();
+    };
+    const cancelJob = async (job, reason, contact = null) => {
+      summary.cancelledCount += 1;
+      remember({ action: "cancel", jobId: job.id, contactId: job.contactId, jobType: job.type, reason });
+      if (dryRun) return;
+      await this.store.updateJob(job.id, {
+        status: "cancelled",
+        cancelReason: reason,
+        finishedAt: now.toISOString()
+      });
+      if (contact) await this.recordDecision(contact, "skipped", reason, { jobId: job.id, jobType: job.type });
+    };
+    const rescheduleJob = async (job, runAt, reason, contact = null) => {
+      summary.rescheduledCount += 1;
+      remember({ action: "reschedule", jobId: job.id, contactId: job.contactId, jobType: job.type, reason, runAt: runAt.toISOString() });
+      if (dryRun) return;
+      await this.store.updateJob(job.id, {
+        status: "pending",
+        runAt: runAt.toISOString(),
+        resumePrepReason: reason,
+        skipReason: ""
+      });
+      if (contact) {
+        await this.recordDecision(contact, "queued", reason, {
+          jobId: job.id,
+          jobType: job.type,
+          meta: { runAt: runAt.toISOString() }
+        });
+      }
+    };
+
+    const dueOrHeld = (job) => {
+      const runAt = job.runAt ? new Date(job.runAt) : null;
+      return (
+        job.skipReason === "global_bot_pause" ||
+        Boolean(job.lastPausedAt) ||
+        !runAt ||
+        Number.isNaN(runAt.getTime()) ||
+        runAt <= now
+      );
+    };
+    const pmControlledTypes = new Set([
+      "initial_sms",
+      "send_cold_template",
+      "fresh_lead_followup",
+      "warm_followup",
+      "enter_reengagement",
+      "send_reengagement_template",
+      "missed_call_followup"
+    ]);
+    const perContactPmJob = new Map();
+
+    for (const job of pending) {
+      const contact = await getContact(job.contactId);
+      if (!contact) {
+        await cancelJob(job, "resume_prep_missing_contact");
+        continue;
+      }
+      if (job.type === "appointment_reminder") {
+        if (isPastAppointmentReminderJob(contact, job, now)) {
+          await cancelJob(job, "resume_prep_past_appointment_reminder", contact);
+          continue;
+        }
+        if (!isCurrentAppointmentReminderJob(contact, job, this.config)) {
+          await cancelJob(job, "resume_prep_stale_appointment_reminder", contact);
+          continue;
+        }
+        summary.keptCount += 1;
+        continue;
+      }
+      if (job.type === "backup_no_show_reminder" && contact.engagementStatus !== ENGAGEMENT.MISSED_CALL) {
+        await cancelJob(job, "resume_prep_stale_backup_no_show_reminder", contact);
+        continue;
+      }
+      if (!pmControlledTypes.has(job.type) || !dueOrHeld(job)) {
+        summary.keptCount += 1;
+        continue;
+      }
+      if (job.type === "send_cold_template" && job.payload?.slot && job.payload.slot !== "pm") {
+        await cancelJob(job, "resume_prep_am_cadence_suppressed", contact);
+        continue;
+      }
+      const key = job.contactId;
+      if (perContactPmJob.has(key)) {
+        await cancelJob(job, "resume_prep_duplicate_due_cadence_suppressed", contact);
+        continue;
+      }
+      perContactPmJob.set(key, job.id);
+      await rescheduleJob(job, nextPmCadenceRunAt(contact, this.config, now), "resume_prep_pm_cadence_only", contact);
+    }
+
+    for (const contact of allContacts) {
+      const appointment = contact?.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
+      if (!appointment || Number.isNaN(appointment.getTime()) || appointment <= now) continue;
+      if (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT || hasSignedTag(contact) || hasNqTag(contact)) {
+        summary.skippedCount += 1;
+        continue;
+      }
+      summary.rebuiltReminderCount += 1;
+      remember({
+        action: "rebuild_reminders",
+        contactId: contact.id,
+        jobType: "appointment_reminder",
+        reason: "resume_prep_future_appointment_reminders",
+        appointmentIso: appointment.toISOString()
+      });
+      if (!dryRun) await this.scheduleAppointmentReminders(contact);
+    }
+
+    return summary;
   }
 
   async notifyBotError(title, details = {}, options = {}) {
@@ -7427,6 +7581,24 @@ class SmsBot {
       }
     }
     if (job.type === "appointment_reminder") {
+      if (isPastAppointmentReminderJob(contact, job)) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "past_appointment_reminder"
+        });
+        await this.recordDecision(contact, "skipped", "past_appointment_reminder", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: {
+            templateKey: job.payload.templateKey || "",
+            jobAppointmentIso: job.payload.appointmentIso || "",
+            currentAppointmentIso: contact.preferredCallTimeIso || "",
+            jobRunAt: job.runAt || ""
+          }
+        });
+        return;
+      }
       const group = job.payload.templateGroup || reminderTemplateGroupForAppointment(contact);
       const templates = reminderTemplatesForGroup(group);
       const template = templates[job.payload.templateKey] || reminderTemplates[job.payload.templateKey];

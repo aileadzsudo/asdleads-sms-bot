@@ -6348,3 +6348,90 @@ test("global bot pause holds due jobs until pause expires", async () => {
     true
   );
 });
+
+test("resume prep cancels stale appointment reminders and rebuilds future appointment reminders", async () => {
+  const { bot, store } = makeBot();
+  const pastIso = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const futureIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-past-appt",
+    ghlContactId: "resume-past-appt",
+    name: "Past Appointment",
+    phone: "+15550000452",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTimeIso: pastIso,
+    preferredCallTime: "9:00 AM CST",
+    appointmentId: "appt-past"
+  });
+  store.upsertContact({
+    id: "resume-future-appt",
+    ghlContactId: "resume-future-appt",
+    name: "Future Appointment",
+    phone: "+15550000453",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    preferredCallTimeIso: futureIso,
+    preferredCallTime: "3:00 PM CST",
+    appointmentId: "appt-future"
+  });
+  const stale = store.addJob({
+    type: "appointment_reminder",
+    contactId: "resume-past-appt",
+    runAt: new Date().toISOString(),
+    payload: { templateKey: "sameDayOneHour", appointmentIso: pastIso }
+  });
+
+  const result = await bot.preparePausedQueueForResume();
+
+  assert.equal(store.data.jobs[stale.id].status, "cancelled");
+  assert.equal(store.data.jobs[stale.id].cancelReason, "resume_prep_past_appointment_reminder");
+  assert.equal(result.rebuiltReminderCount >= 1, true);
+  assert.equal(
+    store
+      .listJobs("resume-future-appt")
+      .some((job) => job.status === "pending" && job.type === "appointment_reminder" && job.payload.appointmentIso === futureIso),
+    true
+  );
+});
+
+test("resume prep suppresses stale AM cadence and keeps only one PM re-engagement per contact", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "resume-cadence",
+    ghlContactId: "resume-cadence",
+    name: "Cadence Lead",
+    phone: "+15550000454",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+    qualificationProgress: QUALIFICATION.NEEDS_FAULT
+  });
+  const am = store.addJob({
+    type: "send_cold_template",
+    contactId: "resume-cadence",
+    runAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    payload: { templateKey: "day_2_am", day: 2, slot: "am" }
+  });
+  const pm = store.addJob({
+    type: "send_cold_template",
+    contactId: "resume-cadence",
+    runAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    payload: { templateKey: "day_2_pm", day: 2, slot: "pm" }
+  });
+  const warm = store.addJob({
+    type: "warm_followup",
+    contactId: "resume-cadence",
+    runAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+    payload: { step: 1 }
+  });
+
+  await bot.preparePausedQueueForResume();
+
+  assert.equal(store.data.jobs[am.id].status, "cancelled");
+  assert.equal(store.data.jobs[am.id].cancelReason, "resume_prep_am_cadence_suppressed");
+  assert.equal(store.data.jobs[pm.id].status, "pending");
+  assert.equal(store.data.jobs[pm.id].resumePrepReason, "resume_prep_pm_cadence_only");
+  assert.equal(store.data.jobs[warm.id].status, "cancelled");
+  assert.equal(store.data.jobs[warm.id].cancelReason, "resume_prep_duplicate_due_cadence_suppressed");
+});
