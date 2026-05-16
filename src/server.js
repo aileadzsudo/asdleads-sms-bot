@@ -32,6 +32,7 @@ let lastAutoAppliedBatchId = "";
 const JOB_RETRY_MINUTES = [5, 15, 60];
 const BACKFILL_DEFAULT_SPACING_MINUTES = 3;
 const BACKFILL_MAX_BATCH = 250;
+const JOB_TICK_MAX_DUE = Math.max(1, Number(process.env.JOB_TICK_MAX_DUE || 40));
 const GHL_SIGNATURE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAi2HR1srL4o18O8BRa7gVJY7G7bupbN3H9AwJrHCDiOg=
 -----END PUBLIC KEY-----`;
@@ -1619,8 +1620,37 @@ async function autoApplyCompletedBatch() {
   }
 }
 
+function dueJobPriority(job = {}) {
+  const priorities = {
+    process_inbound_buffer: 0,
+    human_reply_timeout: 1,
+    call_outcome_required: 1,
+    human_escalation_sla: 2,
+    appointment_reminder: 3,
+    backup_no_show_reminder: 4,
+    backup_time_timeout: 4,
+    relative_call_time_autobook: 5,
+    missed_call_followup: 6,
+    warm_followup: 7,
+    enter_reengagement: 8,
+    send_reengagement_template: 9,
+    initial_sms: 10,
+    fresh_lead_followup: 11,
+    send_message: 12,
+    cold_entry_check: 13,
+    send_cold_template: 14
+  };
+  return priorities[job.type] ?? 20;
+}
+
 async function runDueJobs() {
-  const jobs = await store.dueJobs();
+  const jobs = (await store.dueJobs())
+    .sort((a, b) => {
+      const priority = dueJobPriority(a) - dueJobPriority(b);
+      if (priority !== 0) return priority;
+      return new Date(a.runAt || 0) - new Date(b.runAt || 0);
+    })
+    .slice(0, JOB_TICK_MAX_DUE);
   const results = [];
   for (const job of jobs) {
     const claimedJob = store.claimJob ? await store.claimJob(job.id) : job;
