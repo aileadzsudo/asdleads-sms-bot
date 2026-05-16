@@ -6464,6 +6464,44 @@ test("resume prep can resume AM cadence before a future pause expiry", async () 
   assert.equal(new Date(store.data.jobs[job.id].runAt) < new Date(pauseUntil), true);
 });
 
+test("resume prep releases held interactive jobs before future pause expiry", async () => {
+  const { bot, store } = makeBot();
+  const pauseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  await bot.pauseGlobally({ pauseUntil, reason: "test pause" });
+  store.upsertContact({
+    id: "resume-interactive",
+    ghlContactId: "resume-interactive",
+    name: "Interactive Lead",
+    phone: "+15550000457",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+  const inbound = store.addJob({
+    type: "process_inbound_buffer",
+    contactId: "resume-interactive",
+    runAt: pauseUntil,
+    skipReason: "global_bot_pause",
+    payload: {}
+  });
+  const timeout = store.addJob({
+    type: "human_reply_timeout",
+    contactId: "resume-interactive",
+    runAt: pauseUntil,
+    skipReason: "global_bot_pause",
+    payload: { timeoutMinutes: 15 }
+  });
+
+  await bot.preparePausedQueueForResume({ cadenceSlot: "am", ignorePauseUntil: true });
+
+  assert.equal(store.data.jobs[inbound.id].status, "pending");
+  assert.equal(store.data.jobs[inbound.id].resumePrepReason, "resume_prep_interactive_job_released");
+  assert.equal(new Date(store.data.jobs[inbound.id].runAt) < new Date(pauseUntil), true);
+  assert.equal(store.data.jobs[timeout.id].status, "pending");
+  assert.equal(store.data.jobs[timeout.id].resumePrepReason, "resume_prep_interactive_job_released");
+  assert.equal(new Date(store.data.jobs[timeout.id].runAt) < new Date(pauseUntil), true);
+});
+
 test("resume prep without override schedules held cadence after pause expiry", async () => {
   const { bot, store } = makeBot();
   const pauseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();

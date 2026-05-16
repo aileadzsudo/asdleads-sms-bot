@@ -2183,6 +2183,14 @@ class SmsBot {
       "send_reengagement_template",
       "missed_call_followup"
     ]);
+    const interactiveResumeTypes = new Set([
+      "process_inbound_buffer",
+      "human_reply_timeout",
+      "human_escalation_sla",
+      "call_outcome_required",
+      "relative_call_time_autobook",
+      "backup_time_timeout"
+    ]);
     const dueCadenceJobs = pending
       .filter((job) => pmControlledTypes.has(job.type) && dueOrHeld(job))
       .sort((a, b) => {
@@ -2219,6 +2227,10 @@ class SmsBot {
       }
       if (job.type === "backup_no_show_reminder" && contact.engagementStatus !== ENGAGEMENT.MISSED_CALL) {
         await cancelJob(job, "resume_prep_stale_backup_no_show_reminder", contact);
+        continue;
+      }
+      if (interactiveResumeTypes.has(job.type) && dueOrHeld(job)) {
+        await rescheduleJob(job, addMinutes(referenceNow, job.type === "process_inbound_buffer" ? 0 : 1), "resume_prep_interactive_job_released", contact);
         continue;
       }
       if (!pmControlledTypes.has(job.type) || !dueOrHeld(job)) {
