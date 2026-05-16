@@ -6502,6 +6502,59 @@ test("resume prep releases held interactive jobs before future pause expiry", as
   assert.equal(new Date(store.data.jobs[timeout.id].runAt) < new Date(pauseUntil), true);
 });
 
+test("resume prep interactive-only mode leaves cadence and reminders untouched", async () => {
+  const { bot, store } = makeBot();
+  const pauseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const futureIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  await bot.pauseGlobally({ pauseUntil, reason: "test pause" });
+  store.upsertContact({
+    id: "resume-interactive-only",
+    ghlContactId: "resume-interactive-only",
+    name: "Interactive Only",
+    phone: "+15550000458",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+    preferredCallTimeIso: futureIso,
+    appointmentId: "appt-interactive-only"
+  });
+  const inbound = store.addJob({
+    type: "process_inbound_buffer",
+    contactId: "resume-interactive-only",
+    runAt: pauseUntil,
+    skipReason: "global_bot_pause",
+    payload: {}
+  });
+  const cadence = store.addJob({
+    type: "warm_followup",
+    contactId: "resume-interactive-only",
+    runAt: pauseUntil,
+    skipReason: "global_bot_pause",
+    payload: { step: 1 }
+  });
+  const staleReminder = store.addJob({
+    type: "appointment_reminder",
+    contactId: "resume-interactive-only",
+    runAt: pauseUntil,
+    payload: { templateKey: "sameDayOneHour", appointmentIso: new Date(Date.now() - 60 * 60 * 1000).toISOString() }
+  });
+
+  const result = await bot.preparePausedQueueForResume({
+    cadenceSlot: "am",
+    ignorePauseUntil: true,
+    interactiveOnly: true
+  });
+
+  assert.equal(result.interactiveOnly, true);
+  assert.equal(result.rebuiltReminderCount, 0);
+  assert.equal(store.data.jobs[inbound.id].resumePrepReason, "resume_prep_interactive_job_released");
+  assert.equal(store.data.jobs[cadence.id].status, "pending");
+  assert.equal(store.data.jobs[cadence.id].resumePrepReason, undefined);
+  assert.equal(store.data.jobs[cadence.id].runAt, pauseUntil);
+  assert.equal(store.data.jobs[staleReminder.id].status, "pending");
+  assert.equal(store.data.jobs[staleReminder.id].cancelReason, undefined);
+});
+
 test("resume prep without override schedules held cadence after pause expiry", async () => {
   const { bot, store } = makeBot();
   const pauseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();

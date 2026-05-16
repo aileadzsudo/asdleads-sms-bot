@@ -2099,6 +2099,7 @@ class SmsBot {
 
   async preparePausedQueueForResume(options = {}) {
     const dryRun = Boolean(options.dryRun);
+    const interactiveOnly = Boolean(options.interactiveOnly);
     const now = new Date();
     const cadenceSlot = options.cadenceSlot === "am" ? "am" : "pm";
     const pause = options.ignorePauseUntil ? { active: false } : await this.globalPauseState();
@@ -2111,11 +2112,12 @@ class SmsBot {
         ? pauseUntil
         : now;
     const jobs = this.store?.listJobs ? await this.store.listJobs() : [];
-    const allContacts = this.store?.listContacts ? await this.store.listContacts() : [];
+    const allContacts = interactiveOnly ? [] : this.store?.listContacts ? await this.store.listContacts() : [];
     const pending = jobs.filter((job) => job.status === "pending");
     const contacts = new Map();
     const summary = {
       dryRun,
+      interactiveOnly,
       generatedAt: now.toISOString(),
       referenceTime: referenceNow.toISOString(),
       cancelledCount: 0,
@@ -2191,13 +2193,15 @@ class SmsBot {
       "relative_call_time_autobook",
       "backup_time_timeout"
     ]);
-    const dueCadenceJobs = pending
-      .filter((job) => pmControlledTypes.has(job.type) && dueOrHeld(job))
-      .sort((a, b) => {
-        const priority = cadenceJobPriority(a, cadenceSlot) - cadenceJobPriority(b, cadenceSlot);
-        if (priority !== 0) return priority;
-        return new Date(a.runAt || 0) - new Date(b.runAt || 0);
-      });
+    const dueCadenceJobs = interactiveOnly
+      ? []
+      : pending
+          .filter((job) => pmControlledTypes.has(job.type) && dueOrHeld(job))
+          .sort((a, b) => {
+            const priority = cadenceJobPriority(a, cadenceSlot) - cadenceJobPriority(b, cadenceSlot);
+            if (priority !== 0) return priority;
+            return new Date(a.runAt || 0) - new Date(b.runAt || 0);
+          });
     const chosenCadenceJobs = new Set();
     const perContactCadenceJob = new Map();
     for (const job of dueCadenceJobs) {
@@ -2208,6 +2212,11 @@ class SmsBot {
     perContactCadenceJob.clear();
 
     for (const job of pending) {
+      const interactiveRelease = interactiveResumeTypes.has(job.type) && dueOrHeld(job);
+      if (interactiveOnly && !interactiveRelease) {
+        summary.keptCount += 1;
+        continue;
+      }
       const contact = await getContact(job.contactId);
       if (!contact) {
         await cancelJob(job, "resume_prep_missing_contact");
@@ -2229,7 +2238,7 @@ class SmsBot {
         await cancelJob(job, "resume_prep_stale_backup_no_show_reminder", contact);
         continue;
       }
-      if (interactiveResumeTypes.has(job.type) && dueOrHeld(job)) {
+      if (interactiveRelease) {
         await rescheduleJob(job, addMinutes(referenceNow, job.type === "process_inbound_buffer" ? 0 : 1), "resume_prep_interactive_job_released", contact);
         continue;
       }

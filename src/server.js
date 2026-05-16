@@ -2243,7 +2243,8 @@ const server = http.createServer(async (req, res) => {
       const prep = await bot.preparePausedQueueForResume({
         dryRun: false,
         cadenceSlot: payload.cadenceSlot || "pm",
-        ignorePauseUntil: payload.ignorePauseUntil === true
+        ignorePauseUntil: payload.ignorePauseUntil === true,
+        interactiveOnly: payload.interactiveOnly === true
       });
       const pause = await bot.clearGlobalPause({
         reason: payload.reason || "Global bot pause cleared from admin API",
@@ -2265,7 +2266,8 @@ const server = http.createServer(async (req, res) => {
         prep: await bot.preparePausedQueueForResume({
           dryRun: payload.dryRun !== false,
           cadenceSlot: payload.cadenceSlot || "pm",
-          ignorePauseUntil: payload.ignorePauseUntil === true
+          ignorePauseUntil: payload.ignorePauseUntil === true,
+          interactiveOnly: payload.interactiveOnly === true
         })
       });
       return;
