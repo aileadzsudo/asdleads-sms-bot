@@ -3837,12 +3837,14 @@ test("appointment no-show schedules reschedule recovery without restarting quali
     preferredCallTimeIso: "2026-05-08T18:00:00.000Z"
   });
   const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === contact.id && job.type === "missed_call_followup");
+  const sameDayJobs = jobs.filter((job) => String(job.payload.templateKey || "").startsWith("same_day_"));
 
   assert.equal(contact.engagementStatus, ENGAGEMENT.MISSED_CALL);
   assert.equal(contact.qualificationProgress, QUALIFICATION.CALL_BOOKED);
   assert.equal(contact.currentSequenceName, "appointment_no_show");
   assert.equal(jobs.some((job) => job.payload.templateGroup === "noShowTemplates"), true);
   assert.equal(jobs.some((job) => job.payload.templateKey === "same_day_now"), true);
+  assert.equal(sameDayJobs.length <= 2, true);
   assert.equal(jobs.some((job) => job.payload.templateKey === "day_2_am"), true);
   assert.equal(jobs.some((job) => job.payload.templateKey === "day_14_pm"), true);
   assert.equal(contact.noShowCount, 1);
@@ -4694,7 +4696,7 @@ test("cleared no-show marker blocks recovery jobs even if sequence has not caugh
     runAt: new Date(Date.now() - 60 * 1000).toISOString(),
     payload: {
       templateGroup: "noShowTemplates",
-      templateKey: "same_day_15",
+      templateKey: "same_day_120",
       appointmentId: "cleared-marker-appt",
       appointmentIso: futureIso,
       noShowAt: new Date(Date.now() - 30 * 60 * 1000).toISOString()
@@ -4733,7 +4735,7 @@ test("current no-show recovery job still sends when only appointment iso drifts"
     runAt: new Date(Date.now() - 60 * 1000).toISOString(),
     payload: {
       templateGroup: "noShowTemplates",
-      templateKey: "same_day_15",
+      templateKey: "same_day_120",
       appointmentId: "current-noshow-appt",
       appointmentIso,
       noShowAt
@@ -4939,7 +4941,7 @@ test("stuck contact healer recreates current no-show recovery after stale job cl
     payload: {
       sequence: "appointment_no_show",
       templateGroup: "noShowTemplates",
-      templateKey: "same_day_60",
+      templateKey: "same_day_120",
       appointmentId: "old-heal-appt",
       noShowAt
     }
@@ -6817,7 +6819,7 @@ test("resume prep cancels stale no-show recovery jobs and clears old no-show mar
     runAt: new Date(Date.now() - 60 * 1000).toISOString(),
     payload: {
       sequence: "appointment_no_show",
-      templateKey: "same_day_60",
+      templateKey: "same_day_120",
       templateGroup: "contractReviewNoShowTemplates"
     }
   });
@@ -7192,7 +7194,7 @@ test("resume prep keeps current no-show recovery inside appointment grace window
     payload: {
       sequence: "appointment_no_show",
       templateGroup: "noShowTemplates",
-      templateKey: "same_day_60",
+      templateKey: "same_day_120",
       appointmentId: "current-noshow-grace-appt",
       noShowAt
     }

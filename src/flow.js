@@ -70,16 +70,16 @@ const GLOBAL_BOT_PAUSE_SETTING = "global_bot_pause";
 // Suppress stale chase jobs for a short grace period around appointment time while GHL/manual outcome state catches up.
 const APPOINTMENT_CHASE_SUPPRESSION_LOOKBACK_MINUTES = 12 * 60;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
-const NO_SHOW_SAME_DAY_MINUTES = [0, 15, 60, 120, 240, 360];
+const NO_SHOW_SAME_DAY_MINUTES = [0, 120];
 const NO_SHOW_SAME_DAY_TEMPLATE_KEYS = [
   "same_day_now",
-  "same_day_15",
-  "same_day_60",
-  "same_day_120",
-  "same_day_240",
-  "same_day_360"
+  "same_day_120"
 ];
 const NO_SHOW_DAYS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const ACTIVE_NO_SHOW_TEMPLATE_KEYS = new Set([
+  ...NO_SHOW_SAME_DAY_TEMPLATE_KEYS,
+  ...NO_SHOW_DAYS.flatMap((day) => [`day_${day}_am`, `day_${day}_pm`])
+]);
 const BOT_SEQUENCE_JOB_TYPES = [
   "initial_sms",
   "cold_entry_check",
@@ -1955,6 +1955,7 @@ function isCurrentNoShowRecoveryJob(contact = {}, job = {}) {
   if (!isNoShowRecoveryContact(contact)) return false;
   if (!contact.appointmentNoShowAt) return false;
   const payload = job.payload || {};
+  if (payload.templateKey && !ACTIVE_NO_SHOW_TEMPLATE_KEYS.has(payload.templateKey)) return false;
   if (payload.noShowAt && contact.appointmentNoShowAt && payload.noShowAt !== contact.appointmentNoShowAt) return false;
   if (payload.appointmentId && contact.appointmentId && payload.appointmentId !== contact.appointmentId) return false;
   return true;
