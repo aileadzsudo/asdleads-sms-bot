@@ -4812,6 +4812,50 @@ test("stuck contact healer clears stale no-show marker even when no no-show jobs
   );
 });
 
+test("stuck contact healer cancels chase follow-ups after appointment sync", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "heal-future-appointment-chase",
+    ghlContactId: "heal-future-appointment-chase",
+    name: "Heal Future Chase",
+    phone: "+15550001086",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTimeIso: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "heal-future-chase-appt"
+  });
+  const chase = store.addJob({
+    type: "missed_call_followup",
+    contactId: "heal-future-appointment-chase",
+    runAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    payload: { sequence: "call_now_no_answer", step: 1 }
+  });
+  const reengage = store.addJob({
+    type: "send_reengagement_template",
+    contactId: "heal-future-appointment-chase",
+    runAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    payload: { templateKey: "afterCallAsk1" }
+  });
+
+  const healed = await bot.healStuckContacts();
+
+  assert.equal(store.data.jobs[chase.id].status, "cancelled");
+  assert.equal(store.data.jobs[chase.id].cancelReason, "future_appointment_suppressed_followup");
+  assert.equal(store.data.jobs[reengage.id].status, "cancelled");
+  assert.equal(store.data.jobs[reengage.id].cancelReason, "future_appointment_suppressed_followup");
+  assert.equal(
+    healed.some(
+      (item) =>
+        item.contactId === "heal-future-appointment-chase" &&
+        item.action === "cancelled_future_appointment_followups" &&
+        item.count === 2
+    ),
+    true
+  );
+});
+
 test("stuck contact healer recreates current no-show recovery after stale job cleanup", async () => {
   const { bot, store } = makeBot();
   const noShowAt = new Date(Date.now() - 45 * 60 * 1000).toISOString();
@@ -6813,6 +6857,183 @@ test("resume prep does not treat empty missed-call follow-up payload as no-show 
 
   assert.equal(store.data.jobs[job.id].status, "pending");
   assert.notEqual(store.data.jobs[job.id].cancelReason, "resume_prep_stale_no_show_recovery_job");
+});
+
+test("resume prep cancels chase follow-ups when a future appointment exists", async () => {
+  const { bot, store } = makeBot();
+  const staleNoShowAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const appointmentIso = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-future-appointment-chase",
+    ghlContactId: "resume-future-appointment-chase",
+    name: "Future Appointment Chase",
+    phone: "+15550000468",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTimeIso: appointmentIso,
+    appointmentId: "future-appointment-chase-appt",
+    appointmentNoShowAt: staleNoShowAt
+  });
+  const chase = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-future-appointment-chase",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: { sequence: "call_now_no_answer", step: 2 }
+  });
+  const warm = store.addJob({
+    type: "warm_followup",
+    contactId: "resume-future-appointment-chase",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: { step: 1 }
+  });
+  const fresh = store.addJob({
+    type: "fresh_lead_followup",
+    contactId: "resume-future-appointment-chase",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: { step: 2 }
+  });
+  const coldEntry = store.addJob({
+    type: "cold_entry_check",
+    contactId: "resume-future-appointment-chase",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {}
+  });
+  const reminder = store.addJob({
+    type: "appointment_reminder",
+    contactId: "resume-future-appointment-chase",
+    runAt: new Date(new Date(appointmentIso).getTime() - 60 * 60 * 1000).toISOString(),
+    payload: { templateKey: "sameDayOneHour", appointmentIso }
+  });
+
+  const result = await bot.preparePausedQueueForResume();
+  const contact = await store.getContact("resume-future-appointment-chase");
+
+  assert.equal(store.data.jobs[chase.id].status, "cancelled");
+  assert.equal(store.data.jobs[chase.id].cancelReason, "resume_prep_future_appointment_suppressed_followup");
+  assert.equal(store.data.jobs[warm.id].status, "cancelled");
+  assert.equal(store.data.jobs[warm.id].cancelReason, "resume_prep_future_appointment_suppressed_followup");
+  assert.equal(store.data.jobs[fresh.id].status, "cancelled");
+  assert.equal(store.data.jobs[fresh.id].cancelReason, "resume_prep_future_appointment_suppressed_followup");
+  assert.equal(store.data.jobs[coldEntry.id].status, "cancelled");
+  assert.equal(store.data.jobs[coldEntry.id].cancelReason, "resume_prep_future_appointment_suppressed_followup");
+  assert.notEqual(store.data.jobs[reminder.id].cancelReason, "resume_prep_future_appointment_suppressed_followup");
+  assert.equal(
+    Object.values(store.data.jobs).some(
+      (job) =>
+        job.contactId === "resume-future-appointment-chase" &&
+        job.type === "appointment_reminder" &&
+        job.status === "pending" &&
+        job.payload?.appointmentIso === appointmentIso
+    ),
+    true
+  );
+  assert.equal(contact.appointmentNoShowAt, "");
+  assert.equal(
+    result.actions.some(
+      (action) =>
+        action.action === "cancel" &&
+        action.contactId === "resume-future-appointment-chase" &&
+        action.reason === "resume_prep_future_appointment_suppressed_followup"
+    ),
+    true
+  );
+});
+
+test("resume prep keeps human safety watchdogs even when a future appointment exists", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "resume-future-appointment-human-safety",
+    ghlContactId: "resume-future-appointment-human-safety",
+    name: "Future Appointment Human Safety",
+    phone: "+15550000469",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTimeIso: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "future-appointment-human-safety-appt",
+    humanEscalationStatus: true
+  });
+  const humanTimeout = store.addJob({
+    type: "human_reply_timeout",
+    contactId: "resume-future-appointment-human-safety",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {}
+  });
+  const sla = store.addJob({
+    type: "human_escalation_sla",
+    contactId: "resume-future-appointment-human-safety",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {}
+  });
+  const outcome = store.addJob({
+    type: "call_outcome_required",
+    contactId: "resume-future-appointment-human-safety",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {}
+  });
+
+  await bot.preparePausedQueueForResume();
+
+  for (const job of [humanTimeout, sla, outcome]) {
+    assert.equal(store.data.jobs[job.id].status, "pending");
+    assert.notEqual(store.data.jobs[job.id].cancelReason, "resume_prep_future_appointment_suppressed_followup");
+  }
+});
+
+test("resume prep keeps call-now no-answer chase with future appointment data", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "resume-call-now-no-answer-chase",
+    ghlContactId: "resume-call-now-no-answer-chase",
+    name: "Call Now No Answer Chase",
+    phone: "+15550000471",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "call_now_no_answer",
+    preferredCallTimeIso: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "call-now-no-answer-appt"
+  });
+  const chase = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-call-now-no-answer-chase",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: { sequence: "call_now_no_answer", step: 1 }
+  });
+
+  await bot.preparePausedQueueForResume();
+
+  assert.equal(store.data.jobs[chase.id].status, "pending");
+  assert.notEqual(store.data.jobs[chase.id].cancelReason, "resume_prep_future_appointment_suppressed_followup");
+});
+
+test("resume prep does not suppress chase jobs for a proposed time without a real appointment", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "resume-proposed-time-no-appt",
+    ghlContactId: "resume-proposed-time-no-appt",
+    name: "Proposed Time No Appointment",
+    phone: "+15550000470",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.ACTIVE_CONVERSATION,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTimeIso: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    currentSequenceName: "call_time_requested"
+  });
+  const warm = store.addJob({
+    type: "warm_followup",
+    contactId: "resume-proposed-time-no-appt",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: { step: 1 }
+  });
+
+  await bot.preparePausedQueueForResume();
+
+  assert.equal(store.data.jobs[warm.id].status, "pending");
+  assert.notEqual(store.data.jobs[warm.id].cancelReason, "resume_prep_future_appointment_suppressed_followup");
 });
 
 test("dry-run resume prep reports one stale marker repair without mutating contact", async () => {
