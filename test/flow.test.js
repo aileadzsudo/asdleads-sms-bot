@@ -4560,9 +4560,193 @@ test("manual appointment edit after no-show replaces recovery with normal remind
 
   assert.equal(resynced.engagementStatus, ENGAGEMENT.CALL_SCHEDULED);
   assert.equal(resynced.preferredCallTimeIso, backup);
+  assert.equal(resynced.appointmentNoShowAt, "");
   assert.equal(jobs.some((job) => job.type === "backup_no_show_reminder" && job.status === "pending"), false);
   assert.equal(jobs.some((job) => job.type === "missed_call_followup" && job.status === "pending"), false);
   assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
+  await bot.healStuckContacts();
+  const afterHealJobs = Object.values(store.data.jobs).filter((job) => job.contactId === "sync-no-show-reschedule");
+  assert.equal(afterHealJobs.some((job) => job.type === "missed_call_followup" && job.status === "pending"), false);
+});
+
+test("stale no-show recovery job is skipped after a new appointment is scheduled", async () => {
+  const { bot, store } = makeBot();
+  const futureIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "stale-noshow-job",
+    ghlContactId: "stale-noshow-job",
+    name: "Stale No Show",
+    phone: "+15550001078",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTime: "Future time",
+    preferredCallTimeIso: futureIso,
+    appointmentId: "future-appt",
+    appointmentType: "contract_review",
+    appointmentNoShowAt: ""
+  });
+  const job = store.addJob({
+    type: "missed_call_followup",
+    contactId: "stale-noshow-job",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {
+      templateGroup: "contractReviewNoShowTemplates",
+      templateKey: "same_day_now",
+      appointmentId: "old-appt",
+      appointmentIso: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      noShowAt: new Date(Date.now() - 90 * 60 * 1000).toISOString()
+    }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "stale_no_show_recovery_job");
+  assert.equal(store.listMessages("stale-noshow-job").length, 0);
+});
+
+test("stale backup no-show reminder is skipped after a new appointment is scheduled", async () => {
+  const { bot, store } = makeBot();
+  const futureIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "stale-backup-noshow-job",
+    ghlContactId: "stale-backup-noshow-job",
+    name: "Stale Backup No Show",
+    phone: "+15550001079",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTime: "Future time",
+    preferredCallTimeIso: futureIso,
+    backupCallTime: "Later backup",
+    backupCallTimeIso: new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "future-backup-appt",
+    appointmentType: "contract_review",
+    appointmentNoShowAt: ""
+  });
+  const job = store.addJob({
+    type: "backup_no_show_reminder",
+    contactId: "stale-backup-noshow-job",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {
+      templateKey: "initial",
+      appointmentId: "old-backup-appt",
+      appointmentIso: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      noShowAt: new Date(Date.now() - 90 * 60 * 1000).toISOString()
+    }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "stale_backup_no_show_reminder");
+  assert.equal(store.listMessages("stale-backup-noshow-job").length, 0);
+});
+
+test("cleared no-show marker blocks recovery jobs even if sequence has not caught up", async () => {
+  const { bot, store } = makeBot();
+  const futureIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "cleared-noshow-marker",
+    ghlContactId: "cleared-noshow-marker",
+    name: "Cleared No Show",
+    phone: "+15550001082",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.MISSED_CALL,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_no_show",
+    preferredCallTime: "Future time",
+    preferredCallTimeIso: futureIso,
+    appointmentId: "cleared-marker-appt",
+    appointmentType: "initial",
+    appointmentNoShowAt: ""
+  });
+  const job = store.addJob({
+    type: "missed_call_followup",
+    contactId: "cleared-noshow-marker",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {
+      templateGroup: "noShowTemplates",
+      templateKey: "same_day_15",
+      appointmentId: "cleared-marker-appt",
+      appointmentIso: futureIso,
+      noShowAt: new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "skipped");
+  assert.equal(store.data.jobs[job.id].skipReason, "stale_no_show_recovery_job");
+  assert.equal(store.listMessages("cleared-noshow-marker").length, 0);
+});
+
+test("current no-show recovery job still sends when only appointment iso drifts", async () => {
+  const { bot, store } = makeBot();
+  const noShowAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const appointmentIso = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "current-noshow-iso-drift",
+    ghlContactId: "current-noshow-iso-drift",
+    name: "Current No Show",
+    phone: "+15550001080",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.MISSED_CALL,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    currentSequenceName: "appointment_no_show",
+    preferredCallTime: "Original time",
+    preferredCallTimeIso: new Date(new Date(appointmentIso).getTime() + 60 * 1000).toISOString(),
+    appointmentId: "current-noshow-appt",
+    appointmentType: "initial",
+    appointmentNoShowAt: noShowAt
+  });
+  const job = store.addJob({
+    type: "missed_call_followup",
+    contactId: "current-noshow-iso-drift",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {
+      templateGroup: "noShowTemplates",
+      templateKey: "same_day_15",
+      appointmentId: "current-noshow-appt",
+      appointmentIso,
+      noShowAt
+    }
+  });
+
+  await bot.runDueJob(job);
+
+  assert.equal(store.data.jobs[job.id].status, "done");
+  assert.equal(store.listMessages("current-noshow-iso-drift").length, 1);
+});
+
+test("duplicate no-show webhook dedupes by recorded no-show marker even if sequence changed", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "duplicate-noshow-sequence-drift",
+    ghlContactId: "duplicate-noshow-sequence-drift",
+    name: "Duplicate Sequence Drift",
+    phone: "+15550001081",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    currentSequenceName: "appointment_synced",
+    appointmentNoShowAt: new Date().toISOString(),
+    appointmentId: "duplicate-noshow-sequence-drift-appt",
+    noShowCount: 1
+  });
+
+  await bot.markNoShow({
+    contactId: "duplicate-noshow-sequence-drift",
+    appointmentId: "duplicate-noshow-sequence-drift-appt",
+    status: "no_show"
+  });
+  const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "duplicate-noshow-sequence-drift");
+
+  assert.equal(store.getSetting("last_no_show_webhook").value.result, "duplicate_no_show_ignored_terminal_or_held");
+  assert.equal(jobs.some((job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)), false);
 });
 
 test("GHL appointment sync treats no-zone start time as contact local and suppresses duplicate booking alert", async () => {

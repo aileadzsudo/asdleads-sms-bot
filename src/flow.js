@@ -1924,8 +1924,38 @@ function noShowStatusFromPayload(payload = {}) {
 function isNoShowRecoveryContact(contact = {}) {
   return (
     contact.currentSequenceName === "appointment_no_show" ||
-    contact.engagementStatus === ENGAGEMENT.MISSED_CALL ||
-    Boolean(contact.appointmentNoShowAt)
+    contact.engagementStatus === ENGAGEMENT.MISSED_CALL
+  );
+}
+
+function clearActiveNoShowRecoveryPatch() {
+  return {
+    appointmentNoShowAt: "",
+    repeatNoShow: false,
+    noShowBackupAlertKey: "",
+    noShowBackupAlertSentAt: "",
+    contractReviewMissedAlertSentAt: ""
+  };
+}
+
+function isCurrentNoShowRecoveryJob(contact = {}, job = {}) {
+  if (!isNoShowRecoveryContact(contact)) return false;
+  if (!contact.appointmentNoShowAt) return false;
+  const payload = job.payload || {};
+  if (payload.noShowAt && contact.appointmentNoShowAt && payload.noShowAt !== contact.appointmentNoShowAt) return false;
+  if (payload.appointmentId && contact.appointmentId && payload.appointmentId !== contact.appointmentId) return false;
+  return true;
+}
+
+function isNoShowRecoveryJob(job = {}) {
+  if (!job || job.type === "backup_no_show_reminder") return true;
+  if (job.type !== "missed_call_followup") return false;
+  const payload = job.payload || {};
+  const group = String(payload.templateGroup || "");
+  return (
+    payload.sequence === "appointment_no_show" ||
+    ["noShowTemplates", "qualifiedFollowUpNoShowTemplates", "contractReviewNoShowTemplates"].includes(group) ||
+    Boolean(payload.noShowAt || payload.appointmentId || payload.appointmentIso)
   );
 }
 
@@ -3917,7 +3947,8 @@ class SmsBot {
         lastAppointmentAcknowledgement: inbound.lastInboundMessage,
         humanEscalationStatus: false,
         humanEscalationStage: "appointment_acknowledged",
-        escalationReason: ""
+        escalationReason: "",
+        ...clearActiveNoShowRecoveryPatch()
       });
       await this.cancelHumanEscalationWatchdog(updated.id, "appointment acknowledged");
       if (updated.preferredCallTimeIso) await this.scheduleAppointmentReminders(updated);
@@ -5243,6 +5274,7 @@ class SmsBot {
         rebookedAfterNoShowAt: new Date().toISOString(),
         awaitingBackupTime: false,
         awaitingSpecificCallTime: false,
+        ...clearActiveNoShowRecoveryPatch(),
         humanEscalationStatus: false,
         humanEscalationStage: "no_show_rebooked",
         escalationReason: "",
@@ -5347,6 +5379,7 @@ class SmsBot {
       ...(inlineBackup || {}),
       awaitingBackupTime: !inlineBackup,
       awaitingSpecificCallTime: false,
+      ...clearActiveNoShowRecoveryPatch(),
       ...clearCallTimeClarificationPatch(),
       lastAppointmentBookingError: ""
     });
@@ -5526,6 +5559,7 @@ class SmsBot {
       appointmentSuppressionReason: "",
       appointmentRescheduledAt: mode === "reschedule" ? new Date().toISOString() : contact.appointmentRescheduledAt || "",
       lastAppointmentBookingError: "",
+      ...clearActiveNoShowRecoveryPatch(),
       ...clearCallTimeClarificationPatch(),
       ...clearAvailabilityCluePatch()
     });
@@ -5773,6 +5807,7 @@ class SmsBot {
       appointmentId: appointment.id || appointment.appointment?.id || contact.appointmentId || "",
       awaitingBackupTime: false,
       awaitingSpecificCallTime: false,
+      ...clearActiveNoShowRecoveryPatch(),
       ...clearCallTimeClarificationPatch(),
       appointmentConfirmed: false,
       appointmentRescheduledAt: new Date().toISOString()
@@ -5868,7 +5903,8 @@ class SmsBot {
       awaitingBackupTime: false,
       lastPrimaryCallTimeRepairError: "",
       lastPrimaryCallTimeRepairAt: new Date().toISOString(),
-      lastPrimaryCallTimeRepairSource: message
+      lastPrimaryCallTimeRepairSource: message,
+      ...clearActiveNoShowRecoveryPatch()
     });
     await this.store.cancelJobsForContact(updated.id, "primary call time repaired", (job) =>
       ["appointment_reminder", "backup_time_timeout", "backup_no_show_reminder"].includes(job.type)
@@ -6188,7 +6224,12 @@ class SmsBot {
         type: "backup_no_show_reminder",
         contactId: contact.id,
         runAt: scheduledAt.toISOString(),
-        payload: { templateKey }
+        payload: {
+          templateKey,
+          appointmentId: contact.appointmentId || "",
+          appointmentIso: contact.preferredCallTimeIso || "",
+          noShowAt: contact.appointmentNoShowAt || ""
+        }
       });
     };
 
@@ -6222,7 +6263,14 @@ class SmsBot {
         type: "missed_call_followup",
         contactId: contact.id,
         runAt: runAt.toISOString(),
-        payload: { templateGroup, templateKey: NO_SHOW_SAME_DAY_TEMPLATE_KEYS[index], sequence: "appointment_no_show" }
+        payload: {
+          templateGroup,
+          templateKey: NO_SHOW_SAME_DAY_TEMPLATE_KEYS[index],
+          sequence: "appointment_no_show",
+          appointmentId: contact.appointmentId || "",
+          appointmentIso: contact.preferredCallTimeIso || "",
+          noShowAt: contact.appointmentNoShowAt || ""
+        }
       });
     }
     for (const day of NO_SHOW_DAYS) {
@@ -6235,7 +6283,14 @@ class SmsBot {
           type: "missed_call_followup",
           contactId: contact.id,
           runAt: runAt.toISOString(),
-          payload: { templateGroup, templateKey, sequence: "appointment_no_show" }
+          payload: {
+            templateGroup,
+            templateKey,
+            sequence: "appointment_no_show",
+            appointmentId: contact.appointmentId || "",
+            appointmentIso: contact.preferredCallTimeIso || "",
+            noShowAt: contact.appointmentNoShowAt || ""
+          }
         });
       }
     }
@@ -6297,12 +6352,12 @@ class SmsBot {
     const existing = await this.store.getContact(normalized.id);
     const base = { ...(existing || {}), ...normalized };
     let contact = await this.hydrateContactTags(base, { force: true });
-    if (
+    const sameNoShowAppointmentAlreadyRecorded = Boolean(
       existing?.appointmentNoShowAt &&
-      webhookAppointmentId &&
-      existing.appointmentId === webhookAppointmentId &&
-      isNoShowRecoveryContact(existing)
-    ) {
+        webhookAppointmentId &&
+        existing.appointmentId === webhookAppointmentId
+    );
+    if (sameNoShowAppointmentAlreadyRecorded) {
       const jobs = await this.store.listJobs(existing.id);
       const hasNoShowRecoveryJob = jobs.some(
         (job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)
@@ -6584,6 +6639,7 @@ class SmsBot {
       automationPaused: false,
       automationPauseReason: "",
       currentSequenceName: "appointment_synced",
+      ...clearActiveNoShowRecoveryPatch(),
       appointmentSource: "ghl_manual",
       appointmentSyncedAt: new Date().toISOString(),
       lastAppointmentSyncRawStart: textValue(rawStartsAt),
@@ -7729,6 +7785,26 @@ class SmsBot {
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
     if (job.type === "missed_call_followup") {
+      if (isNoShowRecoveryJob(job) && !isCurrentNoShowRecoveryJob(contact, job)) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "stale_no_show_recovery_job"
+        });
+        await this.recordDecision(contact, "skipped", "stale_no_show_recovery_job", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: {
+            jobAppointmentId: job.payload?.appointmentId || "",
+            currentAppointmentId: contact.appointmentId || "",
+            jobAppointmentIso: job.payload?.appointmentIso || "",
+            currentAppointmentIso: contact.preferredCallTimeIso || "",
+            currentSequenceName: contact.currentSequenceName || "",
+            engagementStatus: contact.engagementStatus || ""
+          }
+        });
+        return;
+      }
       const group = job.payload.templateGroup || "missedCallTemplates";
       const templates = noShowTemplatesForGroup(group);
       const template = templates[job.payload.templateKey];
@@ -7755,6 +7831,26 @@ class SmsBot {
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
     if (job.type === "backup_no_show_reminder") {
+      if (!isCurrentNoShowRecoveryJob(contact, job)) {
+        await this.store.updateJob(job.id, {
+          status: "skipped",
+          finishedAt: new Date().toISOString(),
+          skipReason: "stale_backup_no_show_reminder"
+        });
+        await this.recordDecision(contact, "skipped", "stale_backup_no_show_reminder", {
+          jobId: job.id,
+          jobType: job.type,
+          meta: {
+            jobAppointmentId: job.payload?.appointmentId || "",
+            currentAppointmentId: contact.appointmentId || "",
+            jobAppointmentIso: job.payload?.appointmentIso || "",
+            currentAppointmentIso: contact.preferredCallTimeIso || "",
+            currentSequenceName: contact.currentSequenceName || "",
+            engagementStatus: contact.engagementStatus || ""
+          }
+        });
+        return;
+      }
       const rendered = await this.renderManagedTemplate(
         contact,
         "backupReminderTemplates",
