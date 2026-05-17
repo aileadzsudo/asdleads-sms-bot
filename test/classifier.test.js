@@ -155,6 +155,12 @@ test("detects human context before treating yes as qualification answer", () => 
   assert.equal(intent.intent, "busy_now");
 });
 
+test("does not treat can't-talk text requests as call-now", () => {
+  const message = "Can't talk right now, please leave me a message or text me";
+  assert.equal(isCallNow(message), false);
+  assert.equal(classifyHumanContextIntent(message, QUALIFICATION.NEEDS_CALL_TIME).intent, "busy_now");
+});
+
 test("detects lead-requested pause without treating it as opt-out", () => {
   const intent = classifyLeadPauseIntent(
     "Not a good time. I'll txt when I'm free. Pls dont blow up my phone",

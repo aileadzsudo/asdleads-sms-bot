@@ -215,7 +215,7 @@ function hasExpectedAnswerSignal(progress, text) {
   }
   if (progress === QUALIFICATION.NEEDS_CALL_TIME) {
     if (
-      /\b(not right now|not now|not at the moment|not this moment|can't right now|cant right now|cannot right now|can't talk right now|cant talk right now|not available right now|busy right now|ahora no|no ahora)\b/.test(
+      /\b(not right now|not now|not at the moment|not this moment|can't right now|cant right now|can t right now|cannot right now|can't talk right now|cant talk right now|can t talk right now|not available right now|busy right now|ahora no|no ahora)\b/.test(
         t
       )
     ) {
@@ -231,7 +231,7 @@ function classifyHumanContextIntent(text, progress) {
   if (!t) return null;
 
   const busy =
-    /\b(currently busy|busy right now|i'm busy|im busy|i am busy|busy|at work|working|in a meeting|driving|can't talk|cant talk|cannot talk|not available|occupied|not right now|not now|not at the moment|not this moment|can't right now|cant right now|cannot right now|ocupado|estoy ocupado|trabajando|en el trabajo|manejando|no puedo hablar|no disponible|ahora no)\b/.test(t);
+    /\b(currently busy|busy right now|i'm busy|im busy|i am busy|busy|at work|working|in a meeting|driving|can't talk|cant talk|can t talk|cannot talk|not available|occupied|not right now|not now|not at the moment|not this moment|can't right now|cant right now|can t right now|cannot right now|ocupado|estoy ocupado|trabajando|en el trabajo|manejando|no puedo hablar|no disponible|ahora no)\b/.test(t);
   const apology = /\b(sorry|my bad|apologize|apologies|perdon|disculpa|lo siento)\b/.test(t);
   const prefersText = /\b(text me|text is better|can we text|over text|just text|message me|por texto|mandame texto|mensajeame|texto es mejor)\b/.test(t);
 
@@ -268,14 +268,14 @@ function classifyLeadPauseIntent(text, progress) {
 function isCallNow(text) {
   const t = normalize(text);
   const unavailableRightNow =
-    /\b(working right now|at work right now|currently working|working at the moment|busy right now|currently busy|not free right now|not available right now|unavailable right now|in a meeting right now|driving right now|can't talk right now|cant talk right now|cannot talk right now|en el trabajo ahora|trabajando ahora|ocupado ahora|manejando ahora)\b/.test(t) ||
-    (/\bright now\b/.test(t) && /\b(working|at work|busy|not free|not available|unavailable|meeting|driving|can't talk|cant talk|cannot talk)\b/.test(t));
+    /\b(working right now|at work right now|currently working|working at the moment|busy right now|currently busy|not free right now|not available right now|unavailable right now|in a meeting right now|driving right now|can't talk right now|cant talk right now|can t talk right now|cannot talk right now|en el trabajo ahora|trabajando ahora|ocupado ahora|manejando ahora)\b/.test(t) ||
+    (/\bright now\b/.test(t) && /\b(working|at work|busy|not free|not available|unavailable|meeting|driving|can't talk|cant talk|can t talk|cannot talk)\b/.test(t));
   const futureCallContext =
     /\b(later|tonight|tomorrow|after work|after\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|at\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|around\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|about\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|\d{1,2}(?::\d{2})?\s*(am|pm))\b/.test(t);
   if (
     unavailableRightNow ||
     (/\bright now\b/.test(t) && futureCallContext && !/\b(call me right now|call right now)\b/.test(t)) ||
-    /\b(not right now|not now|not at the moment|not this moment|can't right now|cant right now|cannot right now|can't talk right now|cant talk right now|not available right now|busy right now|ahora no|no ahora)\b/.test(
+    /\b(not right now|not now|not at the moment|not this moment|can't right now|cant right now|can t right now|cannot right now|can't talk right now|cant talk right now|can t talk right now|not available right now|busy right now|ahora no|no ahora)\b/.test(
       t
     )
   ) {
@@ -364,7 +364,7 @@ function parseCallTime(text, contact, config, now = new Date()) {
   if (isNotTodayAvailability(t)) {
     return { type: "needs_specific_time", confidence: 0.88, preferredDay: "tomorrow_or_later" };
   }
-  if (/\b(later today|later|not now|not right now|can't talk|cant talk|cannot talk|not available|at work|working|busy)\b/.test(t) && !/\d/.test(t)) {
+  if (/\b(later today|later|not now|not right now|can't talk|cant talk|can t talk|cannot talk|not available|at work|working|busy)\b/.test(t) && !/\d/.test(t)) {
     return { type: "needs_specific_time", confidence: 0.82 };
   }
   if (isCallNow(t)) return { type: "now", confidence: 0.95 };

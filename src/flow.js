@@ -67,6 +67,8 @@ const BOT_FLOOD_WINDOW_MINUTES = 15;
 const BOT_FLOOD_WINDOW_LIMIT = 3;
 const BOT_FLOOD_HOURLY_LIMIT = 6;
 const GLOBAL_BOT_PAUSE_SETTING = "global_bot_pause";
+// Suppress stale chase jobs for a short grace period around appointment time while GHL/manual outcome state catches up.
+const APPOINTMENT_CHASE_SUPPRESSION_LOOKBACK_MINUTES = 12 * 60;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
 const NO_SHOW_SAME_DAY_MINUTES = [0, 15, 60, 120, 240, 360];
 const NO_SHOW_SAME_DAY_TEMPLATE_KEYS = [
@@ -2020,10 +2022,11 @@ function isPastAppointmentReminderJob(contact, job = {}, now = new Date()) {
   return Boolean(appointment && appointment <= now);
 }
 
-function hasFutureScheduledAppointment(contact = {}, now = new Date()) {
+function hasScheduledAppointmentSuppressionContext(contact = {}, now = new Date()) {
   if (!contact || isNoShowRecoveryContact(contact)) return false;
   const appointment = contact.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
-  if (!appointment || Number.isNaN(appointment.getTime()) || appointment <= now) return false;
+  if (!appointment || Number.isNaN(appointment.getTime())) return false;
+  if (appointment < addMinutes(now, -APPOINTMENT_CHASE_SUPPRESSION_LOOKBACK_MINUTES)) return false;
   if (!contact.appointmentId) return false;
   return Boolean(
     contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
@@ -2032,9 +2035,9 @@ function hasFutureScheduledAppointment(contact = {}, now = new Date()) {
   );
 }
 
-function shouldCancelForFutureAppointment(contact = {}, job = {}, now = new Date()) {
+function shouldCancelForScheduledAppointmentContext(contact = {}, job = {}, now = new Date()) {
   if (!SCHEDULED_APPOINTMENT_SUPPRESSED_JOB_TYPES.has(job.type)) return false;
-  if (!hasFutureScheduledAppointment(contact, now)) return false;
+  if (!hasScheduledAppointmentSuppressionContext(contact, now)) return false;
   if (
     job.type === "missed_call_followup" &&
     !["appointment_synced", "no_show_rebooked"].includes(contact.currentSequenceName || "")
@@ -2335,9 +2338,9 @@ class SmsBot {
         await clearStaleNoShowMarker(contact, "resume_prep_stale_no_show_marker_cleared");
         continue;
       }
-      if (shouldCancelForFutureAppointment(contact, job, referenceNow)) {
-        await cancelJob(job, "resume_prep_future_appointment_suppressed_followup", contact);
-        await clearStaleNoShowMarker(contact, "resume_prep_future_appointment_stale_no_show_marker_cleared");
+      if (shouldCancelForScheduledAppointmentContext(contact, job, referenceNow)) {
+        await cancelJob(job, "resume_prep_scheduled_appointment_suppressed_followup", contact);
+        await clearStaleNoShowMarker(contact, "resume_prep_scheduled_appointment_stale_no_show_marker_cleared");
         continue;
       }
       if (interactiveRelease) {
@@ -7262,21 +7265,21 @@ class SmsBot {
           healed.push({ contactId: contact.id, action: "cancelled_stale_no_show_recovery", count: staleNoShowJobs.length });
         }
         const scheduledAppointmentFollowups = jobs.filter(
-          (job) => job.status === "pending" && shouldCancelForFutureAppointment(contact, job, healReferenceNow)
+          (job) => job.status === "pending" && shouldCancelForScheduledAppointmentContext(contact, job, healReferenceNow)
         );
         if (scheduledAppointmentFollowups.length) {
           const suppressedJobIds = new Set(scheduledAppointmentFollowups.map((job) => job.id));
           await this.store.cancelJobsForContact(
             contact.id,
-            "future_appointment_suppressed_followup",
+            "scheduled_appointment_suppressed_followup",
             (job) => suppressedJobIds.has(job.id)
           );
           jobs = jobs.map((job) =>
             suppressedJobIds.has(job.id)
-              ? { ...job, status: "cancelled", cancelReason: "future_appointment_suppressed_followup" }
+              ? { ...job, status: "cancelled", cancelReason: "scheduled_appointment_suppressed_followup" }
               : job
           );
-          await this.recordDecision(contact, "skipped", "future_appointment_suppressed_followup", {
+          await this.recordDecision(contact, "skipped", "scheduled_appointment_suppressed_followup", {
             trigger: "heal_stuck_contacts",
             meta: {
               suppressedJobCount: scheduledAppointmentFollowups.length,
@@ -7288,7 +7291,7 @@ class SmsBot {
           });
           healed.push({
             contactId: contact.id,
-            action: "cancelled_future_appointment_followups",
+            action: "cancelled_scheduled_appointment_followups",
             count: scheduledAppointmentFollowups.length
           });
         }
