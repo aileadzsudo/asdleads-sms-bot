@@ -4749,6 +4749,115 @@ test("duplicate no-show webhook dedupes by recorded no-show marker even if seque
   assert.equal(jobs.some((job) => job.status === "pending" && ["missed_call_followup", "backup_no_show_reminder"].includes(job.type)), false);
 });
 
+test("stuck contact healer cancels stale no-show jobs after appointment sync", async () => {
+  const { bot, store } = makeBot();
+  const futureIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "heal-stale-noshow",
+    ghlContactId: "heal-stale-noshow",
+    name: "Heal Stale",
+    phone: "+15550001083",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTime: "Future time",
+    preferredCallTimeIso: futureIso,
+    appointmentId: "heal-current-appt",
+    appointmentNoShowAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+  });
+  const job = store.addJob({
+    type: "missed_call_followup",
+    contactId: "heal-stale-noshow",
+    runAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    payload: {
+      sequence: "appointment_no_show",
+      templateGroup: "contractReviewNoShowTemplates",
+      templateKey: "same_day_60"
+    }
+  });
+
+  const healed = await bot.healStuckContacts();
+  const contact = await store.getContact("heal-stale-noshow");
+
+  assert.equal(store.data.jobs[job.id].status, "cancelled");
+  assert.equal(store.data.jobs[job.id].cancelReason, "stale_no_show_recovery_after_appointment_sync");
+  assert.equal(contact.appointmentNoShowAt, "");
+  assert.equal(healed.some((item) => item.contactId === "heal-stale-noshow" && item.action === "cancelled_stale_no_show_recovery"), true);
+});
+
+test("stuck contact healer clears stale no-show marker even when no no-show jobs remain", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "heal-stale-noshow-marker-only",
+    ghlContactId: "heal-stale-noshow-marker-only",
+    name: "Heal Marker Only",
+    phone: "+15550001084",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTimeIso: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "heal-current-appt-marker-only",
+    appointmentNoShowAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+  });
+
+  const healed = await bot.healStuckContacts();
+  const contact = await store.getContact("heal-stale-noshow-marker-only");
+
+  assert.equal(contact.appointmentNoShowAt, "");
+  assert.equal(
+    healed.some((item) => item.contactId === "heal-stale-noshow-marker-only" && item.action === "cleared_stale_no_show_marker_without_jobs"),
+    true
+  );
+});
+
+test("stuck contact healer recreates current no-show recovery after stale job cleanup", async () => {
+  const { bot, store } = makeBot();
+  const noShowAt = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "heal-active-noshow-stale-job",
+    ghlContactId: "heal-active-noshow-stale-job",
+    name: "Heal Active No Show",
+    phone: "+15550001085",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.MISSED_CALL,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    currentSequenceName: "appointment_no_show",
+    preferredCallTimeIso: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    appointmentId: "heal-active-current-appt",
+    appointmentNoShowAt: noShowAt
+  });
+  const stale = store.addJob({
+    type: "missed_call_followup",
+    contactId: "heal-active-noshow-stale-job",
+    runAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    payload: {
+      sequence: "appointment_no_show",
+      templateGroup: "noShowTemplates",
+      templateKey: "same_day_60",
+      appointmentId: "old-heal-appt",
+      noShowAt
+    }
+  });
+
+  const healed = await bot.healStuckContacts();
+
+  assert.equal(store.data.jobs[stale.id].status, "cancelled");
+  assert.equal(
+    Object.values(store.data.jobs).some(
+      (job) =>
+        job.id !== stale.id &&
+        job.status === "pending" &&
+        job.type === "missed_call_followup" &&
+        job.payload?.sequence === "appointment_no_show" &&
+        job.payload?.appointmentId === "heal-active-current-appt"
+    ),
+    true
+  );
+  assert.equal(healed.some((item) => item.contactId === "heal-active-noshow-stale-job" && item.action === "scheduled_missing_no_show_recovery"), true);
+});
+
 test("GHL appointment sync treats no-zone start time as contact local and suppresses duplicate booking alert", async () => {
   const { bot, store } = makeBot();
   const originalAlertAt = "2026-05-10T23:23:20.000Z";
@@ -6576,6 +6685,347 @@ test("resume prep cancels stale appointment reminders and rebuilds future appoin
     store
       .listJobs("resume-future-appt")
       .some((job) => job.status === "pending" && job.type === "appointment_reminder" && job.payload.appointmentIso === futureIso),
+    true
+  );
+});
+
+test("resume prep cancels stale no-show recovery jobs and clears old no-show marker", async () => {
+  const { bot, store } = makeBot();
+  const futureIso = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+  const staleNoShowAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-stale-noshow",
+    ghlContactId: "resume-stale-noshow",
+    name: "Resume Stale No Show",
+    phone: "+15550000459",
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTimeIso: futureIso,
+    preferredCallTime: "2:00 PM MST",
+    appointmentId: "resume-current-appt",
+    appointmentNoShowAt: staleNoShowAt
+  });
+  const stale = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-stale-noshow",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {
+      sequence: "appointment_no_show",
+      templateKey: "same_day_60",
+      templateGroup: "contractReviewNoShowTemplates"
+    }
+  });
+
+  await bot.preparePausedQueueForResume();
+  const contact = await store.getContact("resume-stale-noshow");
+
+  assert.equal(store.data.jobs[stale.id].status, "cancelled");
+  assert.equal(store.data.jobs[stale.id].cancelReason, "resume_prep_stale_no_show_recovery_job");
+  assert.equal(contact.appointmentNoShowAt, "");
+});
+
+test("resume prep clears stale no-show marker once when multiple stale jobs exist", async () => {
+  const { bot, store } = makeBot();
+  const staleNoShowAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-stale-noshow-many",
+    ghlContactId: "resume-stale-noshow-many",
+    name: "Resume Stale Many",
+    phone: "+15550000460",
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTimeIso: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "resume-current-appt-many",
+    appointmentNoShowAt: staleNoShowAt
+  });
+  const first = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-stale-noshow-many",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: { sequence: "appointment_no_show", templateKey: "same_day_60", templateGroup: "contractReviewNoShowTemplates" }
+  });
+  const second = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-stale-noshow-many",
+    runAt: new Date(Date.now() + 60 * 1000).toISOString(),
+    payload: { sequence: "appointment_no_show", templateKey: "same_day_120", templateGroup: "contractReviewNoShowTemplates" }
+  });
+
+  await bot.preparePausedQueueForResume();
+  const contact = await store.getContact("resume-stale-noshow-many");
+  const markerClearLogs = store
+    .listDecisionLogs("resume-stale-noshow-many")
+    .filter((log) => log.reason === "resume_prep_stale_no_show_marker_cleared");
+
+  assert.equal(store.data.jobs[first.id].status, "cancelled");
+  assert.equal(store.data.jobs[second.id].status, "cancelled");
+  assert.equal(contact.appointmentNoShowAt, "");
+  assert.equal(markerClearLogs.length, 1);
+});
+
+test("resume prep does not cancel normal missed-call follow-up jobs as no-show recovery", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "resume-normal-missed-call",
+    ghlContactId: "resume-normal-missed-call",
+    name: "Normal Missed Call",
+    phone: "+15550000461",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.WARM_FOLLOW_UP,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+  const job = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-normal-missed-call",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: { sequence: "call_now_no_answer", step: 1 }
+  });
+
+  await bot.preparePausedQueueForResume();
+
+  assert.equal(store.data.jobs[job.id].status, "pending");
+  assert.notEqual(store.data.jobs[job.id].cancelReason, "resume_prep_stale_no_show_recovery_job");
+});
+
+test("resume prep does not treat empty missed-call follow-up payload as no-show recovery", async () => {
+  const { bot, store } = makeBot();
+  store.upsertContact({
+    id: "resume-empty-missed-call",
+    ghlContactId: "resume-empty-missed-call",
+    name: "Empty Missed Call",
+    phone: "+15550000463",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.WARM_FOLLOW_UP,
+    qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME
+  });
+  const job = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-empty-missed-call",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {}
+  });
+
+  await bot.preparePausedQueueForResume();
+
+  assert.equal(store.data.jobs[job.id].status, "pending");
+  assert.notEqual(store.data.jobs[job.id].cancelReason, "resume_prep_stale_no_show_recovery_job");
+});
+
+test("dry-run resume prep reports one stale marker repair without mutating contact", async () => {
+  const { bot, store } = makeBot();
+  const staleNoShowAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-dryrun-stale-noshow",
+    ghlContactId: "resume-dryrun-stale-noshow",
+    name: "Dry Run Stale",
+    phone: "+15550000464",
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTimeIso: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "resume-dryrun-current-appt",
+    appointmentNoShowAt: staleNoShowAt
+  });
+  store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-dryrun-stale-noshow",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: { sequence: "appointment_no_show", templateKey: "same_day_60", templateGroup: "contractReviewNoShowTemplates" }
+  });
+  store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-dryrun-stale-noshow",
+    runAt: new Date(Date.now() + 60 * 1000).toISOString(),
+    payload: { sequence: "appointment_no_show", templateKey: "same_day_120", templateGroup: "contractReviewNoShowTemplates" }
+  });
+
+  const result = await bot.preparePausedQueueForResume({ dryRun: true });
+  const contact = await store.getContact("resume-dryrun-stale-noshow");
+  const repairActions = result.actions.filter(
+    (action) => action.action === "repair" && action.reason === "resume_prep_stale_no_show_marker_cleared"
+  );
+
+  assert.equal(contact.appointmentNoShowAt, staleNoShowAt);
+  assert.equal(repairActions.length, 1);
+});
+
+test("resume prep clears stale no-show marker even when no recovery jobs remain", async () => {
+  const { bot, store } = makeBot();
+  const staleNoShowAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-stale-marker-only",
+    ghlContactId: "resume-stale-marker-only",
+    name: "Resume Stale Marker Only",
+    phone: "+15550000465",
+    timezone: "America/Denver",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    currentSequenceName: "appointment_synced",
+    preferredCallTimeIso: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+    appointmentId: "resume-marker-only-appt",
+    appointmentNoShowAt: staleNoShowAt
+  });
+
+  const result = await bot.preparePausedQueueForResume();
+  const contact = await store.getContact("resume-stale-marker-only");
+
+  assert.equal(contact.appointmentNoShowAt, "");
+  assert.equal(
+    result.actions.some(
+      (action) =>
+        action.action === "repair" &&
+        action.contactId === "resume-stale-marker-only" &&
+        action.reason === "resume_prep_stale_no_show_marker_cleared_without_jobs"
+    ),
+    true
+  );
+});
+
+test("resume prep records blocked no-show recovery rebuild instead of going silent", async () => {
+  const { bot, store } = makeBot();
+  const noShowAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-blocked-noshow-repair",
+    ghlContactId: "resume-blocked-noshow-repair",
+    name: "Blocked No Show Repair",
+    phone: "+15550000466",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.MISSED_CALL,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    currentSequenceName: "appointment_no_show",
+    preferredCallTimeIso: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+    appointmentId: "blocked-noshow-current-appt",
+    appointmentNoShowAt: noShowAt,
+    humanEscalationStatus: true
+  });
+  const stale = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-blocked-noshow-repair",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {
+      sequence: "appointment_no_show",
+      templateKey: "same_day_60",
+      templateGroup: "noShowTemplates",
+      appointmentId: "old-blocked-noshow-appt",
+      noShowAt
+    }
+  });
+
+  const result = await bot.preparePausedQueueForResume();
+  const contact = await store.getContact("resume-blocked-noshow-repair");
+  const logs = store.listDecisionLogs("resume-blocked-noshow-repair");
+
+  assert.equal(store.data.jobs[stale.id].status, "cancelled");
+  assert.equal(contact.appointmentNoShowAt, noShowAt);
+  assert.equal(
+    Object.values(store.data.jobs).some(
+      (job) => job.id !== stale.id && job.status === "pending" && job.payload?.appointmentId === "blocked-noshow-current-appt"
+    ),
+    false
+  );
+  assert.equal(
+    result.actions.some(
+      (action) =>
+        action.action === "skip" &&
+        action.contactId === "resume-blocked-noshow-repair" &&
+        action.reason === "resume_prep_no_show_recovery_rebuild_blocked"
+    ),
+    true
+  );
+  assert.equal(logs.some((log) => log.reason === "resume_prep_no_show_recovery_rebuild_blocked"), true);
+});
+
+test("resume prep recreates recovery for active no-show contact with no pending jobs", async () => {
+  const { bot, store } = makeBot();
+  const noShowAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-active-noshow-no-jobs",
+    ghlContactId: "resume-active-noshow-no-jobs",
+    name: "Active No Show No Jobs",
+    phone: "+15550000467",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.MISSED_CALL,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    currentSequenceName: "appointment_no_show",
+    preferredCallTimeIso: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+    appointmentId: "active-noshow-no-jobs-current-appt",
+    appointmentNoShowAt: noShowAt
+  });
+
+  const result = await bot.preparePausedQueueForResume();
+  const contact = await store.getContact("resume-active-noshow-no-jobs");
+
+  assert.equal(contact.appointmentNoShowAt, noShowAt);
+  assert.equal(
+    Object.values(store.data.jobs).some(
+      (job) =>
+        job.status === "pending" &&
+        job.type === "missed_call_followup" &&
+        job.payload?.sequence === "appointment_no_show" &&
+        job.payload?.appointmentId === "active-noshow-no-jobs-current-appt"
+    ),
+    true
+  );
+  assert.equal(
+    result.actions.some(
+      (action) =>
+        action.action === "repair" &&
+        action.contactId === "resume-active-noshow-no-jobs" &&
+        action.reason === "resume_prep_missing_no_show_recovery_jobs_recreated"
+    ),
+    true
+  );
+});
+
+test("resume prep cancels stale no-show job without clearing active no-show marker", async () => {
+  const { bot, store } = makeBot();
+  const noShowAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "resume-active-noshow-stale-job",
+    ghlContactId: "resume-active-noshow-stale-job",
+    name: "Active No Show Stale Job",
+    phone: "+15550000462",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.MISSED_CALL,
+    qualificationProgress: QUALIFICATION.CALL_BOOKED,
+    currentSequenceName: "appointment_no_show",
+    preferredCallTimeIso: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+    appointmentId: "current-noshow-appt",
+    appointmentNoShowAt: noShowAt
+  });
+  const stale = store.addJob({
+    type: "missed_call_followup",
+    contactId: "resume-active-noshow-stale-job",
+    runAt: new Date(Date.now() - 60 * 1000).toISOString(),
+    payload: {
+      sequence: "appointment_no_show",
+      templateKey: "same_day_60",
+      templateGroup: "noShowTemplates",
+      appointmentId: "old-noshow-appt",
+      noShowAt
+    }
+  });
+
+  await bot.preparePausedQueueForResume();
+  const contact = await store.getContact("resume-active-noshow-stale-job");
+
+  assert.equal(store.data.jobs[stale.id].status, "cancelled");
+  assert.equal(store.data.jobs[stale.id].cancelReason, "resume_prep_stale_no_show_recovery_job");
+  assert.equal(contact.appointmentNoShowAt, noShowAt);
+  assert.equal(
+    Object.values(store.data.jobs).some(
+      (job) =>
+        job.id !== stale.id &&
+        job.status === "pending" &&
+        job.type === "missed_call_followup" &&
+        job.payload?.sequence === "appointment_no_show" &&
+        job.payload?.appointmentId === "current-noshow-appt"
+    ),
     true
   );
 });

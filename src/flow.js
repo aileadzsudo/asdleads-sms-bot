@@ -2166,6 +2166,8 @@ class SmsBot {
       summary.actions.push(action);
       if (summary.actions.length > 200) summary.actions.shift();
     };
+    const staleNoShowMarkerRepairs = new Set();
+    const activeNoShowRecoveryRepairs = new Set();
     const cancelJob = async (job, reason, contact = null) => {
       summary.cancelledCount += 1;
       remember({ action: "cancel", jobId: job.id, contactId: job.contactId, jobType: job.type, reason });
@@ -2176,6 +2178,30 @@ class SmsBot {
         finishedAt: now.toISOString()
       });
       if (contact) await this.recordDecision(contact, "skipped", reason, { jobId: job.id, jobType: job.type });
+    };
+    const clearStaleNoShowMarker = async (contact, reason) => {
+      if (!contact?.appointmentNoShowAt || isNoShowRecoveryContact(contact)) return contact;
+      if (staleNoShowMarkerRepairs.has(contact.id)) return contact;
+      const patched = { ...contact, ...clearActiveNoShowRecoveryPatch() };
+      if (dryRun) {
+        staleNoShowMarkerRepairs.add(contact.id);
+        remember({ action: "repair", contactId: contact.id, reason });
+        return contact;
+      }
+      const updated = await this.store.upsertContact(patched);
+      staleNoShowMarkerRepairs.add(contact.id);
+      remember({ action: "repair", contactId: contact.id, reason });
+      contacts.set(contact.id, updated);
+      await this.recordDecision(updated, "repaired", reason, {
+        trigger: "resume_prep",
+        beforeStatus: contact.engagementStatus || "",
+        afterStatus: updated.engagementStatus || "",
+        meta: {
+          previousAppointmentNoShowAt: contact.appointmentNoShowAt || "",
+          appointmentId: contact.appointmentId || ""
+        }
+      });
+      return updated;
     };
     const rescheduleJob = async (job, runAt, reason, contact = null) => {
       summary.rescheduledCount += 1;
@@ -2264,8 +2290,14 @@ class SmsBot {
         summary.keptCount += 1;
         continue;
       }
-      if (job.type === "backup_no_show_reminder" && contact.engagementStatus !== ENGAGEMENT.MISSED_CALL) {
-        await cancelJob(job, "resume_prep_stale_backup_no_show_reminder", contact);
+      if (isNoShowRecoveryJob(job) && !isCurrentNoShowRecoveryJob(contact, job)) {
+        const reason =
+          job.type === "backup_no_show_reminder"
+            ? "resume_prep_stale_backup_no_show_reminder"
+            : "resume_prep_stale_no_show_recovery_job";
+        await cancelJob(job, reason, contact);
+        if (isNoShowRecoveryContact(contact)) activeNoShowRecoveryRepairs.add(contact.id);
+        await clearStaleNoShowMarker(contact, "resume_prep_stale_no_show_marker_cleared");
         continue;
       }
       if (interactiveRelease) {
@@ -2292,6 +2324,55 @@ class SmsBot {
         cadenceSlot === "am" ? "resume_prep_am_cadence_only" : "resume_prep_pm_cadence_only",
         contact
       );
+    }
+
+    for (const contact of allContacts) {
+      if (!contact?.id || !isNoShowRecoveryContact(contact) || !canRepairNoShowRecoveryForContact(contact)) continue;
+      const contactJobs = this.store?.listJobs ? await this.store.listJobs(contact.id) : [];
+      const hasCurrentNoShowRecoveryJob = contactJobs.some(
+        (job) => job.status === "pending" && isNoShowRecoveryJob(job) && isCurrentNoShowRecoveryJob(contact, job)
+      );
+      if (!hasCurrentNoShowRecoveryJob) activeNoShowRecoveryRepairs.add(contact.id);
+    }
+
+    for (const contactId of activeNoShowRecoveryRepairs) {
+      const contact = await getContact(contactId);
+      if (!contact) continue;
+      if (!canRepairNoShowRecoveryForContact(contact)) {
+        summary.skippedCount += 1;
+        remember({ action: "skip", contactId: contact.id, reason: "resume_prep_no_show_recovery_rebuild_blocked" });
+        if (!dryRun) {
+          await this.recordDecision(contact, "skipped", "resume_prep_no_show_recovery_rebuild_blocked", {
+            trigger: "resume_prep",
+            meta: {
+              appointmentId: contact.appointmentId || "",
+              automationPauseReason: contact.automationPauseReason || "",
+              humanEscalationStage: contact.humanEscalationStage || "",
+              noShowCount: contact.noShowCount || 0
+            }
+          });
+        }
+        continue;
+      }
+      const contactJobs = this.store?.listJobs ? await this.store.listJobs(contact.id) : [];
+      const hasCurrentNoShowRecoveryJob = contactJobs.some(
+        (job) => job.status === "pending" && isNoShowRecoveryJob(job) && isCurrentNoShowRecoveryJob(contact, job)
+      );
+      if (hasCurrentNoShowRecoveryJob) continue;
+      summary.rebuiltReminderCount += 1;
+      remember({ action: "repair", contactId: contact.id, reason: "resume_prep_missing_no_show_recovery_jobs_recreated" });
+      if (dryRun) continue;
+      const hasBackupReminderPlan = await this.scheduleBackupNoShowReminders(contact);
+      await this.scheduleNoShowFollowUps(contact, { skipEarlySameDay: hasBackupReminderPlan });
+      await this.recordDecision(contact, "repaired", "resume_prep_missing_no_show_recovery_jobs_recreated", {
+        trigger: "resume_prep",
+        meta: { backupFlow: hasBackupReminderPlan }
+      });
+    }
+
+    for (const contact of allContacts) {
+      if (!contact?.appointmentNoShowAt || isNoShowRecoveryContact(contact)) continue;
+      await clearStaleNoShowMarker(contact, "resume_prep_stale_no_show_marker_cleared_without_jobs");
     }
 
     for (const contact of allContacts) {
@@ -7091,7 +7172,7 @@ class SmsBot {
     const healed = [];
     for (const raw of contacts) {
       let contact = raw;
-      const jobs = contact?.id ? await this.store.listJobs(contact.id) : [];
+      let jobs = contact?.id ? await this.store.listJobs(contact.id) : [];
       const canRepairAppointmentReminders = canRunAppointmentSupportJob(contact, "appointment_reminder");
       const canRepairNoShowRecovery = canRunAppointmentSupportJob(contact, "missed_call_followup");
       const terminalOrHardPaused =
@@ -7109,6 +7190,46 @@ class SmsBot {
         const appointmentDate = contact.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
         const appointmentFuture =
           appointmentDate && !Number.isNaN(appointmentDate.getTime()) && appointmentDate > addMinutes(new Date(), 2);
+        let clearedStaleNoShowMarker = false;
+        const staleNoShowJobs = jobs.filter(
+          (job) => job.status === "pending" && isNoShowRecoveryJob(job) && !isCurrentNoShowRecoveryJob(contact, job)
+        );
+        if (staleNoShowJobs.length) {
+          const staleNoShowJobIds = new Set(staleNoShowJobs.map((job) => job.id));
+          await this.store.cancelJobsForContact(
+            contact.id,
+            "stale_no_show_recovery_after_appointment_sync",
+            (job) => staleNoShowJobIds.has(job.id)
+          );
+          jobs = jobs.map((job) =>
+            staleNoShowJobIds.has(job.id)
+              ? { ...job, status: "cancelled", cancelReason: "stale_no_show_recovery_after_appointment_sync" }
+              : job
+          );
+          if (contact.appointmentNoShowAt && !isNoShowRecoveryContact(contact)) {
+            contact = await this.store.upsertContact({
+              ...contact,
+              ...clearActiveNoShowRecoveryPatch()
+            });
+            await this.recordDecision(contact, "repaired", "stale_no_show_marker_cleared", {
+              trigger: "heal_stuck_contacts",
+              meta: { staleJobCount: staleNoShowJobs.length }
+            });
+            clearedStaleNoShowMarker = true;
+            healed.push({ contactId: contact.id, action: "cleared_stale_no_show_marker" });
+          }
+          healed.push({ contactId: contact.id, action: "cancelled_stale_no_show_recovery", count: staleNoShowJobs.length });
+        }
+        if (!clearedStaleNoShowMarker && contact.appointmentNoShowAt && !isNoShowRecoveryContact(contact)) {
+          contact = await this.store.upsertContact({
+            ...contact,
+            ...clearActiveNoShowRecoveryPatch()
+          });
+          await this.recordDecision(contact, "repaired", "stale_no_show_marker_cleared_without_jobs", {
+            trigger: "heal_stuck_contacts"
+          });
+          healed.push({ contactId: contact.id, action: "cleared_stale_no_show_marker_without_jobs" });
+        }
         const hasCurrentReminder = jobs.some(
           (job) => job.status === "pending" && job.type === "appointment_reminder" && isCurrentAppointmentReminderJob(contact, job, this.config)
         );
