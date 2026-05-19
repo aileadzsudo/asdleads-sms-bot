@@ -6434,7 +6434,7 @@ class SmsBot {
       lastHumanManagedInboundMessage: message,
       lastHumanManagedInboundAt: new Date().toISOString()
     });
-    if (await this.hasRecentEscalationForMessage(updated.id, reason, message)) {
+    if (await this.hasRecentEscalationForMessage(updated.id, "", message)) {
       await this.recordDecision(updated, "skipped", "duplicate_human_managed_inbound_suppressed", {
         trigger: "inbound_sms",
         message,

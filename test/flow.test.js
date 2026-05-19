@@ -2323,6 +2323,54 @@ test("duplicate inbound replies on escalated contacts are suppressed", async () 
   }
 });
 
+test("human-managed escalation suppresses a message already alerted by another escalation path", async () => {
+  const { bot, store } = makeBot();
+  const originalSendEscalatedInbound = slack.sendEscalatedInbound;
+  const originalSendEscalation = slack.sendEscalation;
+  let escalatedInboundAlerts = 0;
+  let genericEscalationAlerts = 0;
+  slack.sendEscalatedInbound = async () => {
+    escalatedInboundAlerts += 1;
+    return { ok: true };
+  };
+  slack.sendEscalation = async () => {
+    genericEscalationAlerts += 1;
+    return { ok: true };
+  };
+  try {
+    const contact = store.upsertContact({
+      id: "cross-path-escalation",
+      ghlContactId: "cross-path-escalation",
+      name: "Cross Path",
+      phone: "+15550000155",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      humanEscalationStatus: true,
+      humanEscalationStage: "human_review_pending",
+      escalationReason: "human_request",
+      lastInboundMessage: "Can someone call me?"
+    });
+
+    await bot.notifyEscalatedInboundReply(contact, "04/20/23 I think their insurance agent is in contact with me");
+    await bot.notifyHumanManagedInbound(
+      store.getContact("cross-path-escalation"),
+      "outside_question",
+      "04/20/23 I think their insurance agent is in contact with me"
+    );
+
+    assert.equal(escalatedInboundAlerts, 1);
+    assert.equal(genericEscalationAlerts, 0);
+    assert.equal(store.data.escalations.filter((item) => item.contactId === "cross-path-escalation").length, 1);
+    assert.equal(
+      store.data.decisionLogs.some((item) => item.reason === "duplicate_human_managed_inbound_suppressed"),
+      true
+    );
+  } finally {
+    slack.sendEscalatedInbound = originalSendEscalatedInbound;
+    slack.sendEscalation = originalSendEscalation;
+  }
+});
+
 test("human escalation SLA jobs are tracked silently instead of posting bot-error Slack alerts", async () => {
   const { bot, store } = makeBot();
   let botErrorCount = 0;
