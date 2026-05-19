@@ -1999,20 +1999,68 @@ test("inbound message does not blank existing contact fields", async () => {
   assert.equal(store.getContact("c4").timezone, "America/New_York");
 });
 
-test("new inbound reply is ignored until contact is enrolled in bot", async () => {
+test("new inbound reply outside an enrolled bot flow is escalated to human", async () => {
   const { bot, store } = makeBot();
+  const originalSendEscalation = slack.sendEscalation;
+  let alerts = 0;
+  slack.sendEscalation = async () => {
+    alerts += 1;
+    return { ok: true };
+  };
 
-  const contact = await bot.handleInboundSms({
-    contactId: "c5",
-    name: "Riley",
-    phone: "+15550000004",
-    message: "No the other driver was at fault"
-  });
+  try {
+    const contact = await bot.handleInboundSms({
+      contactId: "c5",
+      name: "Riley",
+      phone: "+15550000004",
+      message: "No the other driver was at fault"
+    });
 
-  assert.equal(contact.engagementStatus, undefined);
-  assert.equal(store.getContact("c5"), null);
-  assert.equal(store.data.messages.length, 0);
-  assert.equal(store.getSetting("last_ignored_inbound_sms").value.reason, "contact_not_enrolled_in_bot");
+    assert.equal(contact.engagementStatus, ENGAGEMENT.ESCALATED_TO_HUMAN);
+    assert.equal(contact.humanEscalationStatus, true);
+    assert.equal(alerts, 1);
+    assert.equal(store.data.messages.length, 1);
+    assert.equal(store.data.escalations.length, 1);
+    assert.equal(store.getSetting("last_unmanaged_inbound_sms").value.reason, "unmanaged_inbound_message");
+  } finally {
+    slack.sendEscalation = originalSendEscalation;
+  }
+});
+
+test("duplicate unmanaged inbound replies are suppressed after first escalation", async () => {
+  const { bot, store } = makeBot();
+  const originalSendEscalation = slack.sendEscalation;
+  const originalSendEscalatedInbound = slack.sendEscalatedInbound;
+  let alerts = 0;
+  slack.sendEscalation = async () => {
+    alerts += 1;
+    return { ok: true };
+  };
+  slack.sendEscalatedInbound = async () => {
+    alerts += 1;
+    return { ok: true };
+  };
+
+  try {
+    await bot.handleInboundSms({
+      contactId: "unmanaged-repeat",
+      name: "Unmanaged Repeat",
+      phone: "+15550000151",
+      message: "What are your business hours to call"
+    });
+    await bot.handleInboundSms({
+      contactId: "unmanaged-repeat",
+      name: "Unmanaged Repeat",
+      phone: "+15550000151",
+      message: " what are your business hours to call "
+    });
+
+    assert.equal(alerts, 1);
+    assert.equal(store.data.escalations.filter((item) => item.contactId === "unmanaged-repeat").length, 1);
+  } finally {
+    slack.sendEscalation = originalSendEscalation;
+    slack.sendEscalatedInbound = originalSendEscalatedInbound;
+  }
 });
 
 test("call ask avoids today language late at night", () => {
@@ -2046,7 +2094,8 @@ test("signed contacts are escalated instead of continuing bot automation", async
 
   assert.equal(contact.automationPaused, true);
   assert.equal(contact.automationPauseReason, "signed_tag");
-  assert.equal(store.getContact("signed-1").humanEscalationStatus, undefined);
+  assert.equal(store.getContact("signed-1").humanEscalationStatus, true);
+  assert.equal(store.data.escalations.some((item) => item.reason === "inbound_on_signed_contact"), true);
 });
 
 test("signed tag prevents no-response outreach from starting", async () => {
@@ -2227,6 +2276,48 @@ test("new inbound replies on escalated contacts notify Slack without resuming bo
     assert.equal(alerts, 1);
     assert.equal(store.data.escalations.filter((item) => item.contactId === "escalated-typing").length, 1);
     assert.equal(store.getContact("escalated-typing").lastHumanManagedInboundMessage, "Also my neck is hurting badly");
+  } finally {
+    slack.sendEscalatedInbound = originalSendEscalatedInbound;
+  }
+});
+
+test("duplicate inbound replies on escalated contacts are suppressed", async () => {
+  const { bot, store } = makeBot();
+  const originalSendEscalatedInbound = slack.sendEscalatedInbound;
+  let alerts = 0;
+  slack.sendEscalatedInbound = async () => {
+    alerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "escalated-repeat",
+      ghlContactId: "escalated-repeat",
+      name: "Escalated Repeat",
+      phone: "+15550000150",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      humanEscalationStatus: true,
+      humanEscalationStage: "human_review_pending",
+      escalationReason: "human_request",
+      lastInboundMessage: "Can someone call me?"
+    });
+
+    await bot.handleInboundSms({
+      contactId: "escalated-repeat",
+      message: "What are your business hours to call"
+    });
+    await bot.handleInboundSms({
+      contactId: "escalated-repeat",
+      message: "  What are your business hours to call  "
+    });
+
+    assert.equal(alerts, 1);
+    assert.equal(store.data.escalations.filter((item) => item.contactId === "escalated-repeat").length, 1);
+    assert.equal(
+      store.data.decisionLogs.some((item) => item.reason === "duplicate_escalated_inbound_suppressed"),
+      true
+    );
   } finally {
     slack.sendEscalatedInbound = originalSendEscalatedInbound;
   }
@@ -3467,7 +3558,7 @@ test("return to bot at scheduling reuses recent call time", async () => {
   assert.match(store.getContact("return-call-time").lastOutboundMessage, /backup time/i);
 });
 
-test("NQ tag pauses automation without lead escalation", async () => {
+test("NQ tag pauses automation and routes inbound to human without bot reply", async () => {
   const { bot, store } = makeBot();
   store.upsertContact({
     id: "nq-1",
@@ -3484,7 +3575,8 @@ test("NQ tag pauses automation without lead escalation", async () => {
 
   assert.equal(contact.automationPaused, true);
   assert.equal(contact.automationPauseReason, "nq_tag");
-  assert.equal(contact.humanEscalationStatus, undefined);
+  assert.equal(contact.humanEscalationStatus, true);
+  assert.equal(store.data.escalations.some((item) => item.reason === "inbound_on_nq_contact"), true);
   assert.equal(Object.values(store.data.jobs).every((job) => job.status === "cancelled"), true);
 });
 

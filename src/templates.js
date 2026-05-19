@@ -95,9 +95,9 @@ const reengagementTemplates = {
     7: "Last check from me on this, [NAME]. If you got medical treatment after the accident, reply yes. If not, reply no."
   },
   after_call_booking: {
-    1: "Hey [NAME] 👋 we were right at the point of getting you connected. What time works best for a quick Specialist call?",
-    2: "Hi [NAME], William here. The call is usually quick, about 10 minutes, and can help you understand your options 📞 What time today or tomorrow works?",
-    3: "[NAME], I do not want this to fall through after you already shared enough for us to help. Send me a good call time and I’ll try to get you locked in."
+    1: "Hey [NAME] 👋 we were right at the point of getting you connected. The Specialist call can help explain what compensation options may be open. What time works today?",
+    2: "Hi [NAME], William here. Insurance companies often move fast before people know what a claim may be worth. Can we get you answers with a quick call today or tomorrow? 📞",
+    3: "[NAME], you may be sitting on compensation you do not even know you are entitled to 💰 Send me a good call time and I’ll try to get you locked in."
   }
 };
 
@@ -136,18 +136,18 @@ const persistentReengagementTemplates = {
   },
   after_call_booking: {
     day_1_am: reengagementTemplates.after_call_booking[1],
-    day_1_pm: "Hey [NAME], I can still get a Specialist on the phone with you 📞 What time today works best?",
+    day_1_pm: "Hey [NAME], I do not want this to stall when we are already at the call step. What time today can a Specialist reach you? 📞",
     day_2_am: reengagementTemplates.after_call_booking[2],
-    day_2_pm: "[NAME], if today got busy, no problem. What time tomorrow would be easier for a quick call?",
+    day_2_pm: "[NAME], has the insurance company reached out yet? If so, it is worth talking before accepting anything too quickly. What time works for a quick call?",
     day_3_am: reengagementTemplates.after_call_booking[3],
-    day_3_pm: "Quick check: would morning, afternoon, or evening be better for the Specialist to call?",
-    day_4_am: "Hey [NAME], William here. I do not want you to miss the chance to get answers. Send me a time that works for a quick call.",
-    day_4_pm: "Still holding this open for you. Even a rough window like after 2 or tomorrow morning helps me get you connected.",
-    day_5_am: "[NAME], I can still help get this on the calendar. What time should I try to reserve for you?",
-    day_5_pm: "What time should the Specialist call you, [NAME]? A specific time is best, but a small window works too.",
-    day_6_am: "Morning [NAME], quick scheduling check: is there a better day or time for your Specialist call?",
-    day_6_pm: "Reply with any time that works today or tomorrow and I can help get the call set 📞",
-    day_7_am: "Hi [NAME], last try on my end for scheduling. Do you still want to speak with a Specialist about your case?",
+    day_3_pm: "I know accident stuff can be stressful, [NAME]. A free call can give you clarity in a few minutes. Would morning, afternoon, or evening be better?",
+    day_4_am: "Hey [NAME], William here. People often leave money on the table because they never ask what their case may qualify for. Send me a time for the Specialist call.",
+    day_4_pm: "Still holding this open for you. Even a rough window like after 2 or tomorrow morning helps me get you connected before momentum is lost.",
+    day_5_am: "[NAME], if you had pain, treatment, or insurance pressure after the accident, it is worth a quick conversation. What time should I try to reserve?",
+    day_5_pm: "Insurance may not explain every option available to you, [NAME]. A quick Specialist call can. What time works today or tomorrow?",
+    day_6_am: "Morning [NAME], I still want to help you understand the compensation side before this gets pushed aside. Is there a better day or time for your call?",
+    day_6_pm: "Reply with any time that works today or tomorrow and I can help get the call set 📞 The call is free and usually quick.",
+    day_7_am: "Hi [NAME], last try on my end for scheduling. Do you still want a free Specialist call to understand your accident options?",
     day_7_pm: "Last message from me on this for now. If you still want help, send me a good call time and I’ll try to get you back on the calendar."
   }
 };
@@ -423,19 +423,19 @@ const spanishTemplates = {
       day_7_pm: "Último mensaje sobre esto por ahora, [NAME]. Si recibiste tratamiento después del accidente, responde sí y todavía puedo ayudar."
     },
     after_call_booking: {
-      day_1_am: "Hola [NAME] 👋 estábamos justo en el punto de conectarte. ¿Qué hora te funciona mejor para una llamada rápida con un Especialista?",
-      day_1_pm: "Hola [NAME], todavía puedo conectarte con un Especialista 📞 ¿Qué hora te funciona mejor hoy?",
-      day_2_am: "Hola [NAME], William por aquí. La llamada normalmente es rápida, unos 10 minutos, y puede ayudarte a entender tus opciones 📞 ¿Qué hora hoy o mañana te funciona?",
-      day_2_pm: "[NAME], si hoy se complicó, no hay problema. ¿Qué hora mañana sería más fácil para una llamada rápida?",
-      day_3_am: "[NAME], no quiero que esto se pierda después de que ya compartiste suficiente para que podamos ayudar. Mándame una buena hora para llamar y trataré de dejarte confirmado.",
-      day_3_pm: "Pregunta rápida: ¿te funciona mejor mañana, tarde o noche para que te llame el Especialista?",
-      day_4_am: "Hola [NAME], William por aquí. No quiero que pierdas la oportunidad de recibir respuestas. Mándame una hora para una llamada rápida.",
-      day_4_pm: "Todavía mantengo esto abierto para ti. Incluso una ventana como después de las 2 o mañana en la mañana me ayuda a conectarte.",
-      day_5_am: "[NAME], todavía puedo ayudarte a poner esto en el calendario. ¿Qué hora intento reservar para ti?",
-      day_5_pm: "¿A qué hora debe llamarte el Especialista, [NAME]? Una hora específica es mejor, pero una ventana corta también funciona.",
-      day_6_am: "Buenos días [NAME], revisión rápida de horario: ¿hay un mejor día u hora para tu llamada con el Especialista?",
-      day_6_pm: "Responde con cualquier hora que funcione hoy o mañana y puedo ayudarte a dejar la llamada lista 📞",
-      day_7_am: "Hola [NAME], último intento de mi parte para programar. ¿Todavía quieres hablar con un Especialista sobre tu caso?",
+      day_1_am: "Hola [NAME] 👋 estábamos justo en el punto de conectarte. La llamada puede ayudarte a entender qué opciones de compensación podrías tener. ¿Qué hora funciona hoy?",
+      day_1_pm: "Hola [NAME], no quiero que esto se detenga cuando ya estamos en el paso de la llamada. ¿A qué hora puede llamarte un Especialista hoy? 📞",
+      day_2_am: "Hola [NAME], William por aquí. Las aseguranzas a veces se mueven rápido antes de que la gente sepa cuánto puede valer su reclamo. ¿Podemos darte respuestas con una llamada rápida hoy o mañana? 📞",
+      day_2_pm: "[NAME], ¿la aseguranza ya se comunicó contigo? Si sí, vale la pena hablar antes de aceptar algo demasiado rápido. ¿Qué hora funciona para una llamada rápida?",
+      day_3_am: "[NAME], podrías tener compensación que ni sabes que te corresponde 💰 Mándame una buena hora para llamar y trataré de dejarte confirmado.",
+      day_3_pm: "Sé que todo esto después de un accidente puede ser estresante, [NAME]. Una llamada gratis puede darte claridad en pocos minutos. ¿Te funciona mejor mañana, tarde o noche?",
+      day_4_am: "Hola [NAME], William por aquí. Muchas personas dejan dinero sin reclamar porque nunca preguntan para qué podría calificar su caso. Mándame una hora para la llamada.",
+      day_4_pm: "Todavía mantengo esto abierto para ti. Incluso una ventana como después de las 2 o mañana en la mañana me ayuda a conectarte antes de perder el avance.",
+      day_5_am: "[NAME], si tuviste dolor, tratamiento o presión de la aseguranza después del accidente, vale la pena una conversación rápida. ¿Qué hora intento reservar?",
+      day_5_pm: "La aseguranza no siempre explica todas tus opciones, [NAME]. Una llamada rápida con un Especialista sí puede ayudar. ¿Qué hora funciona hoy o mañana?",
+      day_6_am: "Buenos días [NAME], todavía quiero ayudarte a entender la parte de compensación antes de que esto se quede atrás. ¿Hay un mejor día u hora para tu llamada?",
+      day_6_pm: "Responde con cualquier hora que funcione hoy o mañana y puedo ayudarte a dejar la llamada lista 📞 La llamada es gratis y normalmente rápida.",
+      day_7_am: "Hola [NAME], último intento de mi parte para programar. ¿Todavía quieres una llamada gratis con un Especialista para entender tus opciones?",
       day_7_pm: "Último mensaje por ahora. Si todavía quieres ayuda, mándame una buena hora para llamar y trataré de ponerte de nuevo en el calendario."
     }
   },

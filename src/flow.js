@@ -70,6 +70,7 @@ const GLOBAL_BOT_PAUSE_SETTING = "global_bot_pause";
 // Suppress stale chase jobs for a short grace period around appointment time while GHL/manual outcome state catches up.
 const APPOINTMENT_CHASE_SUPPRESSION_LOOKBACK_MINUTES = 12 * 60;
 const FRESH_LEAD_FOLLOW_UP_MINUTES = [15, 45, 120, 240];
+const ESCALATION_DEDUPE_WINDOW_MINUTES = 12 * 60;
 const NO_SHOW_SAME_DAY_MINUTES = [0, 120];
 const NO_SHOW_SAME_DAY_TEMPLATE_KEYS = [
   "same_day_now",
@@ -162,6 +163,13 @@ function textValue(value) {
     }
   }
   return "";
+}
+
+function normalizedEscalationText(value) {
+  return textValue(value)
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function tagLookupFailedAfter(contact, startedAt) {
@@ -3753,15 +3761,26 @@ class SmsBot {
     });
     let contact = resolution.contact;
     if (resolution.inboundNotEnrolled) {
-      await this.store.setSetting("last_ignored_inbound_sms", {
+      contact = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+        humanEscalationStatus: true,
+        humanEscalationStage: "unmanaged_inbound",
+        escalationReason: "unmanaged_inbound_message",
+        currentSequenceName: "unmanaged_inbound"
+      });
+      await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
+      await this.store.setSetting("last_unmanaged_inbound_sms", {
         contactId: contact.ghlContactId || contact.id || "",
         phone: contact.phone || "",
         name: contact.name || "",
         message: contact.lastInboundMessage || "",
-        reason: "contact_not_enrolled_in_bot",
+        reason: "unmanaged_inbound_message",
         receivedAt: new Date().toISOString()
       });
-      return contact;
+      return this.notifyHumanManagedInbound(contact, "unmanaged_inbound_message", inbound.lastInboundMessage, {
+        Action: "Contact is not in an active bot-owned NR flow. Human review needed."
+      });
     }
     await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
     if (resolution.duplicateConflict) return contact;
@@ -3881,15 +3900,28 @@ class SmsBot {
     });
     let contact = resolution.contact;
     if (resolution.inboundNotEnrolled) {
-      await this.store.setSetting("last_ignored_inbound_sms", {
+      contact = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+        humanEscalationStatus: true,
+        humanEscalationStage: "unmanaged_inbound",
+        escalationReason: "unmanaged_inbound_message",
+        currentSequenceName: "unmanaged_inbound"
+      });
+      if (!options.skipMessageRecord) {
+        await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
+      }
+      await this.store.setSetting("last_unmanaged_inbound_sms", {
         contactId: contact.ghlContactId || contact.id || "",
         phone: contact.phone || "",
         name: contact.name || "",
         message: contact.lastInboundMessage || "",
-        reason: "contact_not_enrolled_in_bot",
+        reason: "unmanaged_inbound_message",
         receivedAt: new Date().toISOString()
       });
-      return contact;
+      return this.notifyHumanManagedInbound(contact, "unmanaged_inbound_message", inbound.lastInboundMessage, {
+        Action: "Contact is not in an active bot-owned NR flow. Human review needed."
+      });
     }
     if (!options.skipMessageRecord) {
       await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
@@ -3930,15 +3962,27 @@ class SmsBot {
 
     contact = await this.hydrateContactTags(contact);
     if (hasNqTag(contact)) {
+      await this.notifyHumanManagedInbound(contact, "inbound_on_nq_contact", inbound.lastInboundMessage, {
+        Action: "Contact has NQ. Bot stayed stopped."
+      });
       return this.stopForNqTag(contact);
     }
     if (hasSignedTag(contact)) {
+      await this.notifyHumanManagedInbound(contact, "inbound_on_signed_contact", inbound.lastInboundMessage, {
+        Action: "Contact is signed. Bot stayed stopped."
+      });
       return this.stopForSignedTag(contact);
     }
     if (hasContractPendingTag(contact) && !isAppointmentSupportContext(contact)) {
+      await this.notifyHumanManagedInbound(contact, "inbound_on_contract_contact", inbound.lastInboundMessage, {
+        Action: "Contract is in progress. Bot did not restart intake."
+      });
       return this.stopForContractPendingTag(contact);
     }
     if (hasManualHumanHoldTag(contact)) {
+      await this.notifyHumanManagedInbound(contact, "inbound_on_manual_hold_contact", inbound.lastInboundMessage, {
+        Action: "Manual hold is active. Bot stayed paused."
+      });
       return this.stopForManualHoldTag(contact);
     }
     contact = await this.applyTimezoneCorrection(contact, inbound.lastInboundMessage);
@@ -6226,11 +6270,26 @@ class SmsBot {
   }
 
   async notifyEscalatedInboundReply(contact, message) {
-    if (!message || contact.lastHumanManagedInboundMessage === message) return false;
+    if (!message || normalizedEscalationText(contact.lastHumanManagedInboundMessage) === normalizedEscalationText(message)) {
+      if (message) {
+        await this.recordDecision(contact, "skipped", "duplicate_escalated_inbound_suppressed", {
+          trigger: "inbound_sms",
+          message
+        });
+      }
+      return false;
+    }
     const updated = await this.store.upsertContact({
       ...contact,
       lastInboundMessage: message
     });
+    if (await this.hasRecentEscalationForMessage(updated.id, "", message)) {
+      await this.recordDecision(updated, "skipped", "duplicate_escalated_inbound_suppressed", {
+        trigger: "inbound_sms",
+        message
+      });
+      return false;
+    }
     await this.store.addEscalation({
       contactId: updated.id,
       reason: "new_reply_after_human_escalation",
@@ -6252,6 +6311,64 @@ class SmsBot {
       });
       return false;
     }
+  }
+
+  async hasRecentEscalationForMessage(contactId, reason, message, windowMinutes = ESCALATION_DEDUPE_WINDOW_MINUTES) {
+    const normalizedMessage = normalizedEscalationText(message);
+    if (!contactId || !normalizedMessage) return false;
+    const cutoff = Date.now() - windowMinutes * 60 * 1000;
+    const escalations = await this.store.listEscalations(contactId);
+    return escalations.some((item) => {
+      const itemCreatedAt = new Date(item.createdAt || 0).getTime();
+      if (!itemCreatedAt || itemCreatedAt < cutoff) return false;
+      if (reason && item.reason !== reason) return false;
+      return normalizedEscalationText(item.lastInboundMessage) === normalizedMessage;
+    });
+  }
+
+  async notifyHumanManagedInbound(contact, reason, message, extra = {}) {
+    if (!message) return contact;
+    const updated = await this.store.upsertContact({
+      ...contact,
+      lastInboundMessage: message,
+      engagementStatus: contact.engagementStatus || ENGAGEMENT.ESCALATED_TO_HUMAN,
+      humanEscalationStatus: true,
+      humanEscalationStage: contact.humanEscalationStage || "human_managed_inbound",
+      escalationReason: reason,
+      lastHumanManagedInboundMessage: message,
+      lastHumanManagedInboundAt: new Date().toISOString()
+    });
+    if (await this.hasRecentEscalationForMessage(updated.id, reason, message)) {
+      await this.recordDecision(updated, "skipped", "duplicate_human_managed_inbound_suppressed", {
+        trigger: "inbound_sms",
+        message,
+        meta: { reason }
+      });
+      return updated;
+    }
+    await this.store.addEscalation({
+      contactId: updated.id,
+      reason,
+      lastInboundMessage: message,
+      extra
+    });
+    await this.recordDecision(updated, "escalated", reason, {
+      trigger: "inbound_sms",
+      message,
+      meta: extra
+    });
+    try {
+      await slack.sendEscalation(this.config, updated, reason, extra);
+    } catch (error) {
+      await this.notifyBotError("Slack human-managed inbound alert failed", {
+        Name: updated.name || "unknown",
+        Phone: updated.phone || "unknown",
+        "GHL contact": updated.ghlContactId || updated.id,
+        Reason: reason,
+        Error: error.message
+      });
+    }
+    return updated;
   }
 
   async notifyAppointmentNotice(contact, title, extra = {}) {
