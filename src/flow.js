@@ -2075,6 +2075,16 @@ function isPastAppointmentReminderJob(contact, job = {}, now = new Date()) {
   return Boolean(appointment && appointment <= now);
 }
 
+function isFiveMinuteAppointmentReminder(job = {}) {
+  return /FiveMinutes$/.test(String(job.payload?.templateKey || ""));
+}
+
+function appointmentDueAlertKey(contact = {}, job = {}) {
+  const appointmentIso = contact.preferredCallTimeIso || job.payload?.appointmentIso || "";
+  const appointmentId = contact.appointmentId || "no-appointment-id";
+  return `${appointmentId}:${appointmentIso}:five_minute`;
+}
+
 function hasScheduledAppointmentSuppressionContext(contact = {}, now = new Date()) {
   if (!contact || isNoShowRecoveryContact(contact)) return false;
   const appointment = contact.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
@@ -6483,6 +6493,52 @@ class SmsBot {
     }
   }
 
+  async notifyAppointmentDue(contact, job) {
+    if (!isFiveMinuteAppointmentReminder(job)) return false;
+    const alertKey = appointmentDueAlertKey(contact, job);
+    if (contact.lastAppointmentDueAlertKey === alertKey) {
+      await this.recordDecision(contact, "skipped", "appointment_due_slack_duplicate_suppressed", {
+        jobId: job.id,
+        jobType: job.type,
+        meta: { appointmentDueAlertKey: alertKey }
+      });
+      return false;
+    }
+    try {
+      await slack.sendAppointmentDue(this.config, contact, {
+        Time: contact.preferredCallTimeIso
+          ? formatTimeOnlyWithZone(new Date(contact.preferredCallTimeIso), contact, this.config)
+          : contact.preferredCallTime || "unknown",
+        Type: contact.appointmentType || "initial",
+        Appointment: contact.appointmentId || "unknown"
+      });
+      const updated = this.store.upsertContact({
+        ...contact,
+        lastAppointmentDueAlertKey: alertKey,
+        lastAppointmentDueAlertAt: new Date().toISOString()
+      });
+      await this.recordDecision(updated, "escalated", "appointment_due_slack_alert_sent", {
+        jobId: job.id,
+        jobType: job.type,
+        meta: {
+          appointmentDueAlertKey: alertKey,
+          appointmentType: updated.appointmentType || "initial",
+          preferredCallTimeIso: updated.preferredCallTimeIso || ""
+        }
+      });
+      return true;
+    } catch (error) {
+      await this.notifyBotError("Slack appointment due alert failed", {
+        Name: contact.name || "unknown",
+        Phone: contact.phone || "unknown",
+        "GHL contact": contact.ghlContactId || contact.id,
+        "Appointment ID": contact.appointmentId || "unknown",
+        Error: error.message
+      });
+      return false;
+    }
+  }
+
   async scheduleAppointmentReminders(contact) {
     if (!contact.preferredCallTimeIso) return;
     await this.store.cancelJobsForContact(contact.id, "appointment reminders replaced", (job) => job.type === "appointment_reminder");
@@ -8212,6 +8268,7 @@ class SmsBot {
           ? formatTimeOnlyWithZone(new Date(contact.preferredCallTimeIso), contact, this.config)
           : contact.preferredCallTime || "your scheduled time"
       });
+      await this.notifyAppointmentDue(this.store.getContact(contact.id) || contact, job);
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
     if (job.type === "missed_call_followup") {

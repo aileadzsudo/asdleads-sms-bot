@@ -1553,6 +1553,58 @@ test("appointment reminder copy uses time only instead of repeating the full dat
   assert.doesNotMatch(store.getContact("reminder-time-only").lastOutboundMessage, /Mon, May|Tue, May|Wed, May|Thu, May|Fri, May|Sat, May|Sun, May/);
 });
 
+test("five minute appointment reminder alerts leads channel once", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentDue = slack.sendAppointmentDue;
+  const alerts = [];
+  slack.sendAppointmentDue = async (_config, contact, extra) => {
+    alerts.push({ contact, extra });
+    return { ok: true };
+  };
+  try {
+    const appointmentDate = new Date(Date.now() + 5 * 60 * 1000);
+    const appointment = appointmentDate.toISOString();
+    const runAt = new Date(appointmentDate.getTime() - 5 * 60 * 1000).toISOString();
+    store.upsertContact({
+      id: "appointment-due-alert",
+      ghlContactId: "appointment-due-alert",
+      name: "Due Alert",
+      phone: "+15550000183",
+      timezone: "America/Chicago",
+      appointmentId: "appt-due-alert",
+      appointmentType: "qualified_follow_up",
+      preferredCallTime: "Today 3:00 PM CST",
+      preferredCallTimeIso: appointment
+    });
+    const firstJob = store.addJob({
+      type: "appointment_reminder",
+      contactId: "appointment-due-alert",
+      runAt,
+      payload: { templateKey: "sameDayFiveMinutes", appointmentIso: appointment }
+    });
+
+    await bot.runDueJob(firstJob);
+
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].contact.name, "Due Alert");
+    assert.equal(alerts[0].extra.Appointment, "appt-due-alert");
+    assert.equal(store.getContact("appointment-due-alert").lastAppointmentDueAlertKey, `appt-due-alert:${appointment}:five_minute`);
+
+    const duplicateJob = store.addJob({
+      type: "appointment_reminder",
+      contactId: "appointment-due-alert",
+      runAt,
+      payload: { templateKey: "sameDayFiveMinutes", appointmentIso: appointment }
+    });
+    await bot.runDueJob(duplicateJob);
+
+    assert.equal(alerts.length, 1);
+    assert.equal(store.data.jobs[duplicateJob.id].status, "done");
+  } finally {
+    slack.sendAppointmentDue = originalSendAppointmentDue;
+  }
+});
+
 test("stale appointment reminder is skipped when appointment time changes", async () => {
   const { bot, store } = makeBot();
   const localTomorrow = getLocalParts(addDays(new Date(), 1), "America/Chicago");
