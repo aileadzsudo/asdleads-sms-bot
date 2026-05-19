@@ -3702,6 +3702,136 @@ test("queued outbound refreshes GHL tags before sending and skips newly NQ conta
   }
 });
 
+test("queued outbound is blocked when GHL has no automation tag or disposition", async () => {
+  const { bot, store } = makeBot();
+  const originalGetContact = ghl.getContact;
+  const originalSearchContactsByPhone = ghl.searchContactsByPhone;
+  const originalSendSms = ghl.sendSms;
+  bot.config.ghl.token = "test-token";
+  let sent = 0;
+  ghl.getContact = async () => ({ contact: { tags: [] } });
+  ghl.searchContactsByPhone = async () => ({ contacts: [] });
+  ghl.sendSms = async () => {
+    sent += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "no-tag-cadence",
+      ghlContactId: "no-tag-cadence",
+      name: "No Tag Cadence",
+      phone: "+15550000152",
+      tags: ["NR"],
+      engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+      qualificationProgress: QUALIFICATION.NEEDS_FAULT
+    });
+    const job = store.addJob({
+      type: "send_cold_template",
+      contactId: "no-tag-cadence",
+      runAt: new Date().toISOString(),
+      payload: { templateKey: "day_1_pm", day: 1, slot: "pm" }
+    });
+
+    await bot.runDueJob(job);
+
+    const contact = store.getContact("no-tag-cadence");
+    assert.equal(sent, 0);
+    assert.equal(contact.automationPaused, true);
+    assert.equal(contact.automationPauseReason, "missing_bot_authorization");
+    assert.equal(contact.lastOutboundMessage, undefined);
+    assert.equal(store.data.jobs[job.id].status, "skipped");
+    assert.equal(
+      store.listDecisionLogs("no-tag-cadence").some((log) => log.reason === "missing_bot_authorization_no_send"),
+      true
+    );
+  } finally {
+    ghl.getContact = originalGetContact;
+    ghl.searchContactsByPhone = originalSearchContactsByPhone;
+    ghl.sendSms = originalSendSms;
+  }
+});
+
+test("NR disposition authorizes initial SMS even when current GHL tags are empty", async () => {
+  const { bot, store } = makeBot();
+  const originalGetContact = ghl.getContact;
+  const originalSearchContactsByPhone = ghl.searchContactsByPhone;
+  const originalSendSms = ghl.sendSms;
+  bot.config.ghl.token = "test-token";
+  let sent = 0;
+  ghl.getContact = async () => ({ contact: { tags: [] } });
+  ghl.searchContactsByPhone = async () => ({ contacts: [] });
+  ghl.sendSms = async () => {
+    sent += 1;
+    return { ok: true };
+  };
+  try {
+    const contact = await bot.startFromNoResponseDisposition({
+      contactId: "nr-disposition-no-tags",
+      name: "Disposition Only",
+      phone: "+15550000153",
+      disposition: "NR"
+    });
+
+    assert.equal(sent, 1);
+    assert.equal(contact.botMessagingAuthorization, "no_response_disposition");
+    assert.equal(contact.engagementStatus, ENGAGEMENT.INITIAL_SMS_SENT);
+    assert.match(store.getContact("nr-disposition-no-tags").lastOutboundMessage, /date of the accident/i);
+  } finally {
+    ghl.getContact = originalGetContact;
+    ghl.searchContactsByPhone = originalSearchContactsByPhone;
+    ghl.sendSms = originalSendSms;
+  }
+});
+
+test("appointment reminders still send without NR tags when an appointment exists", async () => {
+  const { bot, store } = makeBot();
+  const originalGetContact = ghl.getContact;
+  const originalSearchContactsByPhone = ghl.searchContactsByPhone;
+  const originalSendSms = ghl.sendSms;
+  bot.config.ghl.token = "test-token";
+  let sent = 0;
+  ghl.getContact = async () => ({ contact: { tags: [] } });
+  ghl.searchContactsByPhone = async () => ({ contacts: [] });
+  ghl.sendSms = async () => {
+    sent += 1;
+    return { ok: true };
+  };
+  try {
+    const reminderRunAt = new Date();
+    const appointmentIso = new Date(reminderRunAt.getTime() + 60 * 60 * 1000).toISOString();
+    store.upsertContact({
+      id: "appointment-no-nr-tag",
+      ghlContactId: "appointment-no-nr-tag",
+      name: "Appointment No Tag",
+      phone: "+15550000154",
+      tags: [],
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.COMPLETE,
+      preferredCallTime: "Today 3:00 PM CST",
+      preferredCallTimeIso: appointmentIso,
+      appointmentId: "appointment-no-tag-event"
+    });
+    const job = store.addJob({
+      type: "appointment_reminder",
+      contactId: "appointment-no-nr-tag",
+      runAt: reminderRunAt.toISOString(),
+      payload: { templateKey: "sameDayOneHour", appointmentIso }
+    });
+
+    await bot.runDueJob(job);
+
+    const contact = store.getContact("appointment-no-nr-tag");
+    assert.equal(sent, 1);
+    assert.match(contact.lastOutboundMessage, /call is coming up/i);
+    assert.notEqual(contact.automationPauseReason, "missing_bot_authorization");
+    assert.equal(store.data.jobs[job.id].status, "done");
+  } finally {
+    ghl.getContact = originalGetContact;
+    ghl.searchContactsByPhone = originalSearchContactsByPhone;
+    ghl.sendSms = originalSendSms;
+  }
+});
+
 test("date reply to initial outreach is accepted and advances to fault question", async () => {
   const { bot, store } = makeBot();
   await bot.startFromNoResponseDisposition({

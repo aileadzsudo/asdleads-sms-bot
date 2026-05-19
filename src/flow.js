@@ -172,6 +172,12 @@ function normalizedEscalationText(value) {
     .trim();
 }
 
+function isNoResponseDispositionValue(value) {
+  return ["nr", "no response", "no_response", "no-response"].includes(
+    textValue(value).toLowerCase().trim().replace(/\s+/g, " ")
+  );
+}
+
 function tagLookupFailedAfter(contact, startedAt) {
   if (!contact?.lastTagLookupFailedAt || !startedAt) return false;
   return new Date(contact.lastTagLookupFailedAt).getTime() >= new Date(startedAt).getTime();
@@ -237,6 +243,7 @@ function normalizePayload(payload, config) {
     leadSource: payload.leadSource || payload.source || payload.lead_source || payload["contact.source"] || source.leadSource || source.source || source.lead_source,
     ghlContactLink: payload.ghlContactLink || payload.contactLink,
     tags: payload.tags || payload.contactTags || payload.tag || source.tags,
+    disposition: payload.disposition || payload.customDisposition || payload.custom_disposition || source.disposition || source.customDisposition,
     lastInboundMessage: [
       payload.message,
       payload.body,
@@ -312,6 +319,43 @@ function isAppointmentSupportContext(contact = {}) {
       contact.currentSequenceName === "appointment_synced" ||
       contact.currentSequenceName === "appointment_no_show" ||
       contact.currentSequenceName === "no_show_rebooked"
+  );
+}
+
+function hasNoResponseAutomationSignal(contact = {}) {
+  return Boolean(
+    hasAnyTag(contact, ["nr", "no_response", "no response", "no-answer", "no_answer"]) ||
+      isNoResponseDispositionValue(contact.disposition) ||
+      contact.botMessagingAuthorization === "no_response_disposition" ||
+      contact.noResponseDispositionAt
+  );
+}
+
+function hasCallOutcomeAutomationSignal(contact = {}) {
+  const recoveryNames = ["call_now_no_answer", "call_dropped_recovery"];
+  return Boolean(
+    hasAnyTag(contact, ["call_no_answer", "no_answer", "call_missed", "missed_call_now", "call_drop", "call_dropped", "dropped_call"]) ||
+      recoveryNames.includes(contact.currentSequenceName) ||
+      recoveryNames.includes(contact.humanEscalationStage) ||
+      recoveryNames.includes(contact.botMessagingAuthorization)
+  );
+}
+
+function hasNoShowAutomationSignal(contact = {}) {
+  return Boolean(
+    hasAnyTag(contact, ["no_show", "appointment_no_show", "missed_appointment", "missed_call_followup"]) ||
+      isNoShowRecoveryContact(contact) ||
+      contact.botMessagingAuthorization === "appointment_no_show"
+  );
+}
+
+function hasExplicitBotOutboundAuthorization(contact = {}) {
+  if (!contact) return false;
+  return Boolean(
+    hasNoResponseAutomationSignal(contact) ||
+      isAppointmentSupportContext(contact) ||
+      hasCallOutcomeAutomationSignal(contact) ||
+      hasNoShowAutomationSignal(contact)
   );
 }
 
@@ -2962,6 +3006,27 @@ class SmsBot {
     return { ok: true };
   }
 
+  shouldEnforceBotOutboundAuthorization() {
+    return Boolean(!this.config.dryRun && this.config.ghl?.token);
+  }
+
+  async pauseForMissingBotAuthorization(contact, context = {}) {
+    const paused = await this.store.upsertContact({
+      ...contact,
+      automationPaused: true,
+      automationPauseReason: "missing_bot_authorization",
+      humanEscalationStatus: true,
+      humanEscalationStage: "missing_bot_authorization",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      currentSequenceName: ""
+    });
+    await this.store.cancelJobsForContact(paused.id, "missing bot authorization", (job) =>
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type) || job.type === "send_message"
+    );
+    await this.recordDecision(paused, "skipped", "missing_bot_authorization_no_send", context);
+    return paused;
+  }
+
   async sendBotMessage(contact, message, options = {}) {
     message = localizeMessage(message, contact);
     if (isEmptyTextToken(message)) {
@@ -3015,6 +3080,22 @@ class SmsBot {
       const duplicateTerminalContact = await this.stopIfDuplicateTerminalContact(contact, message);
       if (duplicateTerminalContact) return null;
       message = localizeMessage(message, contact);
+    }
+    if (
+      this.shouldEnforceBotOutboundAuthorization() &&
+      !options.allowWithoutAutomationSignal &&
+      !hasExplicitBotOutboundAuthorization(contact)
+    ) {
+      await this.pauseForMissingBotAuthorization(contact, {
+        message,
+        meta: {
+          templateGroup: options.templateGroup || "",
+          templateKey: options.templateKey || "",
+          jobType: options.jobType || "",
+          tags: normalizeTags(contact.tags).join(", ")
+        }
+      });
+      return null;
     }
     const outboundSafety = await this.outboundSafetyCheck(contact, message, options);
     if (!outboundSafety.ok) return null;
@@ -3546,7 +3627,10 @@ class SmsBot {
           ...normalized,
           timezone: chooseContactTimezone(existing, normalized, this.config),
           optOutStatus: existing.optOutStatus || false,
-          humanEscalationStatus: existing.humanEscalationStatus || false
+          humanEscalationStatus: existing.humanEscalationStatus || false,
+          botMessagingAuthorization: existing.botMessagingAuthorization || "no_response_disposition",
+          botMessagingAuthorizedAt: existing.botMessagingAuthorizedAt || new Date().toISOString(),
+          noResponseDispositionAt: existing.noResponseDispositionAt || new Date().toISOString()
         });
         contact = await this.hydrateContactTags(contact);
         if (hasSignedTag(contact)) return this.stopForSignedTag(contact);
@@ -3578,7 +3662,10 @@ class SmsBot {
         currentSequenceDay: 0,
         currentSequenceSlot: "",
         currentMessageCountForDay: 0,
-        sentColdTemplateKeys: []
+        sentColdTemplateKeys: [],
+        botMessagingAuthorization: "no_response_disposition",
+        botMessagingAuthorizedAt: new Date().toISOString(),
+        noResponseDispositionAt: new Date().toISOString()
       });
       await this.store.cancelJobsForContact(contact.id, "fresh no-response enrollment", (job) =>
         BOT_SEQUENCE_JOB_TYPES.includes(job.type)
@@ -3665,7 +3752,9 @@ class SmsBot {
       callOutcomeRecordedAt: new Date().toISOString(),
       awaitingSpecificCallTime: true,
       awaitingBackupTime: false,
-      currentSequenceName: "call_now_no_answer"
+      currentSequenceName: "call_now_no_answer",
+      botMessagingAuthorization: "call_now_no_answer",
+      botMessagingAuthorizedAt: existing.botMessagingAuthorizedAt || new Date().toISOString()
     });
     await this.store.cancelJobsForContact(contact.id, "call-now no-answer recovery", (job) =>
       BOT_SEQUENCE_JOB_TYPES.includes(job.type) ||
@@ -3711,7 +3800,10 @@ class SmsBot {
       optOutStatus: false,
       humanEscalationStatus: false,
       currentSequenceName: "backfill_pending",
-      backfilledAt: new Date().toISOString()
+      backfilledAt: new Date().toISOString(),
+      botMessagingAuthorization: "no_response_disposition",
+      botMessagingAuthorizedAt: new Date().toISOString(),
+      noResponseDispositionAt: new Date().toISOString()
     });
     contact = await this.hydrateContactTags(contact);
     if (hasSignedTag(contact)) return { contact: await this.stopForSignedTag(contact), status: "skipped", reason: "signed tag" };
@@ -3955,7 +4047,8 @@ class SmsBot {
       await this.store.cancelJobsForContact(contact.id, "opted out");
       await this.sendBotMessage(contact, qualificationTemplates.optOutConfirm, {
         bypassQuietHours: true,
-        allowAfterOptOut: true
+        allowAfterOptOut: true,
+        allowWithoutAutomationSignal: true
       });
       return contact;
     }
@@ -4826,7 +4919,9 @@ class SmsBot {
       callOutcomeRecordedAt: new Date().toISOString(),
       awaitingSpecificCallTime: true,
       awaitingBackupTime: false,
-      currentSequenceName: "call_dropped_recovery"
+      currentSequenceName: "call_dropped_recovery",
+      botMessagingAuthorization: "call_dropped_recovery",
+      botMessagingAuthorizedAt: contact.botMessagingAuthorizedAt || new Date().toISOString()
     });
     await this.store.cancelJobsForContact(updated.id, "call drop recovery", (job) =>
       BOT_SEQUENCE_JOB_TYPES.includes(job.type) || ["human_escalation_sla", "human_reply_timeout", "call_outcome_required"].includes(job.type)
@@ -4925,7 +5020,8 @@ class SmsBot {
       await this.store.cancelJobsForContact(opted.id, "opted out by llm");
       await this.sendBotMessage(opted, qualificationTemplates.optOutConfirm, {
         bypassQuietHours: true,
-        allowAfterOptOut: true
+        allowAfterOptOut: true,
+        allowWithoutAutomationSignal: true
       });
       return opted;
     }
@@ -6688,7 +6784,9 @@ class SmsBot {
       escalationReason: "",
       currentSequenceName: "appointment_no_show",
       currentSequenceDay: 1,
-      currentSequenceSlot: noShowCount >= 2 ? "repeat_no_show" : "no_show"
+      currentSequenceSlot: noShowCount >= 2 ? "repeat_no_show" : "no_show",
+      botMessagingAuthorization: "appointment_no_show",
+      botMessagingAuthorizedAt: contact.botMessagingAuthorizedAt || new Date().toISOString()
     });
     await this.recordNoShowWebhook(payload, {
       resolvedContactId: contact.id,
@@ -7709,6 +7807,24 @@ class SmsBot {
           : "blocked_by_contact_state";
       await this.store.updateJob(job.id, { status: "skipped", finishedAt: new Date().toISOString(), skipReason });
       if (contact) await this.recordDecision(contact, "skipped", skipReason, { jobId: job.id, jobType: job.type });
+      return;
+    }
+    if (
+      contact &&
+      outboundJobTypes.includes(job.type) &&
+      this.shouldEnforceBotOutboundAuthorization() &&
+      !hasExplicitBotOutboundAuthorization(contact)
+    ) {
+      contact = await this.pauseForMissingBotAuthorization(contact, {
+        jobId: job.id,
+        jobType: job.type,
+        meta: { tags: normalizeTags(contact.tags).join(", ") }
+      });
+      await this.store.updateJob(job.id, {
+        status: "skipped",
+        finishedAt: new Date().toISOString(),
+        skipReason: "missing_bot_authorization"
+      });
       return;
     }
     if (["initial_sms", "fresh_lead_followup", "send_cold_template", "warm_followup", "enter_reengagement", "send_reengagement_template", "appointment_reminder", "missed_call_followup", "backup_no_show_reminder"].includes(job.type)) {
