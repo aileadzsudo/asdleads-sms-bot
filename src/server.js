@@ -2446,6 +2446,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.url.startsWith("/api/test/")) {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+    }
+
     if (req.method === "GET" && req.url.startsWith("/api/test/state")) {
       const url = new URL(req.url, `http://${req.headers.host}`);
       const contactId = url.searchParams.get("contactId");
