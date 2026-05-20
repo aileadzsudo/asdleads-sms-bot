@@ -4511,6 +4511,59 @@ test("manual GHL appointment sync adopts appointment and schedules reminders", a
   assert.equal(jobs.some((job) => job.contactId === "manual-appt" && job.type === "backup_time_timeout" && job.status === "pending"), false);
 });
 
+test("manual GHL appointment sync preserves due current appointment reminders", async () => {
+  const { bot, store } = makeBot();
+  const startsAtDate = new Date(Date.now() + 59 * 60 * 1000);
+  const startsAt = startsAtDate.toISOString();
+  const oneHourRunAt = new Date(startsAtDate.getTime() - 60 * 60 * 1000).toISOString();
+  const fiveMinuteRunAt = new Date(startsAtDate.getTime() - 5 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "manual-appt-due-reminder",
+    ghlContactId: "manual-appt-due-reminder",
+    name: "Due Reminder",
+    phone: "+15550000076",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Today 11:00 AM CST",
+    preferredCallTimeIso: startsAt,
+    appointmentId: "manual-appt-due-event"
+  });
+  const dueJob = store.addJob({
+    type: "appointment_reminder",
+    contactId: "manual-appt-due-reminder",
+    runAt: oneHourRunAt,
+    payload: { templateGroup: "reminderTemplates", templateKey: "sameDayOneHour", appointmentIso: startsAt }
+  });
+  store.addJob({
+    type: "appointment_reminder",
+    contactId: "manual-appt-due-reminder",
+    runAt: fiveMinuteRunAt,
+    payload: { templateGroup: "reminderTemplates", templateKey: "sameDayFiveMinutes", appointmentIso: startsAt }
+  });
+
+  await bot.syncAppointment({
+    contactId: "manual-appt-due-reminder",
+    appointmentId: "manual-appt-due-event",
+    startTime: startsAt,
+    status: "confirmed"
+  });
+  const reminders = Object.values(store.data.jobs).filter(
+    (job) => job.contactId === "manual-appt-due-reminder" && job.type === "appointment_reminder"
+  );
+
+  assert.equal(store.data.jobs[dueJob.id].status, "pending");
+  assert.equal(store.data.jobs[dueJob.id].cancelReason, undefined);
+  assert.equal(
+    reminders.filter((job) => job.status === "pending" && job.payload.templateKey === "sameDayFiveMinutes").length,
+    1
+  );
+  assert.equal(
+    reminders.some((job) => job.status === "cancelled" && job.payload.templateKey === "sameDayOneHour"),
+    false
+  );
+});
+
 test("manual appointment sync LLM correction restores existing time without rolling to next week", async () => {
   const { bot, store } = makeBot();
   const originalHandleReschedule = bot.handleReschedule.bind(bot);

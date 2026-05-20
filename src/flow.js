@@ -2158,6 +2158,15 @@ function missingExpectedAppointmentReminders(contact, jobs = [], config, now = n
   );
 }
 
+function shouldPreserveDueCurrentAppointmentReminder(contact, job = {}, config, now = new Date()) {
+  if (job.status !== "pending" || job.type !== "appointment_reminder") return false;
+  if (!isCurrentAppointmentReminderJob(contact, job, config)) return false;
+  const appointment = appointmentTimeForReminder(contact, job);
+  const runAt = job.runAt ? new Date(job.runAt) : null;
+  if (!appointment || !runAt || Number.isNaN(runAt.getTime())) return false;
+  return runAt <= now && appointment > now;
+}
+
 function appointmentTimeForReminder(contact, job = {}) {
   const value = contact?.preferredCallTimeIso || job.payload?.appointmentIso || "";
   const appointment = value ? new Date(value) : null;
@@ -6808,10 +6817,30 @@ class SmsBot {
 
   async scheduleAppointmentReminders(contact) {
     if (!contact.preferredCallTimeIso) return;
-    await this.store.cancelJobsForContact(contact.id, "appointment reminders replaced", (job) => job.type === "appointment_reminder");
     const now = new Date();
     const specs = expectedAppointmentReminderSpecs(contact, this.config, now);
+    const jobs = this.store.listJobs ? await this.store.listJobs(contact.id) : [];
+    const keepJobIds = new Set();
+    const keptTemplateKeys = new Set();
+    for (const job of jobs) {
+      if (job.status !== "pending" || job.type !== "appointment_reminder") continue;
+      const templateKey = job.payload?.templateKey || "";
+      const expectedSpec = specs.find((spec) => spec.templateKey === templateKey);
+      const keepDueReminder = shouldPreserveDueCurrentAppointmentReminder(contact, job, this.config, now);
+      const keepFutureReminder =
+        expectedSpec &&
+        !keptTemplateKeys.has(templateKey) &&
+        isCurrentAppointmentReminderJob(contact, job, this.config);
+      if (keepDueReminder || keepFutureReminder) {
+        keepJobIds.add(job.id);
+        keptTemplateKeys.add(templateKey);
+      }
+    }
+    await this.store.cancelJobsForContact(contact.id, "appointment reminders replaced", (job) =>
+      job.type === "appointment_reminder" && !keepJobIds.has(job.id)
+    );
     for (const spec of specs) {
+      if (keptTemplateKeys.has(spec.templateKey)) continue;
       await this.store.addJob({
         type: "appointment_reminder",
         contactId: contact.id,
@@ -7285,7 +7314,6 @@ class SmsBot {
         "warm_followup",
         "enter_reengagement",
         "send_reengagement_template",
-        "appointment_reminder",
         "missed_call_followup",
         "backup_no_show_reminder"
       ].includes(job.type)
