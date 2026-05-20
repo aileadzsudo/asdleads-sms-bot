@@ -5316,6 +5316,56 @@ test("GHL appointment sync treats no-zone start time as contact local and suppre
   assert.equal(contact.bookingAlertSentAt, originalAlertAt);
 });
 
+test("GHL appointment sync sends booking alert for a new appointment after an older alert", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentBooked = slack.sendAppointmentBooked;
+  const alerts = [];
+  slack.sendAppointmentBooked = async (_config, _contact, extra) => {
+    alerts.push(extra);
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "appointment-new-alert",
+      ghlContactId: "appointment-new-alert",
+      name: "Appointment New Alert",
+      phone: "+15550000184",
+      timezone: "America/Chicago",
+      engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+      qualificationProgress: QUALIFICATION.COMPLETE,
+      preferredCallTime: "Mon, May 11, 10:00 AM CST",
+      preferredCallTimeIso: "2026-05-11T15:00:00.000Z",
+      appointmentId: "old-appt-id",
+      bookingAlertSentAt: "2026-05-11T14:30:00.000Z"
+    });
+
+    const contact = await bot.syncAppointment({
+      contactId: "appointment-new-alert",
+      appointmentId: "new-appt-id",
+      startTime: "2026-05-12T14:00:00",
+      status: "confirmed",
+      title: "ASD Qualified Follow-Up Call - Appointment New Alert"
+    });
+
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].Title, "Qualified follow-up booked");
+    assert.match(alerts[0]["Primary call time"], /2:00 PM CST/);
+    assert.equal(contact.lastBookingAlertKey, "manual_appointment_booked:new-appt-id:2026-05-12T19:00:00.000Z:no-backup");
+
+    await bot.syncAppointment({
+      contactId: "appointment-new-alert",
+      appointmentId: "new-appt-id",
+      startTime: "2026-05-12T14:00:00",
+      status: "confirmed",
+      title: "ASD Qualified Follow-Up Call - Appointment New Alert"
+    });
+
+    assert.equal(alerts.length, 1);
+  } finally {
+    slack.sendAppointmentBooked = originalSendAppointmentBooked;
+  }
+});
+
 test("GHL appointment sync treats UTC-looking merge field as calendar local and does not reuse calendar id", async () => {
   const { bot, store } = makeBot();
   const originalSendAppointmentBooked = slack.sendAppointmentBooked;

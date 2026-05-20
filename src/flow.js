@@ -2085,6 +2085,13 @@ function appointmentDueAlertKey(contact = {}, job = {}) {
   return `${appointmentId}:${appointmentIso}:five_minute`;
 }
 
+function appointmentBookingAlertKey(contact = {}, prefix = "appointment_booked") {
+  const appointmentIso = contact.preferredCallTimeIso || "";
+  const appointmentId = contact.appointmentId || "no-appointment-id";
+  const backup = contact.backupCallTime || "no-backup";
+  return `${prefix}:${appointmentId}:${appointmentIso}:${backup}`;
+}
+
 function hasScheduledAppointmentSuppressionContext(contact = {}, now = new Date()) {
   if (!contact || isNoShowRecoveryContact(contact)) return false;
   const appointment = contact.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
@@ -7200,8 +7207,15 @@ class SmsBot {
     }
 
     const suppressAppointmentAlert = suppressAppointmentAlertFromPayload(payload);
-    const bookingAlertKey = `manual_appointment_booked:${updated.id}`;
-    if (!updated.awaitingBackupTime && !suppressAppointmentAlert && !updated.bookingAlertSentAt && !this.bookingAlertLocks.has(bookingAlertKey)) {
+    const bookingAlertKey = appointmentBookingAlertKey(updated, "manual_appointment_booked");
+    const legacySameAppointmentAlertAlreadySent = Boolean(
+      !updated.lastBookingAlertKey &&
+        updated.bookingAlertSentAt &&
+        oldStartsAt &&
+        oldStartsAt === startsAt
+    );
+    const bookingAlertAlreadySent = updated.lastBookingAlertKey === bookingAlertKey || legacySameAppointmentAlertAlreadySent;
+    if (!updated.awaitingBackupTime && !suppressAppointmentAlert && !bookingAlertAlreadySent && !this.bookingAlertLocks.has(bookingAlertKey)) {
       this.bookingAlertLocks.add(bookingAlertKey);
       try {
         const bookingAlertSent = await this.notifyAppointmentBooked(updated, {
@@ -7214,7 +7228,11 @@ class SmsBot {
           "Appointment type": updated.appointmentType || "initial"
         });
         if (bookingAlertSent) {
-          return this.store.upsertContact({ ...updated, bookingAlertSentAt: new Date().toISOString() });
+          return this.store.upsertContact({
+            ...updated,
+            bookingAlertSentAt: new Date().toISOString(),
+            lastBookingAlertKey: bookingAlertKey
+          });
         }
       } finally {
         this.bookingAlertLocks.delete(bookingAlertKey);
