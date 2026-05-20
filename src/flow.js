@@ -4795,7 +4795,7 @@ class SmsBot {
         message: contact.lastInboundMessage || "",
         meta: controlMeta
       });
-      return this.handleCallTime(contact, "call me now");
+      return this.triggerUrgentCallNow(contact, contact.lastInboundMessage || "call me now", { trigger: "admin_action" });
     }
 
     if (["call_now_no_answer", "missed_call_now", "call_now_missed", "call_now_no_answer_recovery"].includes(action)) {
