@@ -3256,13 +3256,6 @@ class SmsBot {
       });
       await this.store.upsertContact({ ...updated, signedStoppedNoteAt: new Date().toISOString() });
     }
-    await this.notifyBotError("Signed contact paused SMS bot", {
-      Name: updated.name || "unknown",
-      Phone: updated.phone || "unknown",
-      "GHL contact": updated.ghlContactId || updated.id,
-      Tags: normalizeTags(updated.tags).join(", "),
-      "Last inbound": updated.lastInboundMessage || "none"
-    });
     return updated;
   }
 
