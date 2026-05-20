@@ -487,7 +487,11 @@ function stuckStateReasons(contact, jobs = [], messages = [], escalations = []) 
   if (!messages.length && contact.engagementStatus && contact.engagementStatus !== "new_lead") {
     reasons.push({ type: "warn", code: "no_messages", label: "No stored conversation messages", recommendedAction: "Verify GHL webhook/message export for this contact." });
   }
-  if ((contact.appointmentId || contact.engagementStatus === "call_scheduled") && !pendingJobs.some((job) => job.type === "appointment_reminder")) {
+  const appointmentTime = contact.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
+  const appointmentNeedsReminders =
+    (contact.appointmentId || contact.engagementStatus === "call_scheduled") &&
+    (!appointmentTime || Number.isNaN(appointmentTime.getTime()) || appointmentTime > new Date());
+  if (appointmentNeedsReminders && !pendingJobs.some((job) => job.type === "appointment_reminder")) {
     reasons.push({ type: "warn", code: "scheduled_without_reminders", label: "Scheduled call has no pending reminders", recommendedAction: "Click Ensure reminders." });
   }
   if (contact.awaitingBackupTime && !pendingJobs.some((job) => job.type === "backup_time_timeout")) {
