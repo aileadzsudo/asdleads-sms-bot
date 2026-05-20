@@ -267,6 +267,9 @@ function classifyLeadPauseIntent(text, progress) {
 
 function isCallNow(text) {
   const t = normalize(text);
+  const directCallRequest =
+    /\b(call me|call me back|phone me|ring me|give me a call|give me a ring)\b/.test(t) ||
+    /\b(can|could|will|would)\s+(you|u|william)\s+(please\s+)?(call me|call me back|phone me|ring me|give me a call|give me a ring)\b/.test(t);
   const unavailableRightNow =
     /\b(working right now|at work right now|currently working|working at the moment|busy right now|currently busy|not free right now|not available right now|unavailable right now|in a meeting right now|driving right now|can't talk right now|cant talk right now|can t talk right now|cannot talk right now|en el trabajo ahora|trabajando ahora|ocupado ahora|manejando ahora)\b/.test(t) ||
     (/\bright now\b/.test(t) && /\b(working|at work|busy|not free|not available|unavailable|meeting|driving|can't talk|cant talk|can t talk|cannot talk)\b/.test(t));
@@ -274,6 +277,7 @@ function isCallNow(text) {
     /\b(later|tonight|tomorrow|after work|after\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|at\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|around\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|about\s+\d{1,2}(?::\d{2})?\s*(am|pm)?|\d{1,2}(?::\d{2})?\s*(am|pm))\b/.test(t);
   if (
     unavailableRightNow ||
+    (directCallRequest && futureCallContext && !/\b(now|right now|asap)\b/.test(t)) ||
     (/\bright now\b/.test(t) && futureCallContext && !/\b(call me right now|call right now)\b/.test(t)) ||
     /\b(not right now|not now|not at the moment|not this moment|can't right now|cant right now|can t right now|cannot right now|can't talk right now|cant talk right now|can t talk right now|not available right now|busy right now|ahora no|no ahora)\b/.test(
       t
@@ -283,6 +287,7 @@ function isCallNow(text) {
   }
   return (
     /\b(call me now|call now|right now|now is fine|now is good|now is ok|now is okay|available now|i'm available now|im available now|i can talk now|asap|llamame ahora|llama ahora|ahora esta bien|disponible ahora|puedo hablar ahora)\b/.test(t) ||
+    directCallRequest ||
     /^(yes|yeah|yep|sure|ok|okay|si|sí)?\s*(now|right now|ahora)\s*$/.test(t)
   );
 }

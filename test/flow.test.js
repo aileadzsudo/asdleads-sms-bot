@@ -6236,7 +6236,7 @@ test("queued inbound SMS buffers quick consecutive messages before responding", 
   assert.equal(store.data.messages.filter((message) => message.contactId === "buffered-inbound" && message.direction === "inbound").length, 2);
 });
 
-test("queued call-now inbound sends Slack immediately but delays bot SMS until buffer", async () => {
+test("queued call-now inbound sends Slack and confirmation immediately without buffering", async () => {
   const { bot, store } = makeBot();
   const originalSendUrgentCallNow = slack.sendUrgentCallNow;
   let urgentAlerts = 0;
@@ -6262,16 +6262,15 @@ test("queued call-now inbound sends Slack immediately but delays bot SMS until b
     assert.equal(store.getContact("fastlane-call-now").engagementStatus, ENGAGEMENT.READY_FOR_CALL);
     assert.equal(
       store.data.messages.filter((message) => message.contactId === "fastlane-call-now" && message.direction === "outbound").length,
-      0
+      1
     );
-
-    const job = Object.values(store.data.jobs).find(
-      (item) => item.contactId === "fastlane-call-now" && item.type === "process_inbound_buffer" && item.status === "pending"
-    );
-    await bot.runDueJob(job);
-
-    assert.equal(urgentAlerts, 1);
     assert.match(store.getContact("fastlane-call-now").lastOutboundMessage, /connecting you with a Specialist/i);
+    assert.equal(
+      Object.values(store.data.jobs).some(
+        (item) => item.contactId === "fastlane-call-now" && item.type === "process_inbound_buffer" && item.status === "pending"
+      ),
+      false
+    );
   } finally {
     slack.sendUrgentCallNow = originalSendUrgentCallNow;
   }
@@ -6360,6 +6359,63 @@ test("call-now phrase interrupts qualification and sends urgent call alert", asy
     assert.equal(contact.humanEscalationStatus, true);
     assert.equal(urgentAlerts, 1);
     assert.match(store.getContact("call-now-mid-qualification").lastOutboundMessage, /connecting you with a Specialist/i);
+  } finally {
+    slack.sendUrgentCallNow = originalSendUrgentCallNow;
+  }
+});
+
+test("queued give-me-a-call reply escalates immediately without continuing qualification", async () => {
+  const { bot, store } = makeBot();
+  const originalSendUrgentCallNow = slack.sendUrgentCallNow;
+  let urgentAlerts = 0;
+  slack.sendUrgentCallNow = async () => {
+    urgentAlerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "give-me-call-fastlane",
+      ghlContactId: "give-me-call-fastlane",
+      name: "Shawnia",
+      phone: "+15307506126",
+      tags: ["lhpark_ca", "nr"],
+      timezone: "America/Los_Angeles",
+      engagementStatus: ENGAGEMENT.COLD_OUTREACH,
+      qualificationProgress: QUALIFICATION.NEEDS_ACCIDENT_DATE,
+      currentSequenceName: "cold_outreach",
+      lastOutboundMessage: "What was the date of the accident?"
+    });
+    store.addJob({
+      type: "send_cold_template",
+      contactId: "give-me-call-fastlane",
+      runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      payload: { day: 11, slot: "pm", templateKey: "day_11_pm" }
+    });
+
+    const contact = await bot.queueInboundSms({
+      contactId: "give-me-call-fastlane",
+      message: "ok William will you give me a call i just got the license plate numbers of both cars so if you can give me a call"
+    });
+    const latest = store.getContact("give-me-call-fastlane");
+
+    assert.equal(contact.engagementStatus, ENGAGEMENT.READY_FOR_CALL);
+    assert.equal(latest.humanEscalationStatus, true);
+    assert.equal(latest.automationPaused, true);
+    assert.equal(latest.escalationReason, "call_now");
+    assert.equal(urgentAlerts, 1);
+    assert.match(latest.lastOutboundMessage, /connecting you with a Specialist/i);
+    assert.equal(
+      Object.values(store.data.jobs).some(
+        (job) => job.contactId === "give-me-call-fastlane" && job.type === "process_inbound_buffer" && job.status === "pending"
+      ),
+      false
+    );
+    assert.equal(
+      Object.values(store.data.jobs).some(
+        (job) => job.contactId === "give-me-call-fastlane" && job.type === "send_cold_template" && job.status === "pending"
+      ),
+      false
+    );
   } finally {
     slack.sendUrgentCallNow = originalSendUrgentCallNow;
   }

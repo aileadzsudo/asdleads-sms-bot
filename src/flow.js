@@ -4066,6 +4066,56 @@ class SmsBot {
     };
   }
 
+  async triggerUrgentCallNow(contact, message, options = {}) {
+    const alreadyAlerted = hasRecentUrgentCallNowAlert(contact);
+    let updated = await this.store.upsertContact({
+      ...contact,
+      engagementStatus: ENGAGEMENT.READY_FOR_CALL,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      automationPaused: true,
+      automationPauseReason: "call_now",
+      humanEscalationStatus: true,
+      humanEscalationStage: "call_now_fastlane_alerted",
+      escalationReason: "call_now",
+      currentSequenceName: "call_now",
+      urgentCallNowAlertMessage: message,
+      urgentCallNowAlertRequestedAt: new Date().toISOString()
+    });
+    await this.store.cancelJobsForContact(updated.id, "call now requested", (job) =>
+      BOT_SEQUENCE_JOB_TYPES.includes(job.type) || job.type === "send_message" || job.type === "process_inbound_buffer"
+    );
+    if (alreadyAlerted) {
+      await this.recordDecision(updated, "skipped", "duplicate_call_now_fastlane_suppressed", {
+        trigger: options.trigger || "inbound_sms",
+        message
+      });
+      return updated;
+    }
+    try {
+      await slack.sendUrgentCallNow(this.config, updated);
+      updated = await this.store.upsertContact({
+        ...updated,
+        urgentCallNowAlertSentAt: new Date().toISOString()
+      });
+      await this.recordDecision(updated, "escalated", "call_now_fastlane_slack_alert_sent", {
+        trigger: options.trigger || "inbound_sms",
+        message
+      });
+    } catch (error) {
+      await this.notifyBotError("Slack urgent call-now alert failed", {
+        Name: updated.name || "unknown",
+        Phone: updated.phone || "unknown",
+        "GHL contact": updated.ghlContactId || updated.id,
+        Error: error.message
+      });
+    }
+    const sent = await this.sendBotMessage(updated, qualificationTemplates.callNow, {
+      bypassQuietHours: true,
+      allowWithoutAutomationSignal: true
+    });
+    return sent || (await this.store.getContact(updated.id)) || updated;
+  }
+
   async queueInboundSms(payload) {
     const inbound = normalizePayload(payload, this.config);
     if (isEmptyTextToken(inbound.lastInboundMessage)) {
@@ -4109,36 +4159,8 @@ class SmsBot {
     }
     await this.store.addMessage({ contactId: contact.id, direction: "inbound", body: inbound.lastInboundMessage });
     if (resolution.duplicateConflict) return contact;
-    if (isCallNow(inbound.lastInboundMessage) && !hasRecentUrgentCallNowAlert(contact)) {
-      const alertContact = await this.store.upsertContact({
-        ...contact,
-        engagementStatus: ENGAGEMENT.READY_FOR_CALL,
-        qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
-        humanEscalationStatus: true,
-        humanEscalationStage: "call_now_fastlane_alerted",
-        escalationReason: "call_now",
-        urgentCallNowAlertMessage: inbound.lastInboundMessage,
-        urgentCallNowAlertRequestedAt: new Date().toISOString()
-      });
-      try {
-        await slack.sendUrgentCallNow(this.config, alertContact);
-        contact = await this.store.upsertContact({
-          ...alertContact,
-          urgentCallNowAlertSentAt: new Date().toISOString()
-        });
-        await this.recordDecision(contact, "escalated", "call_now_fastlane_slack_alert_sent", {
-          trigger: "inbound_sms",
-          message: inbound.lastInboundMessage
-        });
-      } catch (error) {
-        await this.notifyBotError("Slack urgent call-now alert failed", {
-          Name: alertContact.name || "unknown",
-          Phone: alertContact.phone || "unknown",
-          "GHL contact": alertContact.ghlContactId || alertContact.id,
-          Error: error.message
-        });
-        contact = alertContact;
-      }
+    if (isCallNow(inbound.lastInboundMessage)) {
+      return this.triggerUrgentCallNow(contact, inbound.lastInboundMessage, { trigger: "inbound_sms_fastlane" });
     }
     const pendingInboundMessages = [...(contact.pendingInboundMessages || []), inbound.lastInboundMessage].filter(Boolean).slice(-6);
     contact = await this.store.upsertContact({
@@ -4326,7 +4348,7 @@ class SmsBot {
       return this.escalate(contact, "soft_refusal");
     }
     if (isCallNow(inbound.lastInboundMessage)) {
-      return this.handleCallTime(contact, "call me now");
+      return this.triggerUrgentCallNow(contact, inbound.lastInboundMessage, { trigger: "inbound_sms" });
     }
     if (hasExistingRepresentation(inbound.lastInboundMessage)) {
       const updated = await this.store.upsertContact({
