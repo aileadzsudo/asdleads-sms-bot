@@ -1423,6 +1423,55 @@ test("legacy next-day evening reminder jobs still render", async () => {
   assert.equal(store.data.jobs[job.id].status, "done");
 });
 
+test("appointment reminders send even when human/manual hold is active", async () => {
+  const { bot, store } = makeBot();
+  const originalSendSms = ghl.sendSms;
+  let sent = null;
+  ghl.sendSms = async (_config, contact, message) => {
+    sent = { contactId: contact.id, message };
+    return { id: "sms-reminder-manual-hold" };
+  };
+  try {
+    const appointmentIso = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    store.upsertContact({
+      id: "manual-hold-reminder",
+      ghlContactId: "manual-hold-reminder",
+      name: "Ricardo",
+      phone: "+13032108141",
+      tags: ["levin_co", "follow up", "nr"],
+      timezone: "America/Denver",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      qualificationProgress: QUALIFICATION.CALL_BOOKED,
+      humanEscalationStatus: true,
+      humanEscalationStage: "manual_hold_tag",
+      automationPaused: true,
+      automationPauseReason: "manual_hold_tag",
+      preferredCallTime: "today at 11 AM",
+      preferredCallTimeIso: appointmentIso,
+      appointmentId: "appt-manual-hold"
+    });
+    const job = store.addJob({
+      type: "appointment_reminder",
+      contactId: "manual-hold-reminder",
+      runAt: new Date(Date.now() + 25 * 60 * 1000).toISOString(),
+      payload: {
+        templateKey: "sameDayFiveMinutes",
+        templateGroup: "reminderTemplates",
+        appointmentIso
+      }
+    });
+
+    await bot.runDueJob(job);
+
+    assert.equal(store.data.jobs[job.id].status, "done");
+    assert.equal(sent.contactId, "manual-hold-reminder");
+    assert.match(sent.message, /calling in 5 minutes/i);
+    assert.match(store.getContact("manual-hold-reminder").lastOutboundMessage, /calling in 5 minutes/i);
+  } finally {
+    ghl.sendSms = originalSendSms;
+  }
+});
+
 test("appointment reminders use cadence based on time until appointment", async () => {
   const { bot, store } = makeBot();
   const soon = new Date(Date.now() + 45 * 60 * 1000).toISOString();
@@ -1490,8 +1539,8 @@ test("appointment reminders use cadence based on time until appointment", async 
     localNearOneHour.year === localNowForLater.year &&
     localNearOneHour.month === localNowForLater.month &&
     localNearOneHour.day === localNowForLater.day
-      ? ["sameDayFiveMinutes"]
-      : ["nextDayFiveMinutes"];
+      ? ["sameDayOneHour", "sameDayFiveMinutes"]
+      : ["nextDayOneHour", "nextDayFiveMinutes"];
   assert.deepEqual(
     Object.values(store.data.jobs)
       .filter((job) => job.contactId === "reminder-near-one-hour" && job.type === "appointment_reminder")
@@ -1681,8 +1730,74 @@ test("stuck-state healer recreates missing appointment reminders for scheduled c
   const healed = await bot.healStuckContacts();
   const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "missing-reminder-heal");
 
-  assert.deepEqual(healed, [{ contactId: "missing-reminder-heal", action: "scheduled_missing_appointment_reminders" }]);
+  assert.deepEqual(healed, [
+    {
+      contactId: "missing-reminder-heal",
+      action: "scheduled_missing_appointment_reminders",
+      missing: ["sameDayOneHour", "sameDayFiveMinutes"]
+    }
+  ]);
   assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
+});
+
+test("stuck-state healer recreates incomplete appointment reminder sets", async () => {
+  const { bot, store } = makeBot();
+  const startsAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "partial-reminder-heal",
+    ghlContactId: "partial-reminder-heal",
+    name: "Partial Reminder",
+    phone: "+15550000244",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTime: "Today at 4:00 PM CST",
+    preferredCallTimeIso: startsAt,
+    appointmentId: "appt-partial-reminders"
+  });
+  store.addJob({
+    type: "appointment_reminder",
+    contactId: "partial-reminder-heal",
+    runAt: new Date(new Date(startsAt).getTime() - 60 * 60 * 1000).toISOString(),
+    payload: { templateKey: "sameDayOneHour", appointmentIso: startsAt }
+  });
+
+  const healed = await bot.healStuckContacts();
+  const pendingKeys = Object.values(store.data.jobs)
+    .filter((job) => job.contactId === "partial-reminder-heal" && job.type === "appointment_reminder" && job.status === "pending")
+    .map((job) => job.payload.templateKey)
+    .sort();
+
+  assert.equal(healed[0].action, "scheduled_missing_appointment_reminders");
+  assert.deepEqual(healed[0].missing, ["sameDayFiveMinutes"]);
+  assert.deepEqual(pendingKeys, ["sameDayFiveMinutes", "sameDayOneHour"]);
+});
+
+test("appointment reminder audit repairs upcoming appointments in bulk", async () => {
+  const { bot, store } = makeBot();
+  const startsAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+  store.upsertContact({
+    id: "bulk-reminder-audit",
+    ghlContactId: "bulk-reminder-audit",
+    name: "Bulk Reminder",
+    phone: "+15550000245",
+    timezone: "America/Chicago",
+    engagementStatus: ENGAGEMENT.CALL_SCHEDULED,
+    qualificationProgress: QUALIFICATION.COMPLETE,
+    preferredCallTimeIso: startsAt,
+    appointmentId: "appt-bulk-reminders"
+  });
+
+  const audit = await bot.ensureUpcomingAppointmentReminders({ hours: 24 });
+  const pendingKeys = Object.values(store.data.jobs)
+    .filter((job) => job.contactId === "bulk-reminder-audit" && job.type === "appointment_reminder" && job.status === "pending")
+    .map((job) => job.payload.templateKey)
+    .sort();
+
+  assert.equal(audit.checked, 1);
+  assert.equal(audit.repaired, 1);
+  assert.deepEqual(pendingKeys, ["sameDayFiveMinutes", "sameDayOneHour"]);
+  assert.equal(store.getSetting("last_appointment_reminder_audit").value.repaired, 1);
 });
 
 test("stuck-state healer recreates missing appointment reminders for human-booked appointments", async () => {
@@ -1709,7 +1824,13 @@ test("stuck-state healer recreates missing appointment reminders for human-booke
   const healed = await bot.healStuckContacts();
   const jobs = Object.values(store.data.jobs).filter((job) => job.contactId === "human-booked-missing-reminder");
 
-  assert.deepEqual(healed, [{ contactId: "human-booked-missing-reminder", action: "scheduled_missing_appointment_reminders" }]);
+  assert.deepEqual(healed, [
+    {
+      contactId: "human-booked-missing-reminder",
+      action: "scheduled_missing_appointment_reminders",
+      missing: ["sameDayOneHour", "sameDayFiveMinutes"]
+    }
+  ]);
   assert.equal(jobs.some((job) => job.type === "appointment_reminder" && job.status === "pending"), true);
 });
 
@@ -2372,6 +2493,46 @@ test("duplicate inbound replies on escalated contacts are suppressed", async () 
     );
   } finally {
     slack.sendEscalatedInbound = originalSendEscalatedInbound;
+  }
+});
+
+test("recent escalation alert fingerprint suppresses repeated Slack loops", async () => {
+  const { bot, store } = makeBot();
+  const originalSendEscalation = slack.sendEscalation;
+  let alerts = 0;
+  slack.sendEscalation = async () => {
+    alerts += 1;
+    return { ok: true };
+  };
+  try {
+    store.upsertContact({
+      id: "fingerprint-repeat",
+      ghlContactId: "fingerprint-repeat",
+      name: "Fingerprint Repeat",
+      phone: "+15550000159",
+      engagementStatus: ENGAGEMENT.ESCALATED_TO_HUMAN,
+      qualificationProgress: QUALIFICATION.NEEDS_CALL_TIME,
+      humanEscalationStatus: true,
+      humanEscalationStage: "human_review_pending",
+      escalationReason: "human_request",
+      lastEscalationAlertAt: new Date().toISOString(),
+      lastEscalationAlertMessage: "Please have someone call me back"
+    });
+
+    await bot.notifyHumanManagedInbound(
+      store.getContact("fingerprint-repeat"),
+      "unmanaged_inbound_message",
+      " please have someone call me back "
+    );
+
+    assert.equal(alerts, 0);
+    assert.equal(store.data.escalations.filter((item) => item.contactId === "fingerprint-repeat").length, 0);
+    assert.equal(
+      store.data.decisionLogs.some((item) => item.reason === "duplicate_human_managed_inbound_suppressed"),
+      true
+    );
+  } finally {
+    slack.sendEscalation = originalSendEscalation;
   }
 });
 
@@ -3214,9 +3375,10 @@ test("tag lookup failure defers outbound jobs instead of sending blindly", async
     assert.equal(store.data.jobs[job.id].status, "pending");
     assert.equal(store.data.jobs[job.id].retryReason, "tag_lookup_failed");
     assert.equal(store.getContact("tag-failure-defer").lastOutboundMessage, undefined);
-    const errorLog = store.getSetting("bot_error_log").value;
-    assert.equal(errorLog[0].title, "GHL contact tag lookup failed");
-    assert.equal(errorLog[0].operationalOnly, true);
+    assert.equal(store.getSetting("bot_error_log"), null);
+    const operationalLog = store.getSetting("bot_operational_log").value;
+    assert.equal(operationalLog[0].title, "GHL contact tag lookup failed");
+    assert.equal(operationalLog[0].operationalOnly, true);
   } finally {
     ghl.getContact = originalGetContact;
   }
@@ -4720,9 +4882,10 @@ test("no-show webhook with missing contact logs operational issue without crashi
 
   assert.equal(contact, null);
   assert.equal(store.getSetting("last_no_show_webhook").value.result, "missing_contact_id");
-  const errors = store.getSetting("bot_error_log").value;
-  assert.equal(errors[0].title, "GHL no-show webhook missing contact");
-  assert.equal(errors[0].operationalOnly, true);
+  assert.equal(store.getSetting("bot_error_log"), null);
+  const operationalLog = store.getSetting("bot_operational_log").value;
+  assert.equal(operationalLog[0].title, "GHL no-show webhook missing contact");
+  assert.equal(operationalLog[0].operationalOnly, true);
 });
 
 test("exact time reply during no-show recovery rebooks and schedules reminders", async () => {

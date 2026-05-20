@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 
 const BOT_ERROR_LOG_KEY = "bot_error_log";
+const BOT_OPERATIONAL_LOG_KEY = "bot_operational_log";
 const BOT_ERROR_THROTTLE_KEY = "bot_error_throttle";
 const BOT_ERROR_LIMIT = 250;
 const SLACK_THROTTLE_MS = 30 * 60 * 1000;
@@ -33,7 +34,8 @@ async function recordBotError(store, title, details = {}, options = {}) {
 
   const now = new Date();
   const signature = errorSignature(title, details);
-  const logSetting = await store.getSetting(BOT_ERROR_LOG_KEY);
+  const logKey = options.operationalOnly ? BOT_OPERATIONAL_LOG_KEY : BOT_ERROR_LOG_KEY;
+  const logSetting = await store.getSetting(logKey);
   const log = Array.isArray(logSetting?.value) ? logSetting.value : [];
   const item = {
     id: crypto.randomUUID(),
@@ -44,7 +46,7 @@ async function recordBotError(store, title, details = {}, options = {}) {
     operationalOnly: Boolean(options.operationalOnly),
     signature
   };
-  await store.setSetting(BOT_ERROR_LOG_KEY, [item, ...log].slice(0, BOT_ERROR_LIMIT));
+  await store.setSetting(logKey, [item, ...log].slice(0, BOT_ERROR_LIMIT));
 
   if (options.slack === false || options.operationalOnly) {
     return { item, shouldNotifySlack: false };
@@ -64,7 +66,13 @@ async function recordBotError(store, title, details = {}, options = {}) {
 async function listBotErrors(store, limit = 100) {
   const setting = store?.getSetting ? await store.getSetting(BOT_ERROR_LOG_KEY) : null;
   const log = Array.isArray(setting?.value) ? setting.value : [];
+  return log.filter((item) => !item.operationalOnly).slice(0, limit);
+}
+
+async function listBotOperationalEvents(store, limit = 100) {
+  const setting = store?.getSetting ? await store.getSetting(BOT_OPERATIONAL_LOG_KEY) : null;
+  const log = Array.isArray(setting?.value) ? setting.value : [];
   return log.slice(0, limit);
 }
 
-module.exports = { recordBotError, listBotErrors };
+module.exports = { recordBotError, listBotErrors, listBotOperationalEvents };

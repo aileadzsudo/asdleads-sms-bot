@@ -172,6 +172,35 @@ function normalizedEscalationText(value) {
     .trim();
 }
 
+function hasRecentContactEscalationAlert(contact, message, windowMinutes = ESCALATION_DEDUPE_WINDOW_MINUTES) {
+  const normalizedMessage = normalizedEscalationText(message);
+  if (!contact || !normalizedMessage) return false;
+  const cutoff = Date.now() - windowMinutes * 60 * 1000;
+  const candidates = [
+    {
+      message: contact.lastEscalationAlertMessage || contact.lastEscalationAlertMessageNormalized,
+      at: contact.lastEscalationAlertAt
+    },
+    {
+      message: contact.lastHumanManagedInboundMessage,
+      at: contact.lastHumanManagedInboundAt
+    }
+  ];
+  return candidates.some((candidate) => {
+    const at = candidate.at ? new Date(candidate.at).getTime() : 0;
+    return at >= cutoff && normalizedEscalationText(candidate.message) === normalizedMessage;
+  });
+}
+
+function escalationAlertPatch(reason, message, at = new Date().toISOString()) {
+  return {
+    lastEscalationAlertAt: at,
+    lastEscalationAlertReason: reason || "",
+    lastEscalationAlertMessage: message || "",
+    lastEscalationAlertMessageNormalized: normalizedEscalationText(message)
+  };
+}
+
 function isNoResponseDispositionValue(value) {
   return ["nr", "no response", "no_response", "no-response"].includes(
     textValue(value).toLowerCase().trim().replace(/\s+/g, " ")
@@ -2049,6 +2078,48 @@ function expectedAppointmentReminderRunAt(contact, templateKey, config) {
   return null;
 }
 
+function expectedAppointmentReminderSpecs(contact, config, now = new Date()) {
+  if (!contact?.preferredCallTimeIso) return [];
+  const appointment = new Date(contact.preferredCallTimeIso);
+  if (Number.isNaN(appointment.getTime()) || appointment <= now) return [];
+  const timeZone = contact.timezone || config.texting.defaultTimezone;
+  const templateGroup = reminderTemplateGroupForAppointment(contact);
+  const sameDay = sameLocalDay(now, appointment, timeZone);
+  const specs = [];
+
+  if (!sameDay) {
+    const appointmentLocal = getLocalParts(appointment, timeZone);
+    const morningReminderHour = appointmentLocal.hour <= 10 ? 8 : 9;
+    const morningReminder = localDateToUtc(
+      {
+        year: appointmentLocal.year,
+        month: appointmentLocal.month,
+        day: appointmentLocal.day,
+        hour: morningReminderHour,
+        minute: 0
+      },
+      timeZone
+    );
+    if (morningReminder > now && morningReminder < appointment) {
+      specs.push({ templateGroup, templateKey: "nextDayMorning", runAt: morningReminder });
+    }
+  }
+
+  const oneHour = addMinutes(appointment, -60);
+  if (oneHour > now) {
+    specs.push({ templateGroup, templateKey: sameDay ? "sameDayOneHour" : "nextDayOneHour", runAt: oneHour });
+  }
+
+  const fiveMinutes = addMinutes(appointment, -5);
+  if (fiveMinutes > now) {
+    specs.push({ templateGroup, templateKey: sameDay ? "sameDayFiveMinutes" : "nextDayFiveMinutes", runAt: fiveMinutes });
+  } else {
+    specs.push({ templateGroup, templateKey: sameDay ? "sameDayFiveMinutes" : "nextDayFiveMinutes", runAt: now });
+  }
+
+  return specs;
+}
+
 function isCurrentAppointmentReminderJob(contact, job, config) {
   if (!contact?.preferredCallTimeIso) return false;
   if (job.payload?.appointmentIso) {
@@ -2061,7 +2132,30 @@ function isCurrentAppointmentReminderJob(contact, job, config) {
   if (!expected || !job.runAt) return true;
   const runAt = new Date(job.runAt);
   if (Number.isNaN(runAt.getTime())) return false;
+  if (isFiveMinuteAppointmentReminder(job)) {
+    const appointment = new Date(contact.preferredCallTimeIso);
+    if (
+      !Number.isNaN(appointment.getTime()) &&
+      runAt.getTime() >= expected.getTime() &&
+      runAt.getTime() < appointment.getTime()
+    ) {
+      return true;
+    }
+  }
   return Math.abs(runAt.getTime() - expected.getTime()) <= 90 * 1000;
+}
+
+function missingExpectedAppointmentReminders(contact, jobs = [], config, now = new Date()) {
+  const expected = expectedAppointmentReminderSpecs(contact, config, now);
+  return expected.filter((spec) =>
+    !jobs.some(
+      (job) =>
+        job.status === "pending" &&
+        job.type === "appointment_reminder" &&
+        job.payload?.templateKey === spec.templateKey &&
+        isCurrentAppointmentReminderJob(contact, job, config)
+    )
+  );
 }
 
 function appointmentTimeForReminder(contact, job = {}) {
@@ -3016,7 +3110,7 @@ class SmsBot {
         "15 min outbound": recent15,
         "60 min outbound": recent60,
         "Blocked message": message
-      });
+      }, { operationalOnly: true, slack: false, level: "warn" });
       return { ok: false, reason: "outbound_flood_guard_paused" };
     }
 
@@ -6505,7 +6599,11 @@ class SmsBot {
   }
 
   async notifyEscalatedInboundReply(contact, message) {
-    if (!message || normalizedEscalationText(contact.lastHumanManagedInboundMessage) === normalizedEscalationText(message)) {
+    if (
+      !message ||
+      normalizedEscalationText(contact.lastHumanManagedInboundMessage) === normalizedEscalationText(message) ||
+      hasRecentContactEscalationAlert(contact, message)
+    ) {
       if (message) {
         await this.recordDecision(contact, "skipped", "duplicate_escalated_inbound_suppressed", {
           trigger: "inbound_sms",
@@ -6525,23 +6623,27 @@ class SmsBot {
       });
       return false;
     }
+    const alerted = await this.store.upsertContact({
+      ...updated,
+      ...escalationAlertPatch("new_reply_after_human_escalation", message)
+    });
     await this.store.addEscalation({
       contactId: updated.id,
       reason: "new_reply_after_human_escalation",
       lastInboundMessage: message
     });
-    await this.recordDecision(updated, "escalated", "new_reply_after_human_escalation", {
+    await this.recordDecision(alerted, "escalated", "new_reply_after_human_escalation", {
       trigger: "inbound_sms",
       message
     });
     try {
-      await slack.sendEscalatedInbound(this.config, updated);
+      await slack.sendEscalatedInbound(this.config, alerted);
       return true;
     } catch (error) {
       await this.notifyBotError("Slack escalated inbound alert failed", {
-        Name: updated.name || "unknown",
-        Phone: updated.phone || "unknown",
-        "GHL contact": updated.ghlContactId || updated.id,
+        Name: alerted.name || "unknown",
+        Phone: alerted.phone || "unknown",
+        "GHL contact": alerted.ghlContactId || alerted.id,
         Error: error.message
       });
       return false;
@@ -6563,6 +6665,14 @@ class SmsBot {
 
   async notifyHumanManagedInbound(contact, reason, message, extra = {}) {
     if (!message) return contact;
+    if (hasRecentContactEscalationAlert(contact, message)) {
+      await this.recordDecision(contact, "skipped", "duplicate_human_managed_inbound_suppressed", {
+        trigger: "inbound_sms",
+        message,
+        meta: { reason, source: "contact_alert_fingerprint" }
+      });
+      return contact;
+    }
     const updated = await this.store.upsertContact({
       ...contact,
       lastInboundMessage: message,
@@ -6581,29 +6691,33 @@ class SmsBot {
       });
       return updated;
     }
+    const alerted = await this.store.upsertContact({
+      ...updated,
+      ...escalationAlertPatch(reason, message)
+    });
     await this.store.addEscalation({
-      contactId: updated.id,
+      contactId: alerted.id,
       reason,
       lastInboundMessage: message,
       extra
     });
-    await this.recordDecision(updated, "escalated", reason, {
+    await this.recordDecision(alerted, "escalated", reason, {
       trigger: "inbound_sms",
       message,
       meta: extra
     });
     try {
-      await slack.sendEscalation(this.config, updated, reason, extra);
+      await slack.sendEscalation(this.config, alerted, reason, extra);
     } catch (error) {
       await this.notifyBotError("Slack human-managed inbound alert failed", {
-        Name: updated.name || "unknown",
-        Phone: updated.phone || "unknown",
-        "GHL contact": updated.ghlContactId || updated.id,
+        Name: alerted.name || "unknown",
+        Phone: alerted.phone || "unknown",
+        "GHL contact": alerted.ghlContactId || alerted.id,
         Reason: reason,
         Error: error.message
       });
     }
-    return updated;
+    return alerted;
   }
 
   async notifyAppointmentNotice(contact, title, extra = {}) {
@@ -6673,57 +6787,22 @@ class SmsBot {
   async scheduleAppointmentReminders(contact) {
     if (!contact.preferredCallTimeIso) return;
     await this.store.cancelJobsForContact(contact.id, "appointment reminders replaced", (job) => job.type === "appointment_reminder");
-    const appointment = new Date(contact.preferredCallTimeIso);
     const now = new Date();
-    const timeZone = contact.timezone || this.config.texting.defaultTimezone;
-    const templateGroup = reminderTemplateGroupForAppointment(contact);
-    const sameDay = sameLocalDay(now, appointment, timeZone);
-    const oneHour = addMinutes(appointment, -60);
-    const fiveMinutes = addMinutes(appointment, -5);
-    const minimumGapBeforeOneHour = addMinutes(now, 20);
-    if (!sameDay) {
-      const appointmentLocal = getLocalParts(appointment, timeZone);
-      const morningReminderHour = appointmentLocal.hour <= 10 ? 8 : 9;
-      const morningReminder = localDateToUtc(
-        {
-          year: appointmentLocal.year,
-          month: appointmentLocal.month,
-          day: appointmentLocal.day,
-          hour: morningReminderHour,
-          minute: 0
-        },
-        timeZone
-      );
-      if (morningReminder > now && morningReminder < appointment) {
-        await this.store.addJob({
-          type: "appointment_reminder",
-          contactId: contact.id,
-          runAt: morningReminder.toISOString(),
-          payload: { templateGroup, templateKey: "nextDayMorning", appointmentIso: contact.preferredCallTimeIso }
-        });
-      }
-    }
-    if (oneHour > minimumGapBeforeOneHour) {
+    const specs = expectedAppointmentReminderSpecs(contact, this.config, now);
+    for (const spec of specs) {
       await this.store.addJob({
         type: "appointment_reminder",
         contactId: contact.id,
-        runAt: oneHour.toISOString(),
-        payload: { templateGroup, templateKey: sameDay ? "sameDayOneHour" : "nextDayOneHour", appointmentIso: contact.preferredCallTimeIso }
-      });
-    }
-    if (fiveMinutes > now) {
-      await this.store.addJob({
-        type: "appointment_reminder",
-        contactId: contact.id,
-        runAt: fiveMinutes.toISOString(),
-        payload: { templateGroup, templateKey: sameDay ? "sameDayFiveMinutes" : "nextDayFiveMinutes", appointmentIso: contact.preferredCallTimeIso }
+        runAt: spec.runAt.toISOString(),
+        payload: { templateGroup: spec.templateGroup, templateKey: spec.templateKey, appointmentIso: contact.preferredCallTimeIso }
       });
     }
     await this.recordDecision(contact, "reminded", "appointment_reminders_scheduled", {
       trigger: "schedule_appointment_reminders",
       meta: {
         appointmentType: contact.appointmentType || "initial",
-        templateGroup,
+        templateGroup: reminderTemplateGroupForAppointment(contact),
+        scheduledReminderKeys: specs.map((spec) => spec.templateKey).join(", "),
         preferredCallTime: contact.preferredCallTime || "",
         preferredCallTimeIso: contact.preferredCallTimeIso || ""
       }
@@ -7474,6 +7553,22 @@ class SmsBot {
 
   async escalate(contact, reason, extra = {}) {
     const now = new Date().toISOString();
+    if (hasRecentContactEscalationAlert(contact, contact.lastInboundMessage)) {
+      const suppressed = await this.store.upsertContact({
+        ...contact,
+        lastSuppressedEscalationAt: now,
+        lastSuppressedEscalationReason: reason,
+        lastSuppressedEscalationMessage: contact.lastInboundMessage || ""
+      });
+      await this.recordDecision(suppressed, "skipped", "duplicate_human_escalation_suppressed", {
+        trigger: "bot_escalation",
+        beforeStatus: contact.engagementStatus || "",
+        afterStatus: suppressed.engagementStatus || "",
+        message: suppressed.lastInboundMessage || "",
+        meta: { reason, source: "contact_alert_fingerprint", ...extra }
+      });
+      return suppressed;
+    }
     if (contact.humanEscalationStatus && contact.engagementStatus === ENGAGEMENT.ESCALATED_TO_HUMAN) {
       const suppressed = await this.store.upsertContact({
         ...contact,
@@ -7520,13 +7615,17 @@ class SmsBot {
         meta: { reason, notifySlack: extra.notifySlack !== false, hasInbound: hasMeaningfulInboundMessage(updated) }
       });
     } else {
+      const alerted = await this.store.upsertContact({
+        ...updated,
+        ...escalationAlertPatch(reason, updated.lastInboundMessage)
+      });
       try {
-        await slack.sendEscalation(this.config, updated, reason, extra);
+        await slack.sendEscalation(this.config, alerted, reason, extra);
       } catch (error) {
         await this.notifyBotError("Slack lead escalation alert failed", {
-          Name: updated.name || "unknown",
-          Phone: updated.phone || "unknown",
-          "GHL contact": updated.ghlContactId || updated.id,
+          Name: alerted.name || "unknown",
+          Phone: alerted.phone || "unknown",
+          "GHL contact": alerted.ghlContactId || alerted.id,
           Reason: reason,
           Error: error.message
         });
@@ -7647,7 +7746,7 @@ class SmsBot {
         const healReferenceNow = new Date();
         const appointmentDate = contact.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
         const appointmentFuture =
-          appointmentDate && !Number.isNaN(appointmentDate.getTime()) && appointmentDate > addMinutes(healReferenceNow, 2);
+          appointmentDate && !Number.isNaN(appointmentDate.getTime()) && appointmentDate > healReferenceNow;
         let clearedStaleNoShowMarker = false;
         const staleNoShowJobs = jobs.filter(
           (job) => job.status === "pending" && isNoShowRecoveryJob(job) && !isCurrentNoShowRecoveryJob(contact, job)
@@ -7719,8 +7818,11 @@ class SmsBot {
           });
           healed.push({ contactId: contact.id, action: "cleared_stale_no_show_marker_without_jobs" });
         }
-        const hasCurrentReminder = jobs.some(
-          (job) => job.status === "pending" && job.type === "appointment_reminder" && isCurrentAppointmentReminderJob(contact, job, this.config)
+        const missingAppointmentReminders = missingExpectedAppointmentReminders(
+          contact,
+          jobs,
+          this.config,
+          healReferenceNow
         );
         const shouldHaveReminders =
           appointmentFuture &&
@@ -7729,9 +7831,13 @@ class SmsBot {
             contact.engagementStatus === ENGAGEMENT.CALL_SCHEDULED ||
             contact.qualificationProgress === QUALIFICATION.CALL_BOOKED ||
             contact.qualificationProgress === QUALIFICATION.COMPLETE);
-        if (shouldHaveReminders && !hasCurrentReminder) {
+        if (shouldHaveReminders && missingAppointmentReminders.length) {
           await this.scheduleAppointmentReminders(contact);
-          healed.push({ contactId: contact.id, action: "scheduled_missing_appointment_reminders" });
+          healed.push({
+            contactId: contact.id,
+            action: "scheduled_missing_appointment_reminders",
+            missing: missingAppointmentReminders.map((spec) => spec.templateKey)
+          });
           continue;
         }
 
@@ -7901,6 +8007,74 @@ class SmsBot {
       }
     }
     return healed;
+  }
+
+  async ensureUpcomingAppointmentReminders(options = {}) {
+    if (!this.store.listContacts || !this.store.listJobs) {
+      return { checked: 0, repaired: 0, skipped: 0, results: [] };
+    }
+    const now = new Date();
+    const hours = Number(options.hours || 36);
+    const until = addMinutes(now, Math.max(1, hours) * 60);
+    const dryRun = options.dryRun === true;
+    const contacts = await this.store.listContacts();
+    const results = [];
+    let checked = 0;
+    let repaired = 0;
+    let skipped = 0;
+
+    for (const contact of contacts) {
+      const appointment = contact?.preferredCallTimeIso ? new Date(contact.preferredCallTimeIso) : null;
+      if (!appointment || Number.isNaN(appointment.getTime()) || appointment <= now || appointment > until) continue;
+      checked += 1;
+      const jobs = await this.store.listJobs(contact.id);
+      const missing = missingExpectedAppointmentReminders(contact, jobs, this.config, now);
+      if (!missing.length) {
+        results.push({
+          contactId: contact.id,
+          name: contact.name || "",
+          phone: contact.phone || "",
+          appointmentIso: contact.preferredCallTimeIso,
+          status: "ok"
+        });
+        continue;
+      }
+      if (!canRunAppointmentSupportJob(contact, "appointment_reminder")) {
+        skipped += 1;
+        results.push({
+          contactId: contact.id,
+          name: contact.name || "",
+          phone: contact.phone || "",
+          appointmentIso: contact.preferredCallTimeIso,
+          status: "skipped",
+          reason: "appointment_reminders_blocked_by_contact_state",
+          missing: missing.map((spec) => spec.templateKey)
+        });
+        continue;
+      }
+      if (!dryRun) await this.scheduleAppointmentReminders(contact);
+      repaired += 1;
+      results.push({
+        contactId: contact.id,
+        name: contact.name || "",
+        phone: contact.phone || "",
+        appointmentIso: contact.preferredCallTimeIso,
+        status: dryRun ? "would_repair" : "repaired",
+        missing: missing.map((spec) => spec.templateKey)
+      });
+    }
+
+    if (this.store.setSetting && !dryRun) {
+      await this.store.setSetting("last_appointment_reminder_audit", {
+        ranAt: new Date().toISOString(),
+        hours,
+        checked,
+        repaired,
+        skipped
+      });
+    }
+
+    return { checked, repaired, skipped, results };
   }
 
   async runDueJob(job) {
@@ -8411,7 +8585,13 @@ class SmsBot {
           : contact.preferredCallTime || "your scheduled time"
       });
       await this.notifyAppointmentDue((await this.store.getContact(contact.id)) || contact, job);
-      await this.sendBotMessage(contact, rendered.message, rendered.meta);
+      await this.sendBotMessage(contact, rendered.message, {
+        ...rendered.meta,
+        jobType: job.type,
+        skipTerminalTagCheck: true,
+        allowWithoutAutomationSignal: true,
+        bypassQuietHours: true
+      });
     }
     if (job.type === "missed_call_followup") {
       if (isNoShowRecoveryJob(job) && !isCurrentNoShowRecoveryJob(contact, job)) {

@@ -2339,6 +2339,23 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && req.url === "/api/admin/appointments/ensure-reminders") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      const audit = bot.ensureUpcomingAppointmentReminders
+        ? await bot.ensureUpcomingAppointmentReminders({
+            hours: payload.hours || 36,
+            dryRun: payload.dryRun === true
+          })
+        : { checked: 0, repaired: 0, skipped: 0, results: [] };
+      send(res, 200, { ok: true, audit });
+      return;
+    }
+
     if (req.url.startsWith("/api/contacts")) {
       const auth = requireAdmin(req);
       if (!auth.ok) {
