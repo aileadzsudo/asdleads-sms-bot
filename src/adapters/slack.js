@@ -110,6 +110,7 @@ async function sendAppointmentDue(config, contact, extra = {}) {
     `Phone: ${contact.phone || "unknown"}`,
     `Time: ${extra.Time || contact.preferredCallTime || "unknown"}`,
     `Type: ${extra.Type || contact.appointmentType || "initial"}`,
+    `Title: ${extra.Title || contact.appointmentTitle || "unknown"}`,
     `Appointment: ${extra.Appointment || contact.appointmentId || "unknown"}`,
     `GHL: ${contactLink(config, contact) || "unknown"}`
   ];

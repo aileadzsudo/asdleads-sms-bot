@@ -2314,6 +2314,17 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && req.url === "/api/admin/jobs/repair-nr-enrollment") {
+      const auth = requireAdmin(req);
+      if (!auth.ok) {
+        send(res, 401, { ok: false, error: auth.reason });
+        return;
+      }
+      const payload = await readJson(req);
+      send(res, 200, { ok: true, ...(await bot.repairNoResponseEnrollments(payload)) });
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/api/admin/calendar/failsafe-sync") {
       const auth = requireAdmin(req);
       if (!auth.ok) {

@@ -3850,6 +3850,135 @@ class SmsBot {
     return { contact, status: "queued", runAt: targetRunAt.toISOString() };
   }
 
+  async repairNoResponseContact(payload, meta = {}) {
+    const normalized = normalizePayload({ ...payload, disposition: payload.disposition || "NR" }, this.config);
+    if (!normalized.id) return { status: "skipped", reason: "missing_contact_id", contact: normalized };
+    const existing = (await this.store.getContact(normalized.id)) || {};
+    let contact = await this.store.upsertContact({
+      ...existing,
+      ...normalized,
+      timezone: chooseContactTimezone(existing, normalized, this.config),
+      qualificationProgress: existing.qualificationProgress || normalized.qualificationProgress || QUALIFICATION.NEEDS_FAULT,
+      botMessagingAuthorization: existing.botMessagingAuthorization || "no_response_disposition",
+      botMessagingAuthorizedAt: existing.botMessagingAuthorizedAt || new Date().toISOString(),
+      noResponseDispositionAt: existing.noResponseDispositionAt || new Date().toISOString()
+    });
+    const tagLookupStartedAt = new Date();
+    contact = await this.hydrateContactTags(contact, { force: true });
+    if (tagLookupFailedAfter(contact, tagLookupStartedAt)) return { status: "skipped", reason: "tag_lookup_failed", contact };
+    if (!hasNoResponseAutomationSignal(contact) && contact.currentSequenceName !== "backfill_pending") {
+      return { status: "skipped", reason: "missing_nr_signal", contact };
+    }
+    if (contact.optOutStatus || contact.engagementStatus === ENGAGEMENT.OPTED_OUT) return { status: "skipped", reason: "opted_out", contact };
+    if (hasSignedTag(contact)) return { status: "skipped", reason: "signed", contact: await this.stopForSignedTag(contact) };
+    if (hasContractPendingTag(contact)) return { status: "skipped", reason: "contract_pending", contact: await this.stopForContractPendingTag(contact) };
+    if (hasNqTag(contact)) return { status: "skipped", reason: "nq", contact: await this.stopForNqTag(contact) };
+    if (hasManualHumanHoldTag(contact)) return { status: "skipped", reason: "manual_hold", contact: await this.stopForManualHoldTag(contact) };
+    if (contact.humanEscalationStatus || hasBookedAppointment(contact)) return { status: "skipped", reason: "not_cold_nr_state", contact };
+    if (
+      contact.engagementStatus &&
+      ![ENGAGEMENT.NEW_LEAD, ENGAGEMENT.CALLED_NO_ANSWER, ENGAGEMENT.INITIAL_SMS_SENT, ENGAGEMENT.COLD_OUTREACH].includes(contact.engagementStatus)
+    ) {
+      return { status: "skipped", reason: "active_non_cold_state", contact };
+    }
+
+    const jobs = await this.store.listJobs(contact.id);
+    const pendingInitial = jobs.some((job) => job.status === "pending" && job.type === "initial_sms");
+    const pendingCold = jobs.some((job) => job.status === "pending" && job.type === "send_cold_template");
+    const hasInitial = hasInitialColdMessageBeenSent(contact);
+
+    if (!hasInitial) {
+      if (!pendingInitial) {
+        const queuedAt = new Date().toISOString();
+        await this.store.addJob({
+          type: "initial_sms",
+          contactId: contact.id,
+          runAt: queuedAt,
+          payload: { templateKey: "day_1_am", source: "backfill" }
+        });
+        contact = await this.store.upsertContact({
+          ...contact,
+          engagementStatus: ENGAGEMENT.CALLED_NO_ANSWER,
+          currentSequenceName: "initial_sms_pending",
+          currentSequenceDay: 1,
+          currentMessageCountForDay: 0
+        });
+        await this.recordDecision(contact, "queued", "nr_repair_initial_sms_queued", meta);
+        return { status: "queued_initial", contact, runAt: queuedAt };
+      }
+      return { status: "already_pending_initial", contact };
+    }
+
+    if (!pendingCold || contact.currentSequenceName === "backfill_pending") {
+      contact = await this.store.upsertContact({
+        ...contact,
+        engagementStatus: contact.engagementStatus === ENGAGEMENT.INITIAL_SMS_SENT ? ENGAGEMENT.INITIAL_SMS_SENT : ENGAGEMENT.COLD_OUTREACH,
+        currentSequenceName: contact.currentSequenceName === "backfill_pending" ? "cold_outreach" : contact.currentSequenceName || "cold_outreach"
+      });
+      await this.scheduleColdOutreach(contact);
+      await this.recordDecision(contact, "queued", "nr_repair_cold_outreach_ensured", meta);
+      return { status: "ensured_cold_outreach", contact };
+    }
+
+    return { status: "already_enrolled", contact };
+  }
+
+  async repairNoResponseEnrollments(options = {}) {
+    const maxContacts = Math.max(1, Math.min(Number(options.maxContacts || 1000), 2000));
+    const scanGhl = options.scanGhl !== false;
+    const pages = Math.max(1, Math.min(Number(options.pages || 10), 25));
+    const candidates = [];
+    if (this.store.listContacts) {
+      const stored = await this.store.listContacts();
+      candidates.push(
+        ...stored.filter((contact) => hasNoResponseAutomationSignal(contact) || contact.currentSequenceName === "backfill_pending")
+      );
+    }
+    if (scanGhl) {
+      for (let page = 1; page <= pages; page += 1) {
+        const result = await ghl.searchContactsByTag(this.config, "NR", { limit: 100, page });
+        const contacts = result.contacts || [];
+        if (!contacts.length) break;
+        candidates.push(...contacts);
+        if (contacts.length < 100) break;
+      }
+    }
+
+    const seen = new Set();
+    const unique = [];
+    for (const candidate of candidates) {
+      const normalized = normalizePayload({ ...candidate, disposition: "NR" }, this.config);
+      const key = normalized.id || normalizePhone(normalized.phone);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      unique.push(normalized);
+      if (unique.length >= maxContacts) break;
+    }
+
+    const results = [];
+    for (const candidate of unique) {
+      results.push(await this.repairNoResponseContact(candidate, { trigger: "admin_nr_repair" }));
+    }
+    const counts = results.reduce((map, item) => {
+      map[item.status] = (map[item.status] || 0) + 1;
+      return map;
+    }, {});
+    return {
+      scanned: candidates.length,
+      unique: unique.length,
+      counts,
+      samples: results.slice(0, 50).map((item) => ({
+        status: item.status,
+        reason: item.reason || "",
+        name: item.contact?.name || "",
+        phone: item.contact?.phone || "",
+        contactId: item.contact?.id || "",
+        sequence: item.contact?.currentSequenceName || "",
+        engagementStatus: item.contact?.engagementStatus || ""
+      }))
+    };
+  }
+
   async queueInboundSms(payload) {
     const inbound = normalizePayload(payload, this.config);
     if (isEmptyTextToken(inbound.lastInboundMessage)) {
@@ -6512,15 +6641,17 @@ class SmsBot {
       return false;
     }
     try {
-      await slack.sendAppointmentDue(this.config, contact, {
+      const latestContact = (await this.store.getContact(contact.id)) || contact;
+      await slack.sendAppointmentDue(this.config, latestContact, {
         Time: contact.preferredCallTimeIso
           ? formatTimeOnlyWithZone(new Date(contact.preferredCallTimeIso), contact, this.config)
           : contact.preferredCallTime || "unknown",
-        Type: contact.appointmentType || "initial",
-        Appointment: contact.appointmentId || "unknown"
+        Type: latestContact.appointmentType || contact.appointmentType || "initial",
+        Appointment: latestContact.appointmentId || contact.appointmentId || "unknown",
+        Title: latestContact.appointmentTitle || contact.appointmentTitle || appointmentTitleForType(latestContact.appointmentType || contact.appointmentType, latestContact.name || contact.name)
       });
-      const updated = this.store.upsertContact({
-        ...contact,
+      const updated = await this.store.upsertContact({
+        ...latestContact,
         lastAppointmentDueAlertKey: alertKey,
         lastAppointmentDueAlertAt: new Date().toISOString()
       });
@@ -8286,7 +8417,7 @@ class SmsBot {
           ? formatTimeOnlyWithZone(new Date(contact.preferredCallTimeIso), contact, this.config)
           : contact.preferredCallTime || "your scheduled time"
       });
-      await this.notifyAppointmentDue(this.store.getContact(contact.id) || contact, job);
+      await this.notifyAppointmentDue((await this.store.getContact(contact.id)) || contact, job);
       await this.sendBotMessage(contact, rendered.message, rendered.meta);
     }
     if (job.type === "missed_call_followup") {
