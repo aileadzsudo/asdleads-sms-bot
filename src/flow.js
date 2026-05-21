@@ -6769,9 +6769,10 @@ class SmsBot {
 
   async notifyAppointmentDue(contact, job) {
     if (!isFiveMinuteAppointmentReminder(job)) return false;
-    const alertKey = appointmentDueAlertKey(contact, job);
-    if (contact.lastAppointmentDueAlertKey === alertKey) {
-      await this.recordDecision(contact, "skipped", "appointment_due_slack_duplicate_suppressed", {
+    const latestContact = (await this.store.getContact(contact.id)) || contact;
+    const alertKey = appointmentDueAlertKey(latestContact, job);
+    if (latestContact.lastAppointmentDueAlertKey === alertKey) {
+      await this.recordDecision(latestContact, "skipped", "appointment_due_slack_duplicate_suppressed", {
         jobId: job.id,
         jobType: job.type,
         meta: { appointmentDueAlertKey: alertKey }
@@ -6779,27 +6780,26 @@ class SmsBot {
       return false;
     }
     try {
-      const latestContact = (await this.store.getContact(contact.id)) || contact;
-      await slack.sendAppointmentDue(this.config, latestContact, {
-        Time: contact.preferredCallTimeIso
-          ? formatTimeOnlyWithZone(new Date(contact.preferredCallTimeIso), contact, this.config)
-          : contact.preferredCallTime || "unknown",
-        Type: latestContact.appointmentType || contact.appointmentType || "initial",
-        Appointment: latestContact.appointmentId || contact.appointmentId || "unknown",
-        Title: latestContact.appointmentTitle || contact.appointmentTitle || appointmentTitleForType(latestContact.appointmentType || contact.appointmentType, latestContact.name || contact.name)
-      });
-      const updated = await this.store.upsertContact({
+      const claimed = await this.store.upsertContact({
         ...latestContact,
         lastAppointmentDueAlertKey: alertKey,
         lastAppointmentDueAlertAt: new Date().toISOString()
       });
-      await this.recordDecision(updated, "escalated", "appointment_due_slack_alert_sent", {
+      await slack.sendAppointmentDue(this.config, claimed, {
+        Time: claimed.preferredCallTimeIso
+          ? formatTimeOnlyWithZone(new Date(claimed.preferredCallTimeIso), claimed, this.config)
+          : claimed.preferredCallTime || "unknown",
+        Type: claimed.appointmentType || "initial",
+        Appointment: claimed.appointmentId || "unknown",
+        Title: claimed.appointmentTitle || appointmentTitleForType(claimed.appointmentType, claimed.name)
+      });
+      await this.recordDecision(claimed, "escalated", "appointment_due_slack_alert_sent", {
         jobId: job.id,
         jobType: job.type,
         meta: {
           appointmentDueAlertKey: alertKey,
-          appointmentType: updated.appointmentType || "initial",
-          preferredCallTimeIso: updated.preferredCallTimeIso || ""
+          appointmentType: claimed.appointmentType || "initial",
+          preferredCallTimeIso: claimed.preferredCallTimeIso || ""
         }
       });
       return true;

@@ -1606,7 +1606,11 @@ test("five minute appointment reminder alerts leads channel once", async () => {
   const { bot, store } = makeBot();
   const originalSendAppointmentDue = slack.sendAppointmentDue;
   const alerts = [];
+  let expectedAlertKey = "";
   slack.sendAppointmentDue = async (_config, contact, extra) => {
+    if (expectedAlertKey) {
+      assert.equal(store.getContact(contact.id).lastAppointmentDueAlertKey, expectedAlertKey);
+    }
     alerts.push({ contact, extra });
     return { ok: true };
   };
@@ -1631,13 +1635,14 @@ test("five minute appointment reminder alerts leads channel once", async () => {
       runAt,
       payload: { templateKey: "sameDayFiveMinutes", appointmentIso: appointment }
     });
+    expectedAlertKey = `appt-due-alert:${appointment}:five_minute`;
 
     await bot.runDueJob(firstJob);
 
     assert.equal(alerts.length, 1);
     assert.equal(alerts[0].contact.name, "Due Alert");
     assert.equal(alerts[0].extra.Appointment, "appt-due-alert");
-    assert.equal(store.getContact("appointment-due-alert").lastAppointmentDueAlertKey, `appt-due-alert:${appointment}:five_minute`);
+    assert.equal(store.getContact("appointment-due-alert").lastAppointmentDueAlertKey, expectedAlertKey);
 
     const duplicateJob = store.addJob({
       type: "appointment_reminder",
@@ -1649,6 +1654,52 @@ test("five minute appointment reminder alerts leads channel once", async () => {
 
     assert.equal(alerts.length, 1);
     assert.equal(store.data.jobs[duplicateJob.id].status, "done");
+  } finally {
+    slack.sendAppointmentDue = originalSendAppointmentDue;
+  }
+});
+
+test("appointment due Slack dedupe reloads latest contact before sending", async () => {
+  const { bot, store } = makeBot();
+  const originalSendAppointmentDue = slack.sendAppointmentDue;
+  const alerts = [];
+  slack.sendAppointmentDue = async (_config, contact, extra) => {
+    alerts.push({ contact, extra });
+    return { ok: true };
+  };
+  try {
+    const appointmentDate = new Date(Date.now() + 5 * 60 * 1000);
+    const appointment = appointmentDate.toISOString();
+    const alertKey = `appt-stale-alert:${appointment}:five_minute`;
+    const currentContact = store.upsertContact({
+      id: "appointment-stale-alert",
+      ghlContactId: "appointment-stale-alert",
+      name: "Stale Alert",
+      phone: "+15550000184",
+      timezone: "America/Chicago",
+      appointmentId: "appt-stale-alert",
+      appointmentType: "contract_review",
+      preferredCallTime: "Today 3:00 PM CST",
+      preferredCallTimeIso: appointment,
+      lastAppointmentDueAlertKey: alertKey,
+      lastAppointmentDueAlertAt: new Date().toISOString()
+    });
+    const staleContact = {
+      ...currentContact,
+      lastAppointmentDueAlertKey: "",
+      lastAppointmentDueAlertAt: ""
+    };
+    const job = store.addJob({
+      type: "appointment_reminder",
+      contactId: "appointment-stale-alert",
+      runAt: new Date(appointmentDate.getTime() - 5 * 60 * 1000).toISOString(),
+      payload: { templateKey: "sameDayFiveMinutes", appointmentIso: appointment }
+    });
+
+    await bot.notifyAppointmentDue(staleContact, job);
+
+    assert.equal(alerts.length, 0);
+    assert.equal(store.getContact("appointment-stale-alert").lastAppointmentDueAlertKey, alertKey);
   } finally {
     slack.sendAppointmentDue = originalSendAppointmentDue;
   }
